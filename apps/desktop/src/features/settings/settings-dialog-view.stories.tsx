@@ -1,4 +1,5 @@
 import * as React from "react"
+import { SparklesIcon } from "@hugeicons/core-free-icons"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -60,6 +61,7 @@ export const InjectedSection: Story = {
       {
         id: "ai",
         label: "AI providers",
+        icon: SparklesIcon,
         content: <p className="text-sm">No provider declared.</p>,
       },
     ],
@@ -71,6 +73,11 @@ export const InjectedSection: Story = {
       selected: true,
     })
     await waitFor(() => expect(tab).toBeVisible())
+    // Every tab leads with an icon, the injected one included: a label
+    // without one would sit out of line with the others.
+    for (const each of dialog.getAllByRole("tab")) {
+      await expect(each.querySelector("svg")).not.toBeNull()
+    }
   },
 }
 
@@ -86,6 +93,7 @@ export const LongContentStaysInTheFrame: Story = {
       {
         id: "ai",
         label: "AI providers and external agents",
+        icon: SparklesIcon,
         content: <p className="text-sm">No provider declared.</p>,
       },
     ],

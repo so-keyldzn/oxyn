@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import {
+  AssistantAgentSteps,
   AssistantAgentTool,
   AssistantCatalogRead,
   AssistantMemoryReset,
@@ -11,7 +12,7 @@ import {
   AssistantAnswerActions,
   AssistantAnswerMenu,
 } from "@/components/oxyn/assistant-answer-actions"
-import { AssistantEnding } from "@/components/oxyn/assistant-ending"
+import { AssistantEnding, notable } from "@/components/oxyn/assistant-ending"
 import { AssistantFailure } from "@/components/oxyn/assistant-failure"
 import { AssistantMarkdown } from "@/components/oxyn/assistant-markdown"
 import { AssistantPlan } from "@/components/oxyn/assistant-plan"
@@ -23,7 +24,10 @@ import {
   AssistantToolCall,
 } from "@/components/oxyn/assistant-tool-call"
 import { AssistantToolDraft } from "@/components/oxyn/assistant-tool-draft"
-import { AssistantUsage } from "@/components/oxyn/assistant-usage"
+import {
+  AssistantTurnIdentity,
+  AssistantTurnMeta,
+} from "@/components/oxyn/assistant-turn"
 import type { AssistantViewProps } from "@/components/oxyn/assistant-view"
 import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Message, MessageContent } from "@/components/ui/message"
@@ -236,6 +240,8 @@ interface ExchangeViewProps {
   last: boolean
   /** The price of **this** exchange's model; `null` shows no cost. */
   cost: ModelCost | null
+  /** The mark of whoever answered, while still declared; `null` otherwise. */
+  brand: string | null
   tier: AssistantViewProps["tier"]
   signInStates: AssistantViewProps["state"]["signIn"]
   identifierQuote?: AssistantViewProps["identifierQuote"]
@@ -270,6 +276,7 @@ export const ExchangeView = React.memo(function ExchangeView({
   busy,
   last,
   cost,
+  brand,
   tier,
   signInStates,
   identifierQuote,
@@ -298,6 +305,17 @@ export const ExchangeView = React.memo(function ExchangeView({
       (item) => item.kind === "answer" || item.kind === "thinking"
     )
 
+  const ending = outcome?.kind === "ended" ? outcome.ending : null
+  const awaiting = awaitsReview(exchange)
+  const onContinue =
+    ending && last && canContinue(exchange)
+      ? () => actions.onContinue(node)
+      : undefined
+  // An ending that asks something of the reader keeps a line of its own; the
+  // others are the first word of the meta row.
+  const endingOnItsOwn =
+    ending !== null && (awaiting || notable(ending) || onContinue !== undefined)
+
   return (
     <div className="flex flex-col gap-3">
       <AssistantQuestion
@@ -310,11 +328,28 @@ export const ExchangeView = React.memo(function ExchangeView({
         onSelectVersion={actions.onSelectVersion}
         onCopy={actions.onCopy}
       />
+      {exchange.started ? (
+        <AssistantTurnIdentity
+          destination={exchange.started.destination}
+          brand={brand}
+        />
+      ) : null}
       {/* Before the run: what the agent says it will do. It describes intent,
           not authority — what actually went through the bus is drawn by the
           tool calls below, with their connection and their approval (I-07). */}
       <AssistantPlan entries={exchange.plan ?? []} running={exchange.running} />
-      {exchange.entries.map((item) => {
+      {groupSteps(exchange.entries).map((item) => {
+        if (Array.isArray(item))
+          return (
+            <AssistantAgentSteps
+              key={item[0]?.key}
+              steps={item.map((step) => ({
+                key: step.key,
+                tool: step.tool,
+                status: step.status,
+              }))}
+            />
+          )
         const entry = (
           <EntryView
             key={item.key}
@@ -362,12 +397,6 @@ export const ExchangeView = React.memo(function ExchangeView({
         </Marker>
       ) : null}
 
-      <AssistantUsage
-        usage={exchange.usage}
-        contextWindow={exchange.contextWindow}
-        cost={cost}
-      />
-
       {/* After the run: what Oxyn's own tools read, so the answer can be
           checked against the database rather than believed. */}
       <AssistantSources
@@ -387,28 +416,52 @@ export const ExchangeView = React.memo(function ExchangeView({
         />
       ) : null}
 
-      {outcome?.kind === "ended" ? (
-        <div className="flex flex-col gap-2">
-          <AssistantEnding
-            ending={outcome.ending}
-            awaitingReview={awaitsReview(exchange)}
-            onContinue={
-              last && canContinue(exchange)
-                ? () => actions.onContinue(node)
-                : undefined
-            }
-            continueDisabled={busy}
-          />
-          {answer !== "" ? (
+      {ending && endingOnItsOwn ? (
+        <AssistantEnding
+          ending={ending}
+          awaitingReview={awaiting}
+          onContinue={onContinue}
+          continueDisabled={busy}
+        />
+      ) : null}
+
+      <AssistantTurnMeta
+        ending={
+          ending && !endingOnItsOwn ? (
+            <AssistantEnding ending={ending} quiet />
+          ) : null
+        }
+        usage={exchange.usage}
+        contextWindow={exchange.contextWindow}
+        cost={cost}
+        actions={
+          ending && answer !== "" ? (
             <AssistantAnswerActions
               text={answer}
               canRegenerate={!busy}
               onRegenerate={() => actions.onRegenerate(node)}
               onCopy={actions.onCopy}
             />
-          ) : null}
-        </div>
-      ) : null}
+          ) : null
+        }
+      />
     </div>
   )
 }, sameExchangeProps)
+
+/**
+ * The entries as drawn: consecutive steps of an external agent folded into
+ * one group, everything else — a refusal first of all — left as it is.
+ */
+function groupSteps(
+  entries: ReadonlyArray<Entry>
+): Array<Entry | Array<Extract<Entry, { kind: "agentTool" }>>> {
+  const drawn: Array<Entry | Array<Extract<Entry, { kind: "agentTool" }>>> = []
+  for (const entry of entries) {
+    const previous = drawn.at(-1)
+    if (entry.kind === "agentTool" && Array.isArray(previous))
+      previous.push(entry)
+    else drawn.push(entry.kind === "agentTool" ? [entry] : entry)
+  }
+  return drawn
+}

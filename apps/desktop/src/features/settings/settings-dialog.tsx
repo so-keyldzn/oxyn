@@ -1,4 +1,8 @@
 import * as React from "react"
+import {
+  Download01Icon,
+  InformationCircleIcon,
+} from "@hugeicons/core-free-icons"
 import { useDebouncedCallback } from "@tanstack/react-pacer"
 import { createStore, useStore } from "@tanstack/react-store"
 
@@ -110,8 +114,18 @@ export function SettingsDialog({
       sections={[
         ...sections,
         // The computer's, not the workspace's: the section says so.
-        { id: "updates", label: "Updates", content: <UpdatesSection /> },
-        { id: "about", label: "About", content: <AboutSection /> },
+        {
+          id: "updates",
+          label: "Updates",
+          icon: Download01Icon,
+          content: <UpdatesSection />,
+        },
+        {
+          id: "about",
+          label: "About",
+          icon: InformationCircleIcon,
+          content: <AboutSection />,
+        },
       ]}
       unsavedEdit={unsavedEdit}
     />

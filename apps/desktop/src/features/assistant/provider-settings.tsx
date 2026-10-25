@@ -100,7 +100,26 @@ export function ProviderSettings() {
   const [failure, setFailure] = React.useState<ProviderSettingsFailure | null>(
     null
   )
-  const [models, setModels] = React.useState<Record<string, ModelsState>>({})
+  const [listedHere, setModels] = React.useState<Record<string, ModelsState>>(
+    {}
+  )
+  // What the assistant panel already listed, read from the cache and never
+  // asked for here: opening the settings sends nothing to a provider.
+  const cachedModels = useQueries({
+    queries: (providers.data ?? []).map((provider) => ({
+      ...modelsQuery(provider.id),
+      enabled: false,
+    })),
+  })
+  const models: Record<string, ModelsState> = { ...listedHere }
+  for (const [index, provider] of (providers.data ?? []).entries()) {
+    const cached = cachedModels[index]
+    if (models[provider.id] !== undefined || !cached) continue
+    if (cached.data)
+      models[provider.id] = { status: "ready", models: cached.data }
+    else if (cached.error)
+      models[provider.id] = { status: "error", message: cached.error.message }
+  }
   const presets = useQuery(presetsQuery)
   const presetIds = (presets.data ?? []).map((preset) => preset.id)
   const detections = useQueries({

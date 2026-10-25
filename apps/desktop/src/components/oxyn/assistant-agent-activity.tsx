@@ -1,5 +1,7 @@
+import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  ArrowDown01Icon,
   CancelCircleIcon,
   CheckmarkCircle02Icon,
   Clock01Icon,
@@ -7,6 +9,11 @@ import {
   SquareLock02Icon,
 } from "@hugeicons/core-free-icons"
 
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Spinner } from "@/components/ui/spinner"
 import {
@@ -24,6 +31,37 @@ const TOOL_STATUS: Record<AgentToolStatus, string> = {
   failed: "failed",
 }
 
+function StepIcon({ status }: { status: AgentToolStatus }) {
+  if (status === "running") return <Spinner aria-hidden role={undefined} />
+  return (
+    <HugeiconsIcon
+      icon={
+        status === "pending"
+          ? Clock01Icon
+          : status === "completed"
+            ? CheckmarkCircle02Icon
+            : CancelCircleIcon
+      }
+      strokeWidth={2}
+      aria-hidden
+      className={cn(status === "failed" && "text-destructive")}
+    />
+  )
+}
+
+/** « Agent step · read · done »: the words carry the state, not the icon. */
+function StepText({ kind, status }: { kind: string; status: AgentToolStatus }) {
+  return (
+    <>
+      <span>Agent step · </span>
+      <span className="font-medium text-foreground">{kind}</span>
+      <span className={cn(status === "failed" && "text-destructive")}>
+        {` · ${TOOL_STATUS[status]}`}
+      </span>
+    </>
+  )
+}
+
 /**
  * A step of an external agent's own work — reading, searching, thinking.
  *
@@ -37,7 +75,6 @@ export function AssistantAgentTool({
   tool: string | null
   status: AgentToolStatus
 }) {
-  const kind = tool ?? "tool"
   return (
     <Marker
       data-slot="assistant-agent-tool"
@@ -45,20 +82,97 @@ export function AssistantAgentTool({
       className="text-xs"
     >
       <MarkerIcon>
-        {status === "running" || status === "pending" ? (
-          <Spinner />
-        ) : (
-          <HugeiconsIcon
-            icon={
-              status === "completed" ? CheckmarkCircle02Icon : CancelCircleIcon
-            }
-            strokeWidth={2}
-            className={cn(status === "failed" && "text-destructive")}
-          />
-        )}
+        <StepIcon status={status} />
       </MarkerIcon>
-      <MarkerContent className="font-mono">{`Agent step · ${kind} · ${TOOL_STATUS[status]}`}</MarkerContent>
+      <MarkerContent>
+        <StepText kind={tool ?? "tool"} status={status} />
+      </MarkerContent>
     </Marker>
+  )
+}
+
+export interface AgentStep {
+  key: string
+  tool: string | null
+  status: AgentToolStatus
+}
+
+function counted(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
+}
+
+/**
+ * Consecutive steps of an external agent, folded under one line: how many,
+ * the one in progress by its kind, and how many failed — said in words, so
+ * a failure is never only a red icon in a closed group. One step alone is
+ * drawn as itself.
+ *
+ * Only `agentTool` entries are folded here. What Oxyn refused stays a line of
+ * its own between them, never inside a group that could be closed.
+ */
+export function AssistantAgentSteps({
+  steps,
+}: {
+  steps: ReadonlyArray<AgentStep>
+}) {
+  const [open, setOpen] = React.useState(false)
+  const first = steps[0]
+  if (!first) return null
+  if (steps.length === 1)
+    return <AssistantAgentTool tool={first.tool} status={first.status} />
+
+  const live = [...steps]
+    .reverse()
+    .find((step) => step.status === "running" || step.status === "pending")
+  const failed = steps.filter((step) => step.status === "failed").length
+  const summaryStatus: AgentToolStatus = live
+    ? live.status
+    : failed > 0
+      ? "failed"
+      : "completed"
+
+  return (
+    <Collapsible
+      data-slot="assistant-agent-steps"
+      data-status={summaryStatus}
+      open={open}
+      onOpenChange={setOpen}
+      className="flex min-w-0 flex-col gap-1"
+    >
+      <CollapsibleTrigger className="group/steps inline-flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 pr-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg:not([class*='size-'])]:size-3.5">
+        <StepIcon status={summaryStatus} />
+        <span className="min-w-0 truncate">
+          {counted(steps.length, "agent step")}
+          {live ? (
+            <>
+              {" · "}
+              <span className="font-medium text-foreground">
+                {live.tool ?? "tool"}
+              </span>
+              {` ${TOOL_STATUS[live.status]}`}
+            </>
+          ) : null}
+          {failed > 0 ? (
+            <span className="text-destructive">{` · ${failed} failed`}</span>
+          ) : null}
+        </span>
+        <HugeiconsIcon
+          icon={ArrowDown01Icon}
+          strokeWidth={2}
+          aria-hidden
+          className="size-3 shrink-0 transition-transform group-data-[panel-open]/steps:rotate-180 motion-reduce:transition-none"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-1 border-l pl-3">
+        {steps.map((step) => (
+          <AssistantAgentTool
+            key={step.key}
+            tool={step.tool}
+            status={step.status}
+          />
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

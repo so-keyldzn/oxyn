@@ -27,9 +27,7 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
-  InputGroupText,
 } from "@/components/ui/input-group"
-import { Kbd } from "@/components/ui/kbd"
 import type { Mention } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
@@ -115,6 +113,7 @@ export function AssistantComposer({
   disabledReason = null,
   initialValue = "",
   mentions = null,
+  controls = null,
   onSubmit,
   onStop,
 }: {
@@ -126,6 +125,11 @@ export function AssistantComposer({
   initialValue?: string
   /** Without it, `@` is a character like another. */
   mentions?: MentionSource | null
+  /**
+   * The chips of the bottom bar, left of the send button: what governs the
+   * next question. Each is its own control, keyboard and name included.
+   */
+  controls?: React.ReactNode
   onSubmit: (
     question: string,
     mentions: Array<Mention>
@@ -156,6 +160,7 @@ export function AssistantComposer({
         disabledReason={disabledReason}
         initialValue={initialValue}
         mentions={mentions}
+        controls={controls}
         onSubmit={onSubmit}
         onStop={onStop}
       />
@@ -170,6 +175,7 @@ function ComposerBody({
   disabledReason,
   initialValue,
   mentions,
+  controls,
   onSubmit,
   onStop,
 }: {
@@ -179,6 +185,7 @@ function ComposerBody({
   disabledReason: string | null
   initialValue: string
   mentions: MentionSource | null
+  controls: React.ReactNode
   onSubmit: (
     question: string,
     mentions: Array<Mention>
@@ -256,7 +263,10 @@ function ComposerBody({
           onQuery={mentions.onQuery}
         />
       ) : null}
-      <InputGroup>
+      {/* The chips below are disabled while an answer runs: the group keeps
+          its full colour then, or the whole field would read as closed while
+          it still queues a question. */}
+      <InputGroup className="@container/composer rounded-xl has-disabled:bg-transparent has-disabled:opacity-100 dark:has-disabled:bg-input/30">
         <div className="relative w-full min-w-0">
           <PlainTextPlugin
             contentEditable={
@@ -294,23 +304,18 @@ function ComposerBody({
             ErrorBoundary={LexicalErrorBoundary}
           />
         </div>
-        <InputGroupAddon align="block-end" className="justify-between">
-          <InputGroupText id={hintId} className="text-xs">
-            {disabledReason ??
-              (running ? (
-                stopRequested ? (
-                  "Stop requested. It ends as soon as the provider speaks again."
-                ) : (
-                  <>
-                    Working · <Kbd>↵</Kbd> queues · <Kbd>Esc</Kbd> stops
-                  </>
-                )
-              ) : (
-                <>
-                  <Kbd>↵</Kbd> send · <Kbd>⇧↵</Kbd> new line
-                </>
-              ))}
-          </InputGroupText>
+        <InputGroupAddon
+          align="block-end"
+          className="cursor-default gap-1 px-1.5 pb-1.5"
+        >
+          {/* What governs the next question, by the question: who answers,
+              its role, its model, how hard it thinks. */}
+          <div
+            data-slot="assistant-composer-controls"
+            className="flex min-w-0 flex-1 items-center gap-0.5"
+          >
+            {controls}
+          </div>
           {running ? (
             // Stays enabled once pressed: the request is taken at once, its
             // effect is the provider's (docs/UX-SPEC.md).
@@ -341,6 +346,18 @@ function ComposerBody({
           )}
         </InputGroupAddon>
       </InputGroup>
+      <p
+        id={hintId}
+        data-slot="assistant-composer-hint"
+        className="px-1 text-xs text-muted-foreground"
+      >
+        {disabledReason ??
+          (running
+            ? stopRequested
+              ? "Stop requested. It ends as soon as the provider speaks again."
+              : "Working · ↵ queues · Esc stops"
+            : "↵ send · ⇧↵ new line")}
+      </p>
     </form>
   )
 }

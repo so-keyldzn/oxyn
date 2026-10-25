@@ -325,9 +325,10 @@ export const InThePanelBeforeTheFirstQuestion: StoryObj<typeof AssistantView> =
       onChangeAgentSetting: fn(async () => {}),
     },
     play: async ({ args, canvasElement }) => {
+      // What the agent said it is, beside who answers in the header line.
       await expect(
-        within(canvasElement).getByText(/Claude Agent 0\.78\.0 ·/)
-      ).toBeVisible()
+        canvasElement.querySelector("[data-slot=assistant-who-answers]")
+      ).toHaveTextContent("Claude Code · Claude Agent 0.78.0")
       await everythingClaudeDeclaresIsOffered(args.onChangeAgentSetting ?? fn())
     },
   }

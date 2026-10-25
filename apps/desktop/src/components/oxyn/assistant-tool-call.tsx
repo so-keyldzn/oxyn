@@ -2,6 +2,8 @@ import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
+  ArrowDown01Icon,
+  ArrowUp01Icon,
   CancelCircleIcon,
   CheckmarkCircle02Icon,
   Clock01Icon,
@@ -89,6 +91,69 @@ function StateIcon({ state }: { state: ToolCallState }) {
   }
 }
 
+/** Past this, a statement opens folded to its first lines. */
+const FOLDED_LINES = 3
+const FOLDED_CHARACTERS = 240
+
+/**
+ * The exact statement, folded to three lines when it is longer: the card
+ * reads at a glance, and `Show all` gives every character back. Folding is
+ * only a height — the whole text is in the block, selectable and copied
+ * whole, and it is never shortened.
+ */
+function Statement({
+  statement,
+  foldable,
+}: {
+  statement: string
+  foldable: boolean
+}) {
+  const id = React.useId()
+  const long =
+    foldable &&
+    (statement.split("\n").length > FOLDED_LINES ||
+      statement.length > FOLDED_CHARACTERS)
+  const [open, setOpen] = React.useState(false)
+  const folded = long && !open
+  return (
+    <div className="flex min-w-0 flex-col items-start">
+      {/* Wrapped at spaces only: a word of a statement is never cut in two,
+          and a longer token scrolls sideways within the block. */}
+      <pre
+        id={id}
+        data-selectable
+        data-folded={folded || undefined}
+        tabIndex={0}
+        aria-label="Statement the agent submitted"
+        className={cn(
+          "w-full overflow-auto px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          folded ? "line-clamp-3" : "max-h-48"
+        )}
+      >
+        {statement}
+      </pre>
+      {long ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-expanded={open}
+          aria-controls={id}
+          className="mx-1.5 mb-1 text-muted-foreground"
+          onClick={() => setOpen(!open)}
+        >
+          <HugeiconsIcon
+            icon={open ? ArrowUp01Icon : ArrowDown01Icon}
+            strokeWidth={2}
+            data-icon="inline-start"
+          />
+          {open ? "Show less" : "Show all"}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * The card of one tool call, live or reopened: the same header, the same
  * statement block, the same report. Only what the card is given differs.
@@ -118,7 +183,7 @@ function ToolCallCard({
         card.state === "awaitingApproval" && "border-warning/60"
       )}
     >
-      <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-2">
+      <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/40 px-3 py-1.5">
         <HugeiconsIcon
           icon={CommandLineIcon}
           strokeWidth={2}
@@ -161,16 +226,16 @@ function ToolCallCard({
       </header>
 
       {card.statement ? (
-        // Wrapped at spaces only: a word of a statement is never cut in two,
-        // and a longer token scrolls sideways within the block.
-        <pre
-          data-selectable
-          tabIndex={0}
-          aria-label="Statement the agent submitted"
-          className="max-h-48 overflow-auto px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {card.statement}
-        </pre>
+        <Statement
+          statement={card.statement}
+          // A statement that may change data, or that waits for the user's
+          // decision, is read whole before anything else: never folded.
+          foldable={
+            card.mutating !== true &&
+            card.state !== "awaitingApproval" &&
+            card.state !== "deciding"
+          }
+        />
       ) : null}
 
       {card.detail || card.withheld || footer ? (

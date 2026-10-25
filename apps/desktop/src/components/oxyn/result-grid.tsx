@@ -50,6 +50,7 @@ import type {
 import { writeClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import { useColumnOrder } from "./column-order"
+import type { EstimatedWidths, GridLayoutStore } from "./grid-layout"
 import { dropMark, moveStep, usePointerReorder } from "./pointer-drag"
 
 /**
@@ -249,6 +250,17 @@ interface ResultGridProps {
   onInspect?: (position: GridPosition) => void
   /** The context menus of a cell and of a header; absent, none opens. */
   menu?: GridMenu
+  /**
+   * Rows of the result before this grid's first one, for a grid that shows a
+   * page of it: the gutter numbers the result's rows, not the page's.
+   */
+  firstRow?: number
+  /**
+   * Where the column widths and order are kept, for a grid remounted while it
+   * shows the same result — a page of the chat. Absent, they are the grid's
+   * own and go with it.
+   */
+  layout?: { store: GridLayoutStore; key: string }
   "aria-label"?: string
 }
 
@@ -323,6 +335,8 @@ export const ResultGrid = React.memo(function ResultGrid({
   onActiveChange,
   onInspect,
   menu,
+  firstRow = 0,
+  layout,
   "aria-label": ariaLabel = "Result rows",
 }: ResultGridProps) {
   const baseId = React.useId()
@@ -339,7 +353,16 @@ export const ResultGrid = React.memo(function ResultGrid({
   // Pages are sized on the result's width, not on what is shown: hiding a
   // column must not ask the backend again for pages already held.
   const pageSize = pageSizeFor(columns.length)
-  const columnOrder = useColumnOrder(resultKey, columns.length)
+  // Read when the grid mounts or its result changes, never while it is used.
+  const restored = React.useMemo(
+    () => (layout ? layout.store.read(layout.key, columns) : null),
+    [layout, columns, resultKey]
+  )
+  const columnOrder = useColumnOrder(
+    resultKey,
+    columns.length,
+    restored?.order ?? null
+  )
   const shown = React.useMemo(
     () => shownColumns(columns.length, hiddenColumns, columnOrder.order),
     [columns.length, hiddenColumns, columnOrder.order]
@@ -370,18 +393,18 @@ export const ResultGrid = React.memo(function ResultGrid({
   }
 
   // Widths: the user's resize, else the estimate from the first page, else
-  // the header alone. Reset when the result changes.
-  const [resized, setResized] = React.useState<Record<number, number>>({})
-  const [estimated, setEstimated] = React.useState<{
-    charWidth: number
-    nullText: string
-    widths: Array<number>
-  } | null>(null)
+  // the header alone. Reset when the result changes, to what `layout` kept.
+  const [resized, setResized] = React.useState<Record<number, number>>(() => ({
+    ...restored?.resized,
+  }))
+  const [estimated, setEstimated] = React.useState<EstimatedWidths | null>(
+    () => restored?.estimated ?? null
+  )
   const [widthsFor, setWidthsFor] = React.useState(resultKey)
   if (widthsFor !== resultKey) {
     setWidthsFor(resultKey)
-    setResized({})
-    setEstimated(null)
+    setResized({ ...restored?.resized })
+    setEstimated(restored?.estimated ?? null)
     setAnchor(null)
     setActive(null)
     setStatus(null)
@@ -421,6 +444,13 @@ export const ResultGrid = React.memo(function ResultGrid({
   React.useEffect(() => {
     cols.measure()
   }, [resized, estimated, shown, cols])
+  React.useEffect(() => {
+    layout?.store.write(layout.key, columns, {
+      resized,
+      estimated,
+      order: columnOrder.order,
+    })
+  }, [layout, columns, resized, estimated, columnOrder.order])
 
   const items = rows.getVirtualItems()
   const visibleColumns = cols.getVirtualItems()
@@ -844,7 +874,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                 <div
                   role="rowheader"
                   aria-colindex={1}
-                  aria-label={`Row ${item.index + 1}${matched ? ", matches the search" : ""}`}
+                  aria-label={`Row ${firstRow + item.index + 1}${matched ? ", matches the search" : ""}`}
                   onMouseDown={(event) => {
                     if (shown.length === 0) return
                     event.preventDefault()
@@ -865,7 +895,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   )}
                   style={{ width: GUTTER_WIDTH }}
                 >
-                  {item.index + 1}
+                  {firstRow + item.index + 1}
                 </div>
                 {visibleColumns.map((virtual) => {
                   const column = shown[virtual.index] ?? virtual.index

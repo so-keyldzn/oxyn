@@ -1,6 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Alert02Icon, SparklesIcon } from "@hugeicons/core-free-icons"
+import { Alert02Icon, ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 
 import { AgentPresets } from "@/components/oxyn/agent-presets"
 import type { PresetStates } from "@/components/oxyn/agent-presets"
@@ -11,7 +11,14 @@ import {
 import { DeclarationRemovalDialog } from "@/components/oxyn/declaration-removal-dialog"
 import type { Removal } from "@/components/oxyn/declaration-removal-dialog"
 import { ProviderForm } from "@/components/oxyn/provider-form"
-import type { FormTarget } from "@/components/oxyn/provider-form"
+import type { FormKind, FormTarget } from "@/components/oxyn/provider-form"
+import {
+  ProviderList,
+  ProviderLogoTile,
+  ProviderStatusPill,
+} from "@/components/oxyn/provider-list"
+import { providerRows } from "@/components/oxyn/provider-list-model"
+import type { ProviderRow } from "@/components/oxyn/provider-list-model"
 import {
   FAILURE_TITLES,
   isFormFailure,
@@ -22,14 +29,7 @@ import type {
 } from "@/components/oxyn/provider-settings-model"
 import type { ListDraftModels } from "@/components/oxyn/use-draft-models"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Button } from "@/components/ui/button"
 import type {
   AgentDraft,
   AgentPresetDraft,
@@ -72,12 +72,44 @@ function formKey(target: FormTarget) {
   return "new"
 }
 
+/** The declarations that live under a row, and the kind its form starts on. */
+function contentsOf(
+  row: ProviderRow,
+  providers: ReadonlyArray<DeclaredProvider>,
+  agents: ReadonlyArray<ExternalAgent>
+): {
+  providers: ReadonlyArray<DeclaredProvider>
+  agents: ReadonlyArray<ExternalAgent>
+  kind: FormKind
+} {
+  const { subject } = row
+  if (subject.kind === "family")
+    return {
+      providers: providers.filter((p) => p.kind === subject.family),
+      agents: [],
+      kind: subject.family,
+    }
+  if (subject.kind === "preset")
+    return {
+      providers: [],
+      agents: agents.filter((a) => a.preset === subject.preset.id),
+      kind: "agent",
+    }
+  return {
+    providers: [],
+    agents: agents.filter((a) => a.preset === null),
+    kind: "agent",
+  }
+}
+
 /**
  * The model providers and external agents of this machine.
  *
- * Common to every workspace; the privacy tier stays on each connection
- * (ADR-0023). A key is typed once, leaves for the keychain, and is shown again
- * only as « key configured » (I-03).
+ * A list of every destination Oxyn can declare, each opening on what it holds:
+ * its declarations, their models, the form that declares or edits one. Common
+ * to every workspace; the privacy tier stays on each connection (ADR-0023). A
+ * key is typed once, leaves for the keychain, and is shown again only as
+ * « key configured » (I-03).
  */
 export function ProviderSettingsView({
   status,
@@ -100,11 +132,28 @@ export function ProviderSettingsView({
   onListDraftModels,
   onDismissFailure,
 }: ProviderSettingsViewProps) {
+  const [openRow, setOpenRow] = React.useState<string | null>(null)
+  // The row to focus again once back on the list.
+  const [cameFrom, setCameFrom] = React.useState<string | null>(null)
   const [target, setTarget] = React.useState<FormTarget>(null)
   const [removal, setRemoval] = React.useState<Removal | null>(null)
+  const backRef = React.useRef<HTMLButtonElement>(null)
   const busy = working !== null || status !== "ready"
   const formFailure = isFormFailure(failure) ? failure : null
   const screenFailure = isFormFailure(failure) ? null : failure
+
+  const rows = providerRows({
+    providers,
+    agents,
+    presets,
+    presetStates,
+    models,
+  })
+  // A row that vanished — its last custom declaration removed elsewhere —
+  // leaves the list shown rather than an empty page.
+  const row =
+    status === "ready" ? rows.find((r) => r.id === openRow) : undefined
+  const held = row ? contentsOf(row, providers, agents) : null
 
   // A failure belongs to the form it came from: a new target starts clean.
   const retarget = (next: FormTarget) => {
@@ -112,111 +161,112 @@ export function ProviderSettingsView({
     setTarget(next)
   }
 
+  const open = (next: ProviderRow) => {
+    retarget(null)
+    setOpenRow(next.id)
+  }
+
+  const back = () => {
+    retarget(null)
+    setCameFrom(openRow)
+    setOpenRow(null)
+  }
+
+  React.useEffect(() => {
+    if (openRow !== null) backRef.current?.focus()
+  }, [openRow])
+
+  const failureAlert = screenFailure ? (
+    <Alert variant="destructive">
+      <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
+      <AlertTitle>{FAILURE_TITLES[screenFailure.operation]}</AlertTitle>
+      <AlertDescription data-selectable>
+        <span className="font-mono text-xs">{screenFailure.message}</span>
+        {screenFailure.retryable ? (
+          <span className="block">You can try again.</span>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  ) : null
+
   return (
     <section
       aria-labelledby="ai-providers-title"
       className="flex flex-col gap-4"
     >
-      <div className="flex flex-col gap-1">
-        <h2 id="ai-providers-title" className="text-base font-medium">
-          AI providers
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Oxyn is a complete client without AI: the assistant appears only once
-          a provider or an agent is declared. What each connection lets leave is
-          set on the connection.
-        </p>
-      </div>
-
-      {screenFailure ? (
-        <Alert variant="destructive">
-          <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-          <AlertTitle>{FAILURE_TITLES[screenFailure.operation]}</AlertTitle>
-          <AlertDescription data-selectable>
-            <span className="font-mono text-xs">{screenFailure.message}</span>
-            {screenFailure.retryable ? (
-              <span className="block">You can try again.</span>
-            ) : null}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {status === "loading" ? (
-        <div
-          role="status"
-          className="flex flex-col gap-2"
-          aria-busy="true"
-          aria-label="Loading providers"
-        >
-          <Skeleton className="h-14 w-full" />
-          <Skeleton className="h-14 w-full" />
-        </div>
-      ) : status === "error" ? (
-        <Alert variant="destructive">
-          <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-          <AlertTitle>The declarations could not be read</AlertTitle>
-          <AlertDescription data-selectable className="font-mono text-xs">
-            {loadError}
-          </AlertDescription>
-        </Alert>
-      ) : providers.length === 0 && agents.length === 0 ? (
-        <Empty className="border">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
-            </EmptyMedia>
-            <EmptyTitle>No provider declared</EmptyTitle>
-            <EmptyDescription>
-              Declare a provider below, or use an agent already on this machine.
-              Ask AI then appears in the connection bar. Until then, nothing is
-              sent anywhere.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+      {row === undefined || held === null ? (
+        <>
+          {failureAlert}
+          <ProviderList
+            status={status}
+            loadError={loadError}
+            rows={rows}
+            focusRow={cameFrom}
+            onOpen={open}
+          />
+        </>
       ) : (
-        <div className="flex flex-col gap-2">
-          {providers.map((provider) => (
-            <DeclaredProviderItem
-              key={provider.id}
-              provider={provider}
-              listed={models[provider.id]}
-              busy={busy}
-              onListModels={() => onListModels(provider)}
-              onEdit={() => retarget({ kind: "provider", provider })}
-              onRemove={() => setRemoval({ kind: "provider", provider })}
+        <ProviderDetail
+          row={row}
+          backRef={backRef}
+          onBack={back}
+          failureAlert={failureAlert}
+        >
+          {held.providers.length > 0 || held.agents.length > 0 ? (
+            <ul aria-label="Declared" className="flex flex-col gap-2">
+              {held.providers.map((provider) => (
+                <li key={provider.id}>
+                  <DeclaredProviderItem
+                    provider={provider}
+                    listed={models[provider.id]}
+                    busy={busy}
+                    onListModels={() => onListModels(provider)}
+                    onEdit={() => retarget({ kind: "provider", provider })}
+                    onRemove={() => setRemoval({ kind: "provider", provider })}
+                  />
+                </li>
+              ))}
+              {held.agents.map((agent) => (
+                <li key={agent.id}>
+                  <DeclaredAgentItem
+                    agent={agent}
+                    busy={busy}
+                    onReplace={() => retarget({ kind: "agent", agent })}
+                    onRemove={() => setRemoval({ kind: "agent", agent })}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {row.subject.kind === "preset" ? (
+            <AgentPresets
+              presets={[row.subject.preset]}
+              states={presetStates}
+              agents={agents}
+              declaring={declaringPreset}
+              onDetect={onDetectPreset}
+              onDeclare={onDeclarePreset}
             />
-          ))}
-          {agents.map((agent) => (
-            <DeclaredAgentItem
-              key={agent.id}
-              agent={agent}
-              busy={busy}
-              onReplace={() => retarget({ kind: "agent", agent })}
-              onRemove={() => setRemoval({ kind: "agent", agent })}
+          ) : null}
+
+          {/* A preset is declared by its own button; the form only
+                  replaces one already declared. */}
+          {row.subject.kind !== "preset" || target?.kind === "agent" ? (
+            <ProviderForm
+              key={`${row.id}:${formKey(target)}`}
+              target={target}
+              initialKind={held.kind}
+              working={working === "saving"}
+              failure={formFailure}
+              onSaveProvider={onSaveProvider}
+              onSaveAgent={onSaveAgent}
+              onDone={() => retarget(null)}
+              onListModels={onListDraftModels}
             />
-          ))}
-        </div>
+          ) : null}
+        </ProviderDetail>
       )}
-
-      <AgentPresets
-        presets={presets}
-        states={presetStates}
-        agents={agents}
-        declaring={declaringPreset}
-        onDetect={onDetectPreset}
-        onDeclare={onDeclarePreset}
-      />
-
-      <ProviderForm
-        key={formKey(target)}
-        target={target}
-        working={working === "saving"}
-        failure={formFailure}
-        onSaveProvider={onSaveProvider}
-        onSaveAgent={onSaveAgent}
-        onDone={() => retarget(null)}
-        onListModels={onListDraftModels}
-      />
 
       <DeclarationRemovalDialog
         removal={removal}
@@ -234,5 +284,51 @@ export function ProviderSettingsView({
         onClose={() => setRemoval(null)}
       />
     </section>
+  )
+}
+
+/** One provider's page: a way back, what it is, then what it holds. */
+function ProviderDetail({
+  row,
+  backRef,
+  onBack,
+  failureAlert,
+  children,
+}: {
+  row: ProviderRow
+  backRef: React.Ref<HTMLButtonElement>
+  onBack: () => void
+  failureAlert: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Button
+        ref={backRef}
+        variant="ghost"
+        size="sm"
+        className="self-start"
+        onClick={onBack}
+      >
+        <HugeiconsIcon
+          icon={ArrowLeft01Icon}
+          strokeWidth={2}
+          data-icon="inline-start"
+        />
+        All providers
+      </Button>
+      <div className="flex items-center gap-3">
+        <ProviderLogoTile logo={row.logo} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h2 id="ai-providers-title" className="text-base font-medium">
+            {row.title}
+          </h2>
+          <p className="truncate text-xs text-muted-foreground">{row.line}</p>
+        </div>
+        <ProviderStatusPill status={row.status} />
+      </div>
+      {failureAlert}
+      {children}
+    </div>
   )
 }

@@ -32,17 +32,20 @@ export function moveShownColumn(
 /**
  * The order of one result's columns: `null` until the user moves one, and
  * forgotten when another result is shown — a new statement brings other
- * columns under the same indexes.
+ * columns under the same indexes. `restored` is the order a grid remounted
+ * over the same result starts from (`grid-layout.ts`).
  */
-export function useColumnOrder(resultKey: string, count: number) {
+export function useColumnOrder(
+  resultKey: string,
+  count: number,
+  restored: ReadonlyArray<number> | null = null
+) {
   const [state, setState] = React.useState<{
     result: string
     order: ReadonlyArray<number>
   } | null>(null)
-  const order =
-    state?.result === resultKey && state.order.length === count
-      ? state.order
-      : null
+  const own = state?.result === resultKey ? state.order : restored
+  const order = own?.length === count ? own : null
   const move = (shown: ReadonlyArray<number>, from: number, to: number) => {
     const current = order ?? Array.from({ length: count }, (_, index) => index)
     const next = moveShownColumn(current, shown, from, to)

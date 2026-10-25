@@ -59,6 +59,64 @@ export const Completed: Story = {
   },
 }
 
+const LONG_READ = [
+  "SELECT c.id, c.name, c.country, count(o.id) AS orders,",
+  "       sum(o.amount) AS revenue, max(o.issued_at) AS last_order",
+  "FROM public.clients AS c",
+  "LEFT JOIN public.orders AS o ON o.client_id = c.id",
+  "WHERE c.deleted_at IS NULL",
+  "GROUP BY c.id, c.name, c.country",
+  "ORDER BY revenue DESC NULLS LAST",
+  "LIMIT 50;",
+].join("\n")
+
+/**
+ * A long read opens folded to its first lines; `Show all` gives back every
+ * character — folding is a height, the text in the block is whole.
+ */
+export const LongStatementFolded: Story = {
+  args: {
+    entry: {
+      ...base,
+      statement: LONG_READ,
+      state: "completed",
+      detail: "50 rows, 1 batches",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const block = canvas.getByLabelText("Statement the agent submitted")
+    await expect(block).toHaveAttribute("data-folded", "true")
+    await expect(block.textContent).toBe(LONG_READ)
+    const toggle = canvas.getByRole("button", { name: "Show all" })
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    await userEvent.click(toggle)
+    await expect(block).not.toHaveAttribute("data-folded")
+    await expect(
+      canvas.getByRole("button", { name: "Show less" })
+    ).toHaveAttribute("aria-expanded", "true")
+  },
+}
+
+/** A statement that may change data is read whole: never folded. */
+export const LongWriteNeverFolded: Story = {
+  args: {
+    entry: {
+      ...write,
+      statement: LONG_READ.replace("SELECT", "UPDATE invoices SET x = 1 --"),
+      state: "completed",
+      detail: "50 rows affected",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByLabelText("Statement the agent submitted")
+    ).not.toHaveAttribute("data-folded")
+    await expect(canvas.queryByRole("button", { name: "Show all" })).toBeNull()
+  },
+}
+
 export const AwaitingApproval: Story = {
   args: {
     entry: {

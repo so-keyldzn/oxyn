@@ -21,8 +21,18 @@ import {
 } from "@/components/oxyn/assistant-exchange"
 import type { ExchangeActions } from "@/components/oxyn/assistant-exchange"
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
+import {
+  AssistantAgentPicker,
+  AssistantAgentPickerNotes,
+} from "@/components/oxyn/assistant-agent-picker"
 import type { AssistantAgentPickerProps } from "@/components/oxyn/assistant-agent-picker"
-import type { ModelListState } from "@/components/oxyn/assistant-header"
+import {
+  AssistantDestinationChips,
+  AssistantModelListNote,
+  DestinationMark,
+} from "@/components/oxyn/assistant-destination-chips"
+import type { ModelListState } from "@/components/oxyn/assistant-destination-chips"
+import { PRIVACY_TIERS } from "@/components/oxyn/privacy-tier"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
 import type { OrphanThreadsState } from "@/components/oxyn/assistant-orphans"
 import type { ErdRequest } from "@/components/oxyn/assistant-markdown-model"
@@ -326,6 +336,15 @@ export function AssistantView(props: AssistantViewProps) {
         ? "refused"
         : null
   const remedy = unavailable ? (REMEDIES[entry.reason] ?? null) : null
+  const agentPicker = props.agentPicker
+    ? {
+        ...props.agentPicker,
+        onSelect: (id: string) => {
+          setHistoryOpen(false)
+          props.agentPicker?.onSelect(id)
+        },
+      }
+    : undefined
 
   return (
     <section
@@ -336,36 +355,16 @@ export function AssistantView(props: AssistantViewProps) {
         {panelStatus(path)}
       </p>
       <AssistantHeader
-        agentPicker={
-          props.agentPicker
-            ? {
-                ...props.agentPicker,
-                onSelect: (id) => {
-                  setHistoryOpen(false)
-                  props.agentPicker?.onSelect(id)
-                },
-              }
-            : undefined
-        }
         connectionName={connectionName}
         environment={environment}
         tier={tier}
-        destinations={entry.destinations}
         selected={selected}
         model={model}
-        models={models}
         running={busy}
         context={lastContext(path)}
         agentVersion={lastExchange?.started?.destination.agentVersion ?? null}
         historyOpen={historyOpen}
-        onSelectDestination={onSelectDestination}
-        onSelectModel={onSelectModel}
-        onModelsWanted={onModelsWanted}
-        efforts={efforts}
-        effort={effort}
-        onSelectEffort={onSelectEffort}
         agentStartup={agentStartup}
-        modelList={modelList}
         onToggleHistory={(open: boolean) => {
           setHistoryOpen(open)
           if (open) props.onHistoryShown?.()
@@ -398,8 +397,9 @@ export function AssistantView(props: AssistantViewProps) {
         <MessageScrollerProvider autoScroll>
           {/* While the button to the end shows, the conversation gives it a
               strip of its own below the viewport: floating over the text, it
-              hid the words of whatever it covered. */}
-          <MessageScroller className="min-h-0 flex-1 has-[[data-slot=message-scroller-button][data-active=true]]:pb-9">
+              hid the words of whatever it covered. The top edge fades: a line
+              scrolled half under the header reads as scrolled, not clipped. */}
+          <MessageScroller className="min-h-0 flex-1 before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:z-10 before:h-3 before:bg-linear-to-b before:from-background before:to-transparent has-[[data-slot=message-scroller-button][data-active=true]]:pb-9">
             <MessageScrollerViewport aria-label="Conversation">
               <MessageScrollerContent aria-live="off" className="gap-4 p-3">
                 {path.length === 0 ? (
@@ -407,7 +407,17 @@ export function AssistantView(props: AssistantViewProps) {
                     <Empty className="border-0">
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
-                          <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
+                          {selected && !unavailable ? (
+                            <DestinationMark
+                              option={selected}
+                              className="size-5"
+                            />
+                          ) : (
+                            <HugeiconsIcon
+                              icon={SparklesIcon}
+                              strokeWidth={2}
+                            />
+                          )}
                         </EmptyMedia>
                         <EmptyTitle>
                           {unavailable
@@ -422,6 +432,18 @@ export function AssistantView(props: AssistantViewProps) {
                             {remedy}
                           </EmptyDescription>
                         ) : null}
+                        {/* Before the first question, the tier in a
+                            sentence; afterwards it is the header badge's
+                            description. */}
+                        {unavailable ? null : (
+                          <EmptyDescription
+                            data-slot="assistant-tier-summary"
+                            className="text-xs"
+                          >
+                            {PRIVACY_TIERS[tier].label}:{" "}
+                            {PRIVACY_TIERS[tier].summary}
+                          </EmptyDescription>
+                        )}
                       </EmptyHeader>
                       {disabledReason === null ? (
                         <EmptyContent>
@@ -461,6 +483,7 @@ export function AssistantView(props: AssistantViewProps) {
                       busy={busy}
                       last={index === path.length - 1}
                       cost={exchangeCost(node.exchange, props)}
+                      brand={brandOf(node.exchange, entry.destinations)}
                       tier={tier}
                       signInStates={state.signIn}
                       identifierQuote={props.identifierQuote}
@@ -502,24 +525,51 @@ export function AssistantView(props: AssistantViewProps) {
             {state.askError}
           </p>
         ) : null}
-        {/* Above the field rather than inside its group: `InputGroup` dims
-            every child at 50 % as soon as one control in it is `disabled`, and
-            these are disabled for as long as an answer runs. Only for an agent:
-            a provider's model is chosen in the header. */}
-        {selected?.kind === "agent" && props.onChangeAgentSetting ? (
-          <AssistantAgentSettings
-            settings={lastAgentSettings(path) ?? startedSettings}
-            disabledReason={
-              busy ? "Settings can be changed once the answer is done." : null
-            }
-            onChange={props.onChangeAgentSetting}
-          />
-        ) : null}
+        {/* What the chips below cannot say in a word: a list still loading
+            or failed, the agent a resumed conversation lost. */}
+        {agentPicker ? <AssistantAgentPickerNotes {...agentPicker} /> : null}
+        <AssistantModelListNote
+          modelList={selected?.kind === "provider" ? modelList : null}
+        />
         <AssistantComposer
           ref={composer}
           running={state.thread.running !== null}
           stopRequested={lastExchange?.stopRequested ?? false}
           disabledReason={disabledReason}
+          controls={
+            <>
+              {agentPicker ? (
+                <AssistantAgentPicker chip {...agentPicker} />
+              ) : null}
+              <AssistantDestinationChips
+                destinations={entry.destinations}
+                selected={selected}
+                model={model}
+                models={models}
+                running={busy}
+                onSelectDestination={onSelectDestination}
+                onSelectModel={onSelectModel}
+                onModelsWanted={onModelsWanted}
+                efforts={efforts}
+                effort={effort}
+                onSelectEffort={onSelectEffort}
+              />
+              {/* An agent's own settings play the part of a provider's model
+                  and effort: its `thoughtLevel` option, not Oxyn's selector. */}
+              {selected?.kind === "agent" && props.onChangeAgentSetting ? (
+                <AssistantAgentSettings
+                  chip
+                  settings={lastAgentSettings(path) ?? startedSettings}
+                  disabledReason={
+                    busy
+                      ? "Settings can be changed once the answer is done."
+                      : null
+                  }
+                  onChange={props.onChangeAgentSetting}
+                />
+              ) : null}
+            </>
+          }
           // The question goes to the current conversation: it is shown again
           // first, so nothing is sent into a thread the user cannot see.
           mentions={props.mentionSource ?? null}
@@ -587,6 +637,25 @@ function lastAgentSettings(path: ReadonlyArray<ExchangeNode>) {
     if (newSession) return null
   }
   return null
+}
+
+/**
+ * The mark of whoever answered an exchange, when it is still declared. The
+ * exchange records a label, not a declaration: a destination renamed or
+ * removed since gets the generic icon of its kind, never another's mark.
+ */
+function brandOf(
+  exchange: ExchangeNode["exchange"],
+  destinations: ReadonlyArray<DestinationOption>
+) {
+  const answered = exchange.started?.destination
+  if (!answered) return null
+  return (
+    destinations.find(
+      (option) =>
+        option.kind === answered.kind && option.label === answered.label
+    )?.brand ?? null
+  )
 }
 
 /** The context of the most recent exchange that assembled one. */

@@ -1,5 +1,16 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  ArrowDown01Icon,
+  DashboardSpeed01Icon,
+} from "@hugeicons/core-free-icons"
 
+import {
+  CHIP_CHEVRON,
+  CHIP_LIST,
+  COMPOSER_CHIP,
+  chipLabel,
+} from "@/components/oxyn/assistant-composer-chip"
 import {
   Select,
   SelectContent,
@@ -15,6 +26,7 @@ import {
 } from "@/components/ui/tooltip"
 import { EFFORT_LABELS } from "@/features/assistant/reasoning-effort"
 import type { ReasoningEffort } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 /** Said when nothing was chosen: the provider applies its own default. */
 const DEFAULT = "Default"
@@ -34,6 +46,7 @@ export function AssistantReasoningEffort({
   efforts,
   value,
   disabledReason = null,
+  chip = false,
   onChange,
 }: {
   /** What the model declares, in order; empty when it declares none. */
@@ -41,6 +54,8 @@ export function AssistantReasoningEffort({
   value: ReasoningEffort | null
   /** Why it cannot change now — a question running, for one. */
   disabledReason?: string | null
+  /** Drawn as a chip of the composer's bottom bar, a gauge before its level. */
+  chip?: boolean
   onChange: (effort: ReasoningEffort) => void
 }) {
   const reasonId = React.useId()
@@ -73,13 +88,35 @@ export function AssistantReasoningEffort({
               aria-label={`Reasoning effort: ${label}`}
               aria-describedby={disabled ? reasonId : undefined}
               title={`Reasoning effort: ${label}`}
-              className="max-w-36 min-w-0"
+              className={cn("max-w-36 min-w-0", chip && COMPOSER_CHIP)}
             >
+              {chip ? (
+                <HugeiconsIcon
+                  icon={DashboardSpeed01Icon}
+                  strokeWidth={2}
+                  aria-hidden
+                />
+              ) : null}
               <SelectValue className="min-w-0">
-                {() => <span className="truncate">{label}</span>}
+                {() => (
+                  <span className={chip ? chipLabel(true) : "truncate"}>
+                    {label}
+                  </span>
+                )}
               </SelectValue>
+              {chip ? (
+                <HugeiconsIcon
+                  icon={ArrowDown01Icon}
+                  strokeWidth={2}
+                  className={CHIP_CHEVRON}
+                  aria-hidden
+                />
+              ) : null}
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
+            <SelectContent
+              alignItemWithTrigger={false}
+              className={cn(chip && CHIP_LIST)}
+            >
               <SelectGroup>
                 {efforts.map((effort) => (
                   <SelectItem key={effort} value={effort}>

@@ -8,9 +8,7 @@ import {
   remoteProvider,
   unresolvedProvider,
 } from "./assistant-fixtures"
-import { expectContainedInFrame, openFrame } from "./frame-overflow"
-import { restrictedToAgent } from "@/features/assistant/agent-options"
-import type { DestinationOption } from "@/features/assistant/availability"
+import { expectContainedInFrame } from "./frame-overflow"
 
 const meta = {
   title: "Oxyn/Assistant/Header",
@@ -19,15 +17,10 @@ const meta = {
     connectionName: "commerce-prod",
     environment: "production",
     tier: "metadata",
-    destinations,
     selected: destinations[0] ?? null,
     model: remoteProvider.model,
-    models: null,
     running: false,
     context: null,
-    onSelectDestination: fn(),
-    onSelectModel: fn(),
-    onModelsWanted: fn(),
   },
   decorators: [
     (Story) => (
@@ -44,69 +37,73 @@ type Story = StoryObj<typeof meta>
 const LONG_MODEL =
   "arn:aws:bedrock:eu-west-3:123456789012:inference-profile/eu.anthropic.claude-sonnet-analytics-team-staging-v2:0"
 
-const LONG_DESTINATIONS: Array<DestinationOption> = [
-  {
-    ...destinations[0]!,
-    label: "Work account — the analytics team's Bedrock gateway in eu-west-3",
-    model: LONG_MODEL,
-  },
-  {
-    ...destinations[1]!,
-    label: "codex_analytics_team_staging_workspace_agent_with_a_long_name",
-    usable: false,
-    reason:
-      "Not found on PATH: /Users/analyst/.local/share/agents/codex_analytics_team_staging/bin/codex",
-  },
-]
-
 /**
- * Axe runs after `play`, on whatever is still mounted: a list animating out
- * keeps its focus guards and its listbox for a few frames, and the
- * suite's pace decides whether axe sees them.
- */
-async function closeList() {
-  await userEvent.keyboard("{Escape}")
-  await waitFor(() => {
-    // Hidden once closed, but kept mounted: the accessibility tree, as axe
-    // reads it, is what must be empty.
-    expect(within(document.body).queryByRole("listbox")).toBeNull()
-    expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
-  })
-}
-
-/**
- * Long provider, agent and model names: the header's row keeps its selects
- * inside, and each select's list stays inside its own frame.
+ * Long connection, provider and model names: the identity row and the privacy
+ * line stay inside the header, the names cut with an ellipsis — never the
+ * environment badge nor the tier. The selectors' own lists are held in
+ * `AssistantDestinationChips`' stories.
  */
 export const LongNamesStayInTheirFrames: Story = {
   args: {
-    destinations: LONG_DESTINATIONS,
-    selected: LONG_DESTINATIONS[0]!,
+    connectionName:
+      "commerce-production-replica-eu-west-3-analytics-readonly-pool",
+    selected: {
+      ...destinations[0]!,
+      label: "Work account — the analytics team's Bedrock gateway in eu-west-3",
+      model: LONG_MODEL,
+    },
     model: LONG_MODEL,
   },
+  decorators: [
+    (Story) => (
+      <div className="w-[320px] border">
+        <Story />
+      </div>
+    ),
+  ],
   play: async ({ canvasElement }) => {
     const header = canvasElement.querySelector("header")
     await expect(header).not.toBeNull()
     await expectContainedInFrame(header as HTMLElement)
-
     const canvas = within(canvasElement)
-    await userEvent.click(canvas.getByRole("combobox", { name: "Who answers" }))
-    await expectContainedInFrame(await openFrame("select-content"))
-    await closeList()
-
-    await userEvent.click(canvas.getByRole("combobox", { name: "Model" }))
-    await expectContainedInFrame(await openFrame("select-content"))
-    await closeList()
+    await expect(canvas.getByText("PRODUCTION")).toBeVisible()
+    await expect(canvas.getByText("Metadata · Cloud")).toBeVisible()
   },
 }
 
 export const MetadataToCloud: Story = {
   play: async ({ canvasElement }) => {
     // The tier and where it goes, in words, before anything is asked.
-    await expect(
-      within(canvasElement).getByText("Metadata · Cloud")
-    ).toBeVisible()
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText("Metadata · Cloud")).toBeVisible()
     await expect(canvasElement.textContent).not.toContain(remoteProvider.id)
+    // Who answers, in the header line, not only in the composer's chip.
+    const who = canvasElement.querySelector("[data-slot=assistant-who-answers]")
+    await expect(who).toHaveTextContent(
+      `Who answers: ${remoteProvider.label} · ${remoteProvider.model}`
+    )
+  },
+}
+
+/** The tier's sentence is the badge's description, one focus away. */
+export const TierSentenceOnFocus: Story = {
+  play: async ({ canvasElement }) => {
+    const badge = within(canvasElement).getByLabelText(
+      "Privacy tier Metadata, destination Cloud"
+    )
+    await userEvent.tab()
+    await expect(badge).toHaveFocus()
+    // Awaited: the tooltip fades in.
+    const sentence = await within(document.body).findByText(
+      /Metadata is not « nothing leaves »/
+    )
+    await waitFor(() => expect(sentence).toBeVisible())
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        within(document.body).queryByText(/Metadata is not « nothing leaves »/)
+      ).toBeNull()
+    )
   },
 }
 
@@ -115,18 +112,6 @@ export const LocalOnlyConnection: Story = {
     tier: "local",
     environment: "development",
     connectionName: "analytics-dev",
-    destinations: [
-      {
-        key: `provider:${localProvider.id}`,
-        kind: "provider",
-        id: localProvider.id,
-        label: localProvider.label,
-        model: localProvider.model,
-        reach: "local",
-        usable: true,
-        reason: null,
-      },
-    ],
     selected: {
       key: `provider:${localProvider.id}`,
       kind: "provider",
@@ -136,6 +121,7 @@ export const LocalOnlyConnection: Story = {
       reach: "local",
       usable: true,
       reason: null,
+      brand: localProvider.kind,
     },
     model: localProvider.model,
   },
@@ -155,6 +141,10 @@ export const ExternalAgent: Story = {
     await expect(
       canvas.getByLabelText("Privacy tier Metadata, destination Agent-managed")
     ).toBeVisible()
+    // The permanent mention of a chosen agent (docs/UX-SPEC.md).
+    await expect(
+      canvas.getByText(/Oxyn cannot see where it sends your question/)
+    ).toBeVisible()
   },
 }
 
@@ -164,18 +154,6 @@ export const ExternalAgent: Story = {
  */
 export const UnresolvedProvider: Story = {
   args: {
-    destinations: [
-      {
-        key: `provider:${unresolvedProvider.id}`,
-        kind: "provider",
-        id: unresolvedProvider.id,
-        label: unresolvedProvider.label,
-        model: unresolvedProvider.model,
-        reach: "unresolved",
-        usable: true,
-        reason: null,
-      },
-    ],
     selected: {
       key: `provider:${unresolvedProvider.id}`,
       kind: "provider",
@@ -185,6 +163,7 @@ export const UnresolvedProvider: Story = {
       reach: "unresolved",
       usable: true,
       reason: null,
+      brand: unresolvedProvider.kind,
     },
     model: unresolvedProvider.model,
   },
@@ -243,8 +222,8 @@ export const AgentStartedBeforeAQuestion: Story = {
   },
   play: async ({ canvasElement }) => {
     await expect(
-      within(canvasElement).getByText(/Claude Agent 0\.78\.0 ·/)
-    ).toBeVisible()
+      canvasElement.querySelector("[data-slot=assistant-who-answers]")
+    ).toHaveTextContent("Claude Code · Claude Agent 0.78.0")
   },
 }
 
@@ -261,131 +240,36 @@ export const AgentStartHiddenWhileAnswering: Story = {
   },
 }
 
-/** Under `Local`, an agent is closed — and the list says why, on it. */
-export const AgentClosedOnALocalConnection: Story = {
+/** A destination the tier refuses says why, under who answers. */
+export const SelectedDestinationRefused: Story = {
   args: {
     tier: "local",
-    destinations: [
-      {
-        key: `provider:${localProvider.id}`,
-        kind: "provider",
-        id: localProvider.id,
-        label: localProvider.label,
-        model: localProvider.model,
-        reach: "local",
-        usable: true,
-        reason: null,
-      },
-      {
-        ...(destinations[1] ?? destinations[0]!),
-        usable: false,
-        reason:
-          "This connection is local-only, and Oxyn cannot see where an external agent sends data.",
-      },
-    ],
     selected: {
-      key: `provider:${localProvider.id}`,
-      kind: "provider",
-      id: localProvider.id,
-      label: localProvider.label,
-      model: localProvider.model,
-      reach: "local",
-      usable: true,
-      reason: null,
+      ...destinations[1]!,
+      usable: false,
+      reason:
+        "This connection is local-only, and Oxyn cannot see where an external agent sends data.",
     },
-    model: localProvider.model,
+    model: null,
   },
-  play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole("combobox", { name: "Who answers" })
-    )
-    const agent = await within(document.body).findByRole("option", {
-      name: /Claude Code/,
-    })
-    await expect(agent).toHaveAttribute("aria-disabled", "true")
-    await expect(agent).toHaveTextContent(
-      /cannot see where an external agent sends data/
-    )
-    await closeList()
-  },
-}
-
-/**
- * The conversation runs an agent written for local models only: the hosted
- * provider stays listed, disabled, and says why and what to do instead
- * (ADR-0049 § 6). Choosing another destination never switches the agent.
- */
-export const DestinationTheAgentIsNotWrittenFor: Story = {
-  args: (() => {
-    const local: DestinationOption = {
-      key: `provider:${localProvider.id}`,
-      kind: "provider",
-      id: localProvider.id,
-      label: localProvider.label,
-      model: localProvider.model,
-      reach: "local",
-      usable: true,
-      reason: null,
-    }
-    const restricted = restrictedToAgent([local, destinations[0]!], {
-      id: "0199a3c0-0000-7000-8000-0000000000a2",
-      name: "Small model",
-      description: "",
-      origin: "user",
-      error: null,
-      disabledDestinations: [{ kind: "provider", id: remoteProvider.id }],
-    })
-    return {
-      tier: "metadata" as const,
-      destinations: restricted,
-      selected: restricted[0] ?? null,
-      model: localProvider.model,
-    }
-  })(),
-  play: async ({ canvasElement, args }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole("combobox", { name: "Who answers" })
-    )
-    const hosted = await within(document.body).findByRole("option", {
-      name: new RegExp(remoteProvider.label),
-    })
-    await expect(hosted).toHaveAttribute("aria-disabled", "true")
-    await expect(hosted).toHaveTextContent(
-      "The Small model agent is not written for it."
-    )
-    await expect(args.onSelectDestination).not.toHaveBeenCalled()
-    await closeList()
-  },
-}
-
-export const ModelsLoading: Story = {
-  args: { modelList: { status: "loading" } },
   play: async ({ canvasElement }) => {
     await expect(
-      within(canvasElement).getByText("Listing models…")
+      within(canvasElement).getByText(
+        /cannot see where an external agent sends data/
+      )
     ).toBeVisible()
-  },
-}
-
-/** The endpoint's own words: the public reads error messages. */
-export const ModelsFailed: Story = {
-  args: {
-    modelList: {
-      status: "error",
-      message: "GET /v1/models answered 401: invalid x-api-key",
-    },
-  },
-  play: async ({ canvasElement }) => {
-    await expect(within(canvasElement).getByRole("alert")).toHaveTextContent(
-      "Models could not be listed: GET /v1/models answered 401: invalid x-api-key"
-    )
   },
 }
 
 export const UnknownExternalAgent: Story = {
   args: {
     selected: destinations[1]
-      ? { ...destinations[1], label: "my-agent", unconfined: true }
+      ? {
+          ...destinations[1],
+          label: "my-agent",
+          unconfined: true,
+          brand: undefined,
+        }
       : null,
     model: null,
   },
@@ -423,4 +307,9 @@ export const AfterAQuestion: Story = {
       canvas.getByText(/2 mentioned object\(s\) named only/)
     ).toBeVisible()
   },
+}
+
+export const Light: Story = {
+  args: { selected: destinations[1] ?? null, model: null },
+  globals: { theme: "light" },
 }
