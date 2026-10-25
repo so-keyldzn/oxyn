@@ -67,6 +67,13 @@ impl Route {
     }
 }
 
+/// The API a path calls, decoded as the server routes it: `_search` for
+/// `/logs/_search/scroll`, `_plugins/_sql` for OpenSearch's SQL; `None` for
+/// a path on no API (`/`, `/logs`) or one that does not decode.
+pub(crate) fn endpoint(path: &str) -> Option<String> {
+    Route::parse(path)?.endpoint().map(|(endpoint, _)| endpoint)
+}
+
 /// Classifies a request conservatively: an unknown endpoint is mutating.
 #[must_use]
 pub fn statement_intent(request: &SearchRequest) -> StatementIntent {

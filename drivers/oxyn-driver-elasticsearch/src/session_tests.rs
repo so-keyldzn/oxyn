@@ -165,6 +165,86 @@ async fn a_read_answered_partial_is_refused_by_the_session() {
     assert!(session.registry.all().is_empty(), "the handle is released");
 }
 
+/// The error `text` gets from a session answered `body`, or `None` when its
+/// first page reads.
+async fn refusal(text: &str, body: &str) -> Option<String> {
+    let port = canned(answer(body)).await;
+    let mut asked = request(text);
+    asked.limits.read_only = false;
+    session_to(port)
+        .execute(asked, &CancelToken::new())
+        .await
+        .err()
+        .map(|error| error.to_string())
+}
+
+#[tokio::test]
+async fn a_filtered_search_that_timed_out_is_refused_without_its_shards() {
+    let filtered = "GET /logs/_search?filter_path=hits,timed_out";
+    let why = refusal(
+        filtered,
+        r#"{"timed_out":true,"hits":{"hits":[{"_index":"logs","_id":"1","_score":1,"_source":{}}]}}"#,
+    )
+    .await
+    .expect("a partial search");
+    assert!(why.contains("timed_out"), "{why}");
+    assert_eq!(
+        refusal(
+            filtered,
+            r#"{"timed_out":false,"hits":{"hits":[{"_index":"logs","_id":"1","_score":1,"_source":{}}]}}"#,
+        )
+        .await,
+        None
+    );
+    let why = refusal(
+        "GET /logs/_count?filter_path=count,_shards.failed",
+        r#"{"count":7,"_shards":{"failed":1}}"#,
+    )
+    .await
+    .expect("a partial count");
+    assert!(why.contains("_shards.failed"), "{why}");
+}
+
+#[tokio::test]
+async fn every_response_of_a_filtered_msearch_is_checked() {
+    let msearch = "POST /_msearch?filter_path=responses.hits,responses.timed_out,responses.error,responses.status\n{\"index\":\"a\"}\n{}\n{\"index\":\"x\"}\n{}\n";
+    let why = refusal(
+        msearch,
+        r#"{"responses":[{"timed_out":false,"hits":{"hits":[]},"status":200},{"error":{"type":"index_not_found_exception","reason":"no such index [x]"},"status":404}]}"#,
+    )
+    .await
+    .expect("a failed search");
+    assert!(why.contains("search 2 of the 2"), "{why}");
+    assert!(why.contains("index_not_found_exception"), "{why}");
+    let why = refusal(
+        msearch,
+        r#"{"responses":[{"timed_out":true,"hits":{"hits":[]},"status":200},{"timed_out":false,"hits":{"hits":[]},"status":200}]}"#,
+    )
+    .await
+    .expect("a partial search");
+    assert!(why.contains("search 1 of the 2"), "{why}");
+    assert!(why.contains("timed_out"), "{why}");
+    assert_eq!(
+        refusal(
+            msearch,
+            r#"{"responses":[{"timed_out":false,"hits":{"hits":[]},"status":200},{"timed_out":false,"hits":{"hits":[]},"status":200}]}"#,
+        )
+        .await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_filtered_by_query_operation_that_timed_out_is_not_a_success() {
+    let why = refusal(
+        "POST /logs/_delete_by_query?filter_path=timed_out,deleted\n{\"query\":{\"term\":{\"a\":1}}}",
+        r#"{"timed_out":true,"deleted":3}"#,
+    )
+    .await
+    .expect("a partial outcome");
+    assert!(why.contains("timed_out"), "{why}");
+}
+
 /// A loopback server that answers its connections with `pages` in order,
 /// then `{}`, and keeps every request body it read.
 async fn scripted(pages: Vec<&'static str>) -> (u16, Arc<Mutex<Vec<String>>>) {
@@ -258,6 +338,26 @@ async fn a_point_in_time_page_that_timed_out_stops_the_stream_with_an_error() {
     let mut cursor = session
         .execute(
             request("POST /_search\n{\"size\":1,\"pit\":{\"id\":\"p1\",\"keep_alive\":\"1m\"},\"sort\":[{\"_shard_doc\":\"asc\"}]}"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a cursor");
+    assert!(cursor.next_batch().await.expect("the first page").is_some());
+    let stopped = cursor.next_batch().await.expect_err("the partial page");
+    assert!(stopped.to_string().contains("timed_out"), "{stopped}");
+}
+
+#[tokio::test]
+async fn a_filtered_point_in_time_page_that_timed_out_stops_the_stream_with_an_error() {
+    let (port, _) = scripted(vec![
+        r#"{"pit_id":"p2","timed_out":false,"hits":{"hits":[{"_index":"a","_id":"1","_score":null,"_source":{"x":1},"sort":[1]}]}}"#,
+        r#"{"pit_id":"p3","timed_out":true,"hits":{"hits":[]}}"#,
+    ])
+    .await;
+    let session = session_to(port);
+    let mut cursor = session
+        .execute(
+            request("POST /_search?filter_path=pit_id,timed_out,hits.hits\n{\"size\":1,\"pit\":{\"id\":\"p1\",\"keep_alive\":\"1m\"},\"sort\":[{\"_shard_doc\":\"asc\"}]}"),
             &CancelToken::new(),
         )
         .await

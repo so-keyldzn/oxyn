@@ -28,7 +28,7 @@ use oxyn_driver::{Cursor, Session};
 use reqwest::Method;
 
 use crate::catalog::ElasticsearchCatalog;
-use crate::classify::{mutation_risk, statement_intent};
+use crate::classify::{self, mutation_risk, statement_intent};
 use crate::cursor::{Asked, EsCursor};
 use crate::decode::{Stream, decode};
 use crate::http::{Body, Call, Http, Reply};
@@ -240,7 +240,7 @@ impl Session for ElasticsearchSession {
             }
         };
         if intent.is_mutating()
-            && let Some(failure) = partial_failure(&reply)
+            && let Some(failure) = partial_failure(&reply, &parsed.path)
         {
             self.registry.remove(handle);
             return Err(OxynError::Query(failure));
@@ -330,8 +330,9 @@ impl Session for ElasticsearchSession {
 /// non-empty `failures`, or with `timed_out: true` when their `timeout` ran
 /// out midway. None is a success: the items before and around the failures
 /// were applied, and the message says how many failed and the first reason,
-/// in the server's terms.
-fn partial_failure(reply: &Reply) -> Option<String> {
+/// in the server's terms. The endpoint of `path` tells a by-query answer
+/// whose `batches` a `filter_path` removed.
+fn partial_failure(reply: &Reply, path: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Summary {
         errors: Option<bool>,
@@ -343,6 +344,10 @@ fn partial_failure(reply: &Reply) -> Option<String> {
         batches: Option<u64>,
         total: Option<u64>,
     }
+    let by_query = matches!(
+        classify::endpoint(path).as_deref(),
+        Some("_update_by_query" | "_delete_by_query" | "_reindex")
+    );
     let summary: Summary = serde_json::from_slice(&reply.bytes).ok()?;
     let reason = |error: &serde_json::Value| {
         let kind = error.get("type").and_then(serde_json::Value::as_str)?;
@@ -376,7 +381,7 @@ fn partial_failure(reply: &Reply) -> Option<String> {
             failures.len()
         ));
     }
-    (summary.timed_out == Some(true) && summary.batches.is_some()).then(|| {
+    (summary.timed_out == Some(true) && (by_query || summary.batches.is_some())).then(|| {
         let matched = summary
             .total
             .map_or_else(String::new, |total| format!(" of the {total} it matched"));

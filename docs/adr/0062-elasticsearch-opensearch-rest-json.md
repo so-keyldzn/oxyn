@@ -82,16 +82,31 @@ every line is a row. Any other object is one row; a running asynchronous
 query is its status row (`id`, `is_running`), never its partial table.
 
 A read whose answer says it is incomplete is refused, naming why, on its
-first page and on every later one: `timed_out: true` beside `_shards`,
+first page and on every later one: `timed_out: true` on a search, a count, a
+point-in-time or scroll page, or beside `_shards` on any other read,
 `_shards.failed` above zero (with the first failure's reason), `_clusters`
 counting partial or failed clusters, `is_partial: true` once the query no
-longer runs, and any `_msearch` response that is one of these or an error
-object. Both products answer `200` with what the remaining shards found —
+longer runs, and any `_msearch` response that is one of these, an error
+object, or a `status` of 400 or above. Both products answer `200` with what the remaining shards found —
 `allow_partial_search_results` and ES|QL's `allow_partial_results` default to
 `true` — and such an answer reads as the whole data: a count, an aggregation,
 the short last page of a point in time. `_shards.skipped` (shards the
 pre-filter proved empty) and `terminated_early` (asked by `terminate_after`)
 are not failures.
+
+Every API takes a `filter_path` that keeps only the keys it names
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#elasticsearch-and-opensearch--checked-on-2026-10-22)), so a
+flag is read on its own, by the endpoint the request called, never by waiting
+for a sibling key: `filter_path=hits,timed_out` leaves `timed_out` without
+`_shards`, an `_msearch` response stripped of its `_shards` is still checked
+and checks nothing of its neighbours, and a by-query answer without its
+`batches` is still a by-query answer. A `filter_path` that removes every flag
+— `timed_out`, `_shards`, `_clusters`, `is_partial`, an `_msearch` response's
+`error` and `status` — leaves nothing to establish completeness from, and the
+answer is shown: the request is the user's and is not rewritten, and
+`ExecStats` has no place for a warning. The limit is the user's own filter's:
+each flag a `filter_path` keeps is read, and only the ones it removes go
+unchecked.
 
 Every answer is read in chunks and capped at 16 MiB before decoding; batches
 are cut at 4 MiB, a null cell counted for its offset. The decoded table of one
