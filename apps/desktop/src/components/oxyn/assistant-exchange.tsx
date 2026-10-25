@@ -111,6 +111,7 @@ const EntryView = React.memo(function EntryView({
   renderToolRows,
   renderErd,
   identifierQuote,
+  consoleLanguage,
 }: {
   entry: Entry
   openSql: (sql: string) => void
@@ -119,6 +120,7 @@ const EntryView = React.memo(function EntryView({
   onCopy: (text: string) => Promise<boolean> | boolean
   renderToolRows?: AssistantViewProps["renderToolRows"]
   identifierQuote?: AssistantViewProps["identifierQuote"]
+  consoleLanguage?: AssistantViewProps["consoleLanguage"]
   renderErd?: AssistantViewProps["renderErd"]
 }) {
   switch (entry.kind) {
@@ -130,6 +132,7 @@ const EntryView = React.memo(function EntryView({
               text={entry.text}
               onOpenSql={openSql}
               openSqlDisabledReason={openSqlDisabledReason}
+              consoleLanguage={consoleLanguage}
               onCopy={onCopy}
               renderErd={renderErd}
               identifierQuote={identifierQuote}
@@ -242,6 +245,7 @@ interface ExchangeViewProps {
   tier: AssistantViewProps["tier"]
   signInStates: AssistantViewProps["state"]["signIn"]
   identifierQuote?: AssistantViewProps["identifierQuote"]
+  consoleLanguage?: AssistantViewProps["consoleLanguage"]
   renderToolRows?: AssistantViewProps["renderToolRows"]
   renderErd?: AssistantViewProps["renderErd"]
   actions: ExchangeActions
@@ -276,6 +280,7 @@ export const ExchangeView = React.memo(function ExchangeView({
   tier,
   signInStates,
   identifierQuote,
+  consoleLanguage,
   renderToolRows,
   renderErd,
   actions,
@@ -356,6 +361,7 @@ export const ExchangeView = React.memo(function ExchangeView({
             renderToolRows={renderToolRows}
             renderErd={renderErd}
             identifierQuote={identifierQuote}
+            consoleLanguage={consoleLanguage}
           />
         )
         // A right click on any part of the answer acts on the whole answer,

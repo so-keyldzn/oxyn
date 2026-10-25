@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="e9af5876f5ed" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="cb898081832b" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -606,8 +606,8 @@ Lots, dans l'ordre :
      l'aurait fait surgir dans le workspace ouvert ensuite ;
    - les extensions reconnues (`.sqlite`, `.sqlite3` pour `sqlite` ;
      `.duckdb` pour `duckdb`) sont une table de `file_drop.rs` : les drivers
-     ne déclarent pas les fichiers qu'ils lisent. Aucun driver DuckDB n'est
-     enregistré, un `.duckdb` est donc refusé avec sa raison. Bornes : 4 Mio
+     ne déclarent pas les fichiers qu'ils lisent. Une extension dont le driver
+     n'est pas enregistré est refusée avec sa raison. Bornes : 4 Mio
      par `.sql`, 16 fichiers par dépôt ; un lien symbolique est refusé ;
    - chaque fenêtre reçoit les dépôts faits sur elle, et eux seuls (lot 7) ;
    - pas de défilement automatique quand un onglet ou une colonne est glissé
@@ -2101,8 +2101,14 @@ fin avec ADR-0050 le 2026-09-30.
 depuis l'ancien §11 d'ARCHITECTURE, qui le plaçait avant l'IA : à ce stade,
 Oxyn est un bon client SQL sans une ligne d'IA.
 
-- `oxyn-driver-duckdb` — **à écrire**, par
-  [`/driver`](../claude/commands/driver.md) ;
+- `oxyn-driver-duckdb` — **existe, première étape**
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)) : fichiers et
+  `:memory:`, connexions en lecture seule tenues par le moteur, accès externe
+  coupé sauf dossier accordé, arbre du catalogue, aperçu Data, consoles aux
+  résultats en flux, Explain, contexte de session, transactions, valeurs liées,
+  et interruption par le moteur. Reste à venir : le catalogue des macros,
+  séquences et types, un rendu d'Explain propre à DuckDB, un sélecteur de
+  dossier pour le dossier accordé, `icu` et les autres extensions ;
 - `oxyn-driver-clickhouse` — **existe**, étape 1
   ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)) : interface
   HTTP, `RowBinaryWithNamesAndTypes` décodé en lots Arrow bornés en octets,
@@ -2290,9 +2296,39 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
 Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 « 3 bis » pour ne déplacer ni l'ancre ni les renvois de la phase 4.
 
-- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+- `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-elasticsearch` (ADR-0062) — connexion, classification de
+  politique et risque, catalogue par le mapping, résultats typés et en flux,
+  arrêt prouvé par le serveur et requête sous le curseur sont en place ; sa
+  suite sur serveur réel tourne en CI sur Elasticsearch 9.5.5 et avant une
+  livraison sur OpenSearch 3.9.0. Restent : complétion des endpoints et des
+  corps, opérations d'index natives par le parcours de revue, un comptage avant
+  une requête par requête, et des vues de cluster (`_cat`, ILM/ISM, snapshots,
+  tâches).
+- `oxyn-driver-mongodb` — **étape 1 écrite**
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)) :
+  connexion par champs avec TLS et SCRAM, une commande de base par requête de
+  console en Extended JSON, classée par la session (ADR-0064), un échantillon
+  déclaré avec une colonne `$document` sans perte, annulation par
+  `killSessions` prouvée dans `$currentOp`, arbre du catalogue, définitions
+  reconstruites, aperçu borné, Explain par le planificateur, l'agent MongoDB
+  (ADR-0065). **À écrire** : transactions en console sur replica set, filtre
+  d'aperçu en JSON (`PREVIEW_FILTER`), analyse de schéma et aperçu d'étape
+  d'agrégation, change streams en captures bornées, GridFS, vues des
+  utilisateurs et rôles, état du replica set, du sharding et du profileur,
+  import et export JSON/BSON — la matrice de parité de la pull request en
+  tient l'ordre.
+- `oxyn-driver-redis`, étape 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) :
+  Redis et Valkey en RESP3 lu par le driver lui-même ; commandes classées
+  d'après la table `COMMAND` du serveur ; réponses diffusées en Arrow, en lots
+  bornés en octets ; commandes bloquées et scripts qui n'ont pas écrit arrêtés
+  sur le serveur ; bases et échantillon borné de clés dans l'arbre ; un aperçu
+  en lecture seule par type de clé. Restent : Cluster et Sentinel,
+  `MULTI`/`EXEC`, Pub/Sub et `MONITOR` en captures bornées, certificats
+  clients, types de modules, le vocabulaire des commandes dans l'éditeur, et
+  le fichier d'agent Redis.
 
 **Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
 ([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à

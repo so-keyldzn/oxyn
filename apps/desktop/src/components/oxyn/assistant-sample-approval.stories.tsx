@@ -22,6 +22,7 @@ function field(
     default: null,
     comment: null,
     primaryKey: false,
+    inferred: false,
     ...rest,
   }
 }

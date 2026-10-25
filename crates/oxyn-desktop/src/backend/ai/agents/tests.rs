@@ -79,11 +79,11 @@ fn on_a_redis_connection_the_picker_lists_only_the_agents_that_write_redis() {
     let names: Vec<&str> = listed.iter().map(|option| option.name.as_str()).collect();
     assert_eq!(
         names,
-        ["Keys"],
-        "no SQL agent, no agent of another language"
+        ["Redis", "Keys"],
+        "the shipped Redis agent, then the user's; no SQL agent, no agent of another language"
     );
 
-    // And the other way round: the Redis agent never reaches a SQL picker.
+    // And the other way round: a Redis agent never reaches a SQL picker.
     let sqlite = connection(DriverId::SQLITE);
     let listed = options(
         &catalog,
@@ -92,7 +92,11 @@ fn on_a_redis_connection_the_picker_lists_only_the_agents_that_write_redis() {
         &[ANTHROPIC],
         &destinations,
     );
-    assert!(listed.iter().all(|option| option.name != "Keys"));
+    assert!(
+        listed
+            .iter()
+            .all(|option| option.name != "Keys" && option.name != "Redis")
+    );
 }
 
 #[test]
@@ -107,10 +111,11 @@ fn a_question_naming_no_agent_runs_the_one_of_its_language_or_is_refused() {
     ));
     let redis = connection("redis");
     let on_redis = target_of(&redis, QueryLanguage::RedisCommand, ANTHROPIC);
+    // The shipped agent comes before the user's (ADR-0065 § 6).
     let spec = backend
         .requested_agent(None, &on_redis)
         .expect("the Redis agent is the default on a Redis session");
-    assert_eq!(spec.name, "Keys");
+    assert_eq!(spec.name, "Redis");
 
     let sqlite = connection(DriverId::SQLITE);
     let spec = backend
@@ -118,15 +123,24 @@ fn a_question_naming_no_agent_runs_the_one_of_its_language_or_is_refused() {
         .expect("the SQL agent on a SQL session");
     assert_eq!(spec.id, sql_agent_id());
 
-    let mongo = target_of(&redis, QueryLanguage::MongoQuery, ANTHROPIC);
+    let cypher = target_of(&redis, QueryLanguage::Cypher, ANTHROPIC);
     let refused = backend
-        .requested_agent(None, &mongo)
-        .expect_err("no agent writes MongoDB queries");
+        .requested_agent(None, &cypher)
+        .expect_err("no agent writes Cypher");
     assert!(
-        refused.message.contains("No agent writes mongo"),
+        refused.message.contains("No agent writes cypher"),
         "{}",
         refused.message
     );
+    // MongoDB has the agent its driver ships.
+    let mongodb = connection(DriverId::MONGODB);
+    let spec = backend
+        .requested_agent(
+            None,
+            &target_of(&mongodb, QueryLanguage::MongoQuery, ANTHROPIC),
+        )
+        .expect("the shipped MongoDB agent is the default on a MongoDB session");
+    assert_eq!(spec.languages, [QueryLanguage::MongoQuery]);
     // A SQL agent asked for by id is found; the question then refuses it on
     // the language, naming it.
     let sql = backend

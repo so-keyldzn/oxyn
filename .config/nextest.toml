@@ -47,6 +47,21 @@ filter = 'package(oxyn-driver-clickhouse)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# The MongoDB integration tests each work in a database of their own, but two
+# of them prove cancellation in the server's `$currentOp` and one streams a
+# gigabyte: they run one at a time, with the timeout of the other drivers.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-mongodb)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+# The Redis integration tests flush and fill database 9 of one server, and
+# two of them prove a server-side stop and a streamed hash of a million fields.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-redis)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # Production reads exercised through the bus create a schema and a role of the
 # same name on the same test server.
 [[profile.default.overrides]]
@@ -58,3 +73,18 @@ test-group = 'serveur-partage'
 [[profile.default.overrides]]
 filter = 'package(oxyn-desktop) & test(/server_cancel::/)'
 test-group = 'serveur-partage'
+
+# The Elasticsearch integration tests read the cluster's task list to prove a
+# stop, and stream a volume under a memory bound: one at a time, with the time
+# a slow search and a 300 MB stream take.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-elasticsearch)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+# The DuckDB driver's tests stop an aggregate in the engine and stream three
+# gigabytes under a memory bound (ADR-0059): slow by construction on a shared
+# CI runner, and they need no server.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-duckdb)'
+slow-timeout = { period = "300s", terminate-after = 1 }

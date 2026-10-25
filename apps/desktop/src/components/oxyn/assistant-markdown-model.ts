@@ -1,3 +1,5 @@
+import { fenceOpensIn } from "@/features/consoles/languages/fences"
+import type { QueryLanguageName } from "@/lib/query-language"
 import { readIdentifierChain } from "@/lib/sql-identifiers"
 import type { IdentifierQuote } from "@/lib/sql-identifiers"
 
@@ -56,15 +58,18 @@ const ORDERED = /^ {0,3}(\d{1,9})[.)]\s+(.*)$/
 const QUOTE = /^ {0,3}>\s?(.*)$/
 const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/
 
-/** Is this block SQL a user may open in a console? */
-export function isSqlBlock(
-  block: Block
+/**
+ * Is this block text a user may open in a console of `language` — SQL, or
+ * the session's other console language? `null`: the session declares none,
+ * and nothing opens.
+ */
+export function isConsoleBlock(
+  block: Block,
+  language: QueryLanguageName | null
 ): block is Extract<Block, { type: "code" }> {
   if (block.type !== "code" || !block.closed || block.text.trim() === "")
     return false
-  // An unlabelled fence counts: this agent answers with queries.
-  const language = block.language.toLowerCase()
-  return language === "" || language === "sql"
+  return fenceOpensIn(block.language, language)
 }
 
 export type CodeBlock = Extract<Block, { type: "code" }>

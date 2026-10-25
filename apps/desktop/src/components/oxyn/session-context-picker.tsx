@@ -19,8 +19,9 @@ export type SessionContextState =
       current: SessionPlace | null
     }
 
+/** A schema, or a database of a store whose databases hold no schema. */
 function label(place: SessionPlace | null) {
-  return place?.namespace ?? SERVER_DEFAULT
+  return place?.namespace ?? place?.catalog ?? SERVER_DEFAULT
 }
 
 function key(place: SessionPlace | null) {
@@ -52,6 +53,7 @@ export function SessionContextPicker({
   onChoose,
   onCancel,
   onLoadSchemas,
+  level = "schema",
 }: {
   connectionName: string
   /** From the catalog cache; the first is the server default. */
@@ -60,6 +62,11 @@ export function SessionContextPicker({
   onChoose: (place: SessionPlace) => void
   onCancel: () => void
   onLoadSchemas: () => void
+  /**
+   * What the source calls the place: a document store's namespaces are its
+   * databases (`DOCUMENT`), a relational one's are schemas.
+   */
+  level?: "schema" | "database"
 }) {
   const current = confirmed(state)
   // The place the session reports is offered even if the cache lacks it.
@@ -68,7 +75,9 @@ export function SessionContextPicker({
     : [...choices, ...(current ? [current] : [])]
   const place = `${connectionName} / ${label(current)}`
   const noSchema =
-    choices.filter((choice) => choice.namespace !== null).length === 0
+    choices.filter(
+      (choice) => choice.namespace !== null || choice.catalog !== null
+    ).length === 0
 
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -84,7 +93,7 @@ export function SessionContextPicker({
         </span>
         <NativeSelect
           size="sm"
-          aria-label="Session schema"
+          aria-label={`Session ${level}`}
           value={key(current)}
           disabled={state.status === "changing"}
           onChange={(event) => {
@@ -110,9 +119,9 @@ export function SessionContextPicker({
       </div>
       <p className="text-xs text-muted-foreground" role="status">
         {state.status === "serverDefault" && noSchema
-          ? "The catalog lists no schema for this connection yet. Load it to choose one; until then the server default applies."
+          ? `The catalog lists no ${level} for this connection yet. Load it to choose one; until then the server default applies.`
           : state.status === "serverDefault"
-            ? "This session resolves unqualified names where the server placed it when it opened. Oxyn has not asked it to move, and does not claim to know the schema."
+            ? `This session resolves unqualified names where the server placed it when it opened. Oxyn has not asked it to move, and does not claim to know the ${level}.`
             : state.status === "changing"
               ? `Switching to ${state.target}… Until the server answers, this session still resolves in ${place}. Cancel stops the change at the server.`
               : null}
@@ -129,7 +138,7 @@ export function SessionContextPicker({
       {state.status === "serverDefault" && noSchema ? (
         <div>
           <Button size="xs" variant="outline" onClick={onLoadSchemas}>
-            Load schemas
+            Load {level === "database" ? "databases" : "schemas"}
           </Button>
         </div>
       ) : null}

@@ -2,7 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { invoicesDetail } from "./fixtures"
-import { HOSTILE, unusualDetail, wideDetail } from "./metadata-fixtures"
+import {
+  HOSTILE,
+  collectionDetail,
+  unusualDetail,
+  wideDetail,
+} from "./metadata-fixtures"
 import { RelationStructure } from "./relation-structure"
 
 const meta = {
@@ -138,6 +143,45 @@ export const TwelveHundredColumns: Story = {
       "aria-rowcount",
       "1201"
     )
+  },
+}
+
+/**
+ * A collection's fields come from a sample: each one says so, as text, with
+ * the reason read on hover, on focus and by a screen reader.
+ */
+export const InferredFields: Story = {
+  args: { detail: collectionDetail },
+  play: async ({ canvas }) => {
+    const badges = canvas.getAllByText("inferred")
+    await expect(badges).toHaveLength(collectionDetail.fields.length)
+    await expect(badges[0]).toHaveAccessibleDescription(
+      "Inferred from a sample of documents, not declared by the server"
+    )
+    // Reachable by the keyboard, not only by the pointer.
+    await expect(badges[0]).toHaveAttribute("tabindex", "0")
+    const badge = badges[0]
+    if (!badge) return
+    await userEvent.hover(badge)
+    const page = within(document.body)
+    const tooltip = await page.findByText(
+      "Inferred from a sample of documents, not declared by the server",
+      { selector: "[data-slot=tooltip-content]" },
+      { timeout: 3000 }
+    )
+    // Past its fade-in.
+    await waitFor(() => expect(tooltip).toBeVisible())
+    await userEvent.unhover(badge)
+    await waitFor(() =>
+      expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull()
+    )
+  },
+}
+
+/** A declared column carries no inference mark. */
+export const DeclaredColumnsAreNotMarked: Story = {
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByText("inferred")).toBeNull()
   },
 }
 

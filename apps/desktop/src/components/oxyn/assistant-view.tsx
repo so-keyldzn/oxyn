@@ -76,6 +76,7 @@ import type {
   ReasoningEffort,
 } from "@/lib/ipc/ai"
 import type { CatalogAddress, Environment, PrivacyTier } from "@/lib/ipc/types"
+import type { QueryLanguageName } from "@/lib/query-language"
 
 /** Under the field: the whole reason is in the panel above it, once. */
 const UNAVAILABLE_SHORT = "Not available on this connection."
@@ -105,6 +106,12 @@ export interface AssistantViewProps {
   agentPicker?: AssistantAgentPickerProps
   connectionName: string
   identifierQuote?: IdentifierQuote
+  /**
+   * The language of this connection's consoles, read from its session's
+   * capabilities: a code block opens in a console only in this language. SQL
+   * when not given; `null` when the session declares none.
+   */
+  consoleLanguage?: QueryLanguageName | null
   environment: Environment
   tier: PrivacyTier
   entry: AssistantEntry
@@ -480,6 +487,7 @@ export function AssistantView(props: AssistantViewProps) {
                       tier={tier}
                       signInStates={state.signIn}
                       identifierQuote={props.identifierQuote}
+                      consoleLanguage={props.consoleLanguage}
                       renderToolRows={props.renderToolRows}
                       renderErd={props.renderErd}
                       actions={actions}

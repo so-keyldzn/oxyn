@@ -178,8 +178,15 @@ oxyn/
 │   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
 │   ├── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
 │   │                             #   oxyn-query to split what MySQL cannot prepare
-│   └── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
-│                                 #   no server session (ADR-0060)
+│   ├── oxyn-driver-duckdb/       # embedded analytical engine, bundled (ADR-0059);
+│   │                             #   depends on oxyn-query to split a batch
+│   ├── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
+│   │                             #   no server session (ADR-0060)
+│   ├── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061);
+│   │                             #   depends on oxyn-query for the redis-cli grammar its redaction shares
+│   ├── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
+│   │                             #   (ADR-0063); depends on oxyn-query to read a command
+│   └── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
@@ -567,7 +574,9 @@ of phases 0 to 3 needs it. See [ADR-0007](adr/0007-driver-sidecar.md).
 * **Export** — CSV, JSON, Arrow IPC provided by the ecosystem.
 * **Local analytics** — DataFusion will plug directly into it: filter, sort and
   aggregate *client-side*, without rerunning the query.
-* **DuckDB / ClickHouse** — already speak Arrow, zero-copy path. ClickHouse's
+* **DuckDB / ClickHouse** — already speak Arrow. DuckDB's binding speaks
+  another Arrow major than the workspace: its driver copies each chunk once
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)). ClickHouse's
   Arrow output loses a `DateTime`'s zone, an `Enum`'s label and the wide
   integers, so its driver decodes `RowBinary` instead ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)).
 * **Process boundary** — Arrow IPC, see §4.4.
@@ -623,7 +632,7 @@ Server → Catalog/Database → Namespace/Schema → Relation → Field
 | PostgreSQL | database | schema | table / view / matview |
 | MySQL | — | database | table / view |
 | MongoDB | — | database | collection |
-| Redis | db index (0-15) | logical prefix | key pattern |
+| Redis | database, `db0` to `dbN` | — | key — a bounded `SCAN` sample ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) |
 | Elasticsearch | — | — | index / data stream |
 | Neo4j | database | — | node label / relationship type |
 | BigQuery | project | dataset | table |

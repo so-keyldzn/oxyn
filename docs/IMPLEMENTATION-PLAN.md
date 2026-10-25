@@ -601,8 +601,8 @@ Batches, in order:
      would have made it pop up in the workspace opened afterwards;
    - the recognized extensions (`.sqlite`, `.sqlite3` for `sqlite`;
      `.duckdb` for `duckdb`) are a table in `file_drop.rs`: drivers
-     do not declare the files they read. No DuckDB driver is
-     registered, so a `.duckdb` is refused with its reason. Bounds: 4 MiB
+     do not declare the files they read. An extension whose driver is not
+     registered is refused with its reason. Bounds: 4 MiB
      per `.sql`, 16 files per drop; a symbolic link is refused;
    - each window receives the drops made on it, and only those (batch 7);
    - no automatic scrolling when a tab or a column is dragged
@@ -2096,8 +2096,14 @@ with ADR-0050 on 2026-09-30.
 from the former §11 of ARCHITECTURE, which put it before AI: at this stage,
 Oxyn is a good SQL client without a single line of AI.
 
-- `oxyn-driver-duckdb` — **to be written**, through
-  [`/driver`](../.claude/commands/driver.md);
+- `oxyn-driver-duckdb` — **exists, first stage**
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)): files and
+  `:memory:`, read-only connections held by the engine, external access off
+  unless a folder is granted, the catalog tree, the Data preview, consoles with
+  streamed results, Explain, session context, transactions, bound values, and
+  the engine's interruption. Still to come: the catalog of macros, sequences
+  and types, a DuckDB-aware Explain rendering, a folder picker for the granted
+  folder, `icu` and the other extensions;
 - `oxyn-driver-clickhouse` — **exists**, stage 1
   ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)): HTTP
   interface, `RowBinaryWithNamesAndTypes` decoded to Arrow batches bounded
@@ -2270,9 +2276,37 @@ proposed).** In this order, each with its exit gate:
 Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbered
 "3 bis" so as to move neither the anchor nor the references of phase 4.
 
-- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+- `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-elasticsearch` (ADR-0062) — connection, policy classification
+  and risk, mapping catalog, typed and streamed results, server-proven stop and
+  the request under the cursor are in place; its real-server suite runs in CI
+  on Elasticsearch 9.5.5 and before a release on OpenSearch 3.9.0. Remaining:
+  endpoint and body completion, native index operations through the review
+  flow, a count before a by-query request, and cluster views (`_cat`, ILM/ISM,
+  snapshots, tasks).
+- `oxyn-driver-mongodb` — **stage 1 written**
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)):
+  connection by fields with TLS and SCRAM, one database command per console
+  request in Extended JSON, classified through the session (ADR-0064), a
+  declared sample with a lossless `$document` column, `killSessions`
+  cancellation proven in `$currentOp`, catalog tree, reconstructed
+  definitions, a bounded preview, Explain by the query planner, the MongoDB
+  agent (ADR-0065). **To be written**: console transactions on replica sets,
+  a JSON preview filter (`PREVIEW_FILTER`), schema analysis and the
+  aggregation stage preview, change streams as bounded captures, GridFS,
+  users and roles views, replica set, sharding and profiler status, import
+  and export of JSON/BSON — the parity matrix of the pull request keeps the
+  order.
+- `oxyn-driver-redis`, stage 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)):
+  Redis and Valkey over RESP3 read by the driver itself; commands classified
+  from the server's `COMMAND` table; replies streamed as Arrow in byte-bounded
+  batches; blocked commands and scripts that have not written stopped on the
+  server; databases and a bounded key sample in the tree; a read-only preview
+  per key type. To come: Cluster and Sentinel, `MULTI`/`EXEC`, Pub/Sub and
+  `MONITOR` as bounded captures, client certificates, module types, the
+  command vocabulary in the editor, and the Redis agent file.
 
 **Why here, before plugins.** This is where the capability model
 ([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to

@@ -1,4 +1,5 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="f6b31a0f82c5" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="fb5bc2f9b7d6" -->
+
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -332,6 +333,13 @@ Elle associe explorateur latéral, contexte de connexion, onglets d'objets et de
 consoles, sous-onglets de l'objet, zone de travail et barre d'état. Un inspecteur
 latéral peut compléter cette zone. Un en-tête de page de 88 px ne se rajoute pas
 à cette structure.
+
+Un objet ne montre que les sous-onglets que sa session sait remplir : `Indexes`
+exige `INDEXES`, `Constraints` exige `CONSTRAINTS`, `Relations` exige
+`FOREIGN_KEYS` ou `INCOMING_FOREIGN_KEYS`. Une session clé-valeur ou document montre donc `Data`,
+`Structure` et `DDL`, et non trois onglets qui disent chacun « non pris en
+charge ». La sorte affichée à côté du nom de l'objet s'écrit pour être lue
+(`key pattern`, pas `key_pattern`).
 
 La sidebar reste **inset avec repli en rail d'icônes** sur tous les écrans,
 comme dans la page Figma `01 · Sidebar`. Ouverte à 280 px ou repliée à 64 px,

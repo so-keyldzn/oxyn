@@ -42,6 +42,16 @@ describe("object operations offered from the catalog", () => {
       })
   })
 
+  it("greys a composed SQL statement on a session that speaks another language", () => {
+    // A MongoDB view declares DDL, and its session refuses SQL.
+    const mongodb = ["MONGO_QUERY", "DDL", "VIEWS"]
+    expect(operationOffer("drop", node("v", "view"), mongodb)).toEqual({
+      state: "greyed",
+      reason:
+        "This connection does not speak SQL: run the operation from a console in its language.",
+    })
+  })
+
   it("offers each operation only on the kinds it applies to", () => {
     expect(operationOffer("drop", node("v", "view"), POSTGRES).state).toBe(
       "offered"
@@ -63,6 +73,20 @@ describe("object operations offered from the catalog", () => {
       address: { catalog: null, namespace: "public", relation: null },
     }
     expect(operationOffer("drop", schema, POSTGRES).state).toBe("absent")
+  })
+
+  it("offers no SQL statement to a search session", () => {
+    // An Elasticsearch alias is a view of the catalog: `DROP VIEW` would be
+    // composed for a cluster that cannot read it.
+    const ELASTICSEARCH = ["SEARCH_DSL", "DDL", "DML"]
+    for (const kind of ["table", "view"])
+      expect(operationOffer("drop", node("logs", kind), ELASTICSEARCH)).toEqual(
+        {
+          state: "greyed",
+          reason:
+            "This connection does not speak SQL: run the operation from a console in its language.",
+        }
+      )
   })
 
   it("greys a name holding control characters, in any segment", () => {

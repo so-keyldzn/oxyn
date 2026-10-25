@@ -663,6 +663,58 @@ mod tests {
         assert_eq!(journal.statement.as_deref(), Some(sql));
     }
 
+    /// The same for a Redis credential command: the history knows its
+    /// language, the journal entry written back does not and applies every
+    /// grammar.
+    #[test]
+    fn direct_records_cannot_persist_redis_credentials() {
+        let store = Store::open_in_memory().expect("in-memory store");
+        for text in [
+            "CONFIG SET requirepass witness-secret",
+            "\"A\\x55TH\" app witness-secret",
+            "ACL SETUSER app on \"\\x3ewitness-secret\"",
+        ] {
+            let command = Command::Execute {
+                connection: ConnectionId::new(),
+                session: SessionId::new(),
+                request: Box::new(ExecRequest::new(QueryLanguage::RedisCommand, text)),
+            };
+            let history = HistoryRecord::new(&Actor::Human, QueryLanguage::RedisCommand, text);
+            let built =
+                crate::JournalRecord::new(&Actor::Human, &command, &oxyn_core::Decision::Allow);
+            assert!(
+                built
+                    .statement
+                    .as_deref()
+                    .is_some_and(|statement| !statement.contains("witness-secret")),
+                "{text}"
+            );
+            let mut direct = built.clone();
+            direct.statement = Some(text.into());
+            store.history().record(&history).expect("history insert");
+            store.journal().append(&built).expect("journal append");
+            store.journal().append(&direct).expect("journal append");
+        }
+        store
+            .with_connection(|conn| {
+                for table in ["query_history", "audit_journal"] {
+                    let mut select = conn.prepare(&format!("SELECT statement FROM {table}"))?;
+                    let statements = select
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    assert!(!statements.is_empty(), "{table}");
+                    for statement in statements {
+                        assert!(
+                            !statement.contains("witness-secret"),
+                            "{table}: {statement}"
+                        );
+                    }
+                }
+                Ok(())
+            })
+            .expect("raw SQL reads");
+    }
+
     fn read_record(text: &str) -> HistoryRecord {
         HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, text)
             .with_intent(StatementIntent::Read)
@@ -1014,6 +1066,97 @@ mod tests {
             read_back[0].record.connection_name.as_deref(),
             Some("base disparue")
         );
+    }
+
+    /// A MongoDB command's credentials are redacted on the decoded command
+    /// in every record: the history row and the journal entry built from the
+    /// command, which know its language, and a journal entry written back,
+    /// which does not. What the driver receives is left whole.
+    #[test]
+    fn mongo_records_cannot_persist_a_credential() {
+        // The scheme apart, so that no line here reads as a connection string.
+        let scheme = "mongodb";
+        records_cannot_persist_a_credential(
+            QueryLanguage::MongoQuery,
+            &[
+                r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#.to_owned(),
+                r#"{"updateUser": "app", "pwd": "witness-secret"}"#.to_owned(),
+                r#"{"createUser":"app","pwd":"witness-secret"}"#.to_owned(),
+                r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#.to_owned(),
+                format!(r#"{{"addShard": "{scheme}://admin:witness-secret@h1/"}}"#),
+            ],
+        );
+    }
+
+    /// The same for a search DSL request: the decoded body decides, and a
+    /// pasted shell line keeps no header nor user password.
+    #[test]
+    fn search_dsl_records_cannot_persist_a_credential() {
+        let scheme = "https";
+        records_cannot_persist_a_credential(
+            QueryLanguage::SearchDsl,
+            &[
+                "PUT /_security/user/app\n{\"password\": \"witness-secret\"}".to_owned(),
+                "POST /_reindex\n{\"source\": {\"remote\": {\"headers\": \
+                 {\"Authorization\": \"ApiKey witness-secret\"}}}}"
+                    .to_owned(),
+                "POST /_nodes/reload_secure_settings\n\
+                 {\"secure_settings_password\": \"witness-secret\"}"
+                    .to_owned(),
+                format!("curl -u elastic:witness-secret {scheme}://h:9200/_search"),
+                format!("GET {scheme}://elastic:witness-secret@h:9200/_search"),
+            ],
+        );
+    }
+
+    /// Every record of `texts` in `language` — the history row and the
+    /// journal entry built from the command, which know its language, and a
+    /// journal entry written back, which does not — keeps no credential; what
+    /// the driver receives is left whole.
+    fn records_cannot_persist_a_credential(language: QueryLanguage, texts: &[String]) {
+        let store = Store::open_in_memory().expect("in-memory store");
+        for text in texts {
+            let text = text.as_str();
+            let request = ExecRequest::new(language, text);
+            let command = Command::Execute {
+                connection: ConnectionId::new(),
+                session: SessionId::new(),
+                request: Box::new(request),
+            };
+            let history =
+                HistoryRecord::from_command(&Actor::Human, &command).expect("an execution");
+            let journal =
+                crate::JournalRecord::new(&Actor::Human, &command, &oxyn_core::Decision::Allow);
+            store.history().record(&history).expect("history insert");
+            store
+                .history()
+                .record(&HistoryRecord::new(&Actor::Human, language, text))
+                .expect("history insert");
+            let mut direct = journal.clone();
+            direct.statement = Some(text.into());
+            store.journal().append(&journal).expect("journal append");
+            store.journal().append(&direct).expect("journal append");
+            assert_eq!(command.statement_text(), Some(text));
+        }
+        store
+            .with_connection(|conn| {
+                for table in ["query_history", "audit_journal"] {
+                    let mut select = conn.prepare(&format!("SELECT statement FROM {table}"))?;
+                    let statements = select
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    assert!(!statements.is_empty(), "{table}");
+                    for statement in statements {
+                        assert!(
+                            !statement.contains("witness-secret"),
+                            "{table}: {statement}"
+                        );
+                        assert!(statement.contains("<redacted>"), "{table}: {statement}");
+                    }
+                }
+                Ok(())
+            })
+            .expect("raw SQL reads");
     }
 }
 

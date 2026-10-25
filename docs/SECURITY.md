@@ -47,7 +47,35 @@ dynamic SQL, editor drafts, or free-form conversation text. Rows already present
 `audit_journal` are not rewritten because the journal remains strictly
 append-only. A user who ran such SQL before this protection must rotate the
 credential and protect or replace affected workspace files
-([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)). Redis
+commands get the same treatment with `<redacted>`: the password of `AUTH` and
+`HELLO … AUTH`, the password rules of `ACL SETUSER`, the credential values of
+`CONFIG SET` and `MIGRATE`'s `AUTH`/`AUTH2`, recognized on the arguments as
+the server decodes them, escapes included. A record that does not carry its
+language — a tool call, an audit entry written back, a saved query mentioned
+to an agent — is redacted by every grammar
+([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
+
+A MongoDB command carries its credentials in three places: the `pwd` of
+`createUser` and `updateUser`, the `payload` of `saslStart` and
+`saslContinue`, and a connection string with its password inside a string.
+Each is replaced with `<redacted>`, every other byte kept, recognized on the
+command as the server decodes it — escaped keys and command names, and a
+command quoted inside a string, included. The records that know their
+language — the query history, the audit entry built from the command — read
+it as MongoDB; those that do not read it with every grammar, MongoDB included
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+
+An Elasticsearch or OpenSearch request is read by the same JSON reading, on
+its decoded body, with the keys those servers take a credential under:
+`password`, `password_hash`, `current_password`, `access_token`,
+`refresh_token`, `kerberos_ticket`, `service_account_token`, `client_secret`,
+`secret_key`, `secure_settings_password`, `api_key` when it is a string, an
+`Authorization` header in any case, and `hash` when it holds a bcrypt hash.
+A request pasted from a shell loses its `Authorization:` header credentials,
+curl's `-u user:password` password and a URL's password. The query history
+reads it as the search DSL, every other record with every grammar
+([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
 
 **Concrete failure:** a workspace file containing a production password,
 committed by the user to their team's repository, because the

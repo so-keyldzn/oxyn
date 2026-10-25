@@ -74,6 +74,9 @@ export function useGridMenu({
     connection,
   }).status
   const tier = open?.privacyTier ?? null
+  // A connection not open here is not known to speak another language: its
+  // rows keep the SQL forms, and the backend names their dialect.
+  const sql = open === null || open.capabilities.includes("SQL")
   return React.useMemo(() => {
     if (result === null) return undefined
     // The rows are read after the click, the clipboard written in it
@@ -98,6 +101,7 @@ export function useGridMenu({
     return {
       origin,
       relation: address !== null,
+      sql,
       ai: gridAiLevel(assistant, tier),
       copyText: (text, what) => void copyToClipboard(text, what),
       copyRows,
@@ -113,6 +117,7 @@ export function useGridMenu({
     origin,
     assistant,
     tier,
+    sql,
     filterable,
     sortable,
     sort,

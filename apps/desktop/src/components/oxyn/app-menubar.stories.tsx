@@ -53,7 +53,13 @@ function withConsole(running: boolean): ActionSources {
       actions: workspace,
     },
     console: {
-      state: { canRun: true, running, cancelling: false, writing: false },
+      state: {
+        canRun: true,
+        canExplain: true,
+        running,
+        cancelling: false,
+        writing: false,
+      },
       actions: consoleActions,
     },
     settings: { state: {}, actions: { open: nothing } },

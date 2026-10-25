@@ -71,6 +71,31 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
+        QueryLanguage::SearchDsl => Ok(crate::search_dsl::current_request(text, cursor_byte)),
+        QueryLanguage::RedisCommand => crate::redis::current_command(text, cursor_byte),
+        QueryLanguage::MongoQuery => Ok(crate::mongo::command_at(text, cursor_byte)),
+        language => Err(QueryError::UnsupportedLanguage { language }),
+    }
+}
+
+/// The request that asks for the plan of `text`, in a language that is not
+/// SQL, without running it.
+///
+/// SQL has its own path (the dialect's `EXPLAIN`). A language whose plan a
+/// module of this crate can ask for gets **one** arm, pointing at that module;
+/// every other language keeps the refusal.
+///
+/// # Errors
+/// The language module's reading error, or
+/// [`QueryError::UnsupportedLanguage`] for a language without an arm.
+pub fn explain_request(text: &str, language: QueryLanguage) -> Result<String, QueryError> {
+    match language {
+        QueryLanguage::MongoQuery => {
+            crate::mongo::explain(text).map_err(|error| QueryError::Request {
+                language,
+                message: error.to_string(),
+            })
+        }
         language => Err(QueryError::UnsupportedLanguage { language }),
     }
 }
@@ -150,12 +175,56 @@ mod tests {
     }
 
     #[test]
+    fn a_search_dsl_console_runs_the_request_under_the_cursor() {
+        let text = "GET /_cluster/health\n\nPOST /logs/_search\n{\"query\":{\"match_all\":{}}}";
+        assert_eq!(
+            current_request(text, QueryLanguage::SearchDsl, text.len() - 3),
+            Ok(Some("POST /logs/_search\n{\"query\":{\"match_all\":{}}}"))
+        );
+    }
+
+    #[test]
+    fn a_redis_request_is_the_command_under_the_cursor() {
+        assert_eq!(
+            current_request("GET a\nDEL b", QueryLanguage::RedisCommand, 7),
+            Ok(Some("DEL b"))
+        );
+    }
+
+    #[test]
+    fn a_mongodb_request_is_the_command_under_the_cursor() {
+        let text = "{\"find\": \"users\"}\n{\"drop\": \"users\"}";
+        assert_eq!(
+            current_request(text, QueryLanguage::MongoQuery, 2),
+            Ok(Some("{\"find\": \"users\"}"))
+        );
+    }
+
+    #[test]
+    fn a_mongodb_command_is_explained_by_the_planner_only() {
+        let explained = explain_request(r#"{"find": "users"}"#, QueryLanguage::MongoQuery)
+            .expect("explainable");
+        assert!(explained.starts_with(r#"{"explain": {"find": "users"}"#));
+        assert!(explained.contains(r#""verbosity": "queryPlanner""#));
+        assert!(matches!(
+            explain_request("db.users.find()", QueryLanguage::MongoQuery),
+            Err(QueryError::Request { .. })
+        ));
+        assert_eq!(
+            explain_request("GET a", QueryLanguage::RedisCommand),
+            Err(QueryError::UnsupportedLanguage {
+                language: QueryLanguage::RedisCommand
+            })
+        );
+    }
+
+    #[test]
     fn a_language_without_known_boundaries_is_refused_by_name() {
-        let refused = current_request("GET a\nDEL b", QueryLanguage::RedisCommand, 1);
+        let refused = current_request("MATCH (n) RETURN n", QueryLanguage::Cypher, 1);
         assert_eq!(
             refused,
             Err(QueryError::UnsupportedLanguage {
-                language: QueryLanguage::RedisCommand
+                language: QueryLanguage::Cypher
             })
         );
     }

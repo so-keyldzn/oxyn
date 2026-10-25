@@ -215,8 +215,16 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// Elasticsearch driver (and OpenSearch).
+    pub const ELASTICSEARCH: &'static str = "elasticsearch";
+    /// DuckDB driver, in-process.
+    pub const DUCKDB: &'static str = "duckdb";
     /// ClickHouse driver, over its HTTP interface.
     pub const CLICKHOUSE: &'static str = "clickhouse";
+    /// Redis driver (and Valkey: one protocol, RESP).
+    pub const REDIS: &'static str = "redis";
+    /// MongoDB driver (ADR-0063).
+    pub const MONGODB: &'static str = "mongodb";
 
     /// Builds a driver identifier after validation.
     ///
@@ -275,10 +283,34 @@ impl DriverId {
         Self::known(Self::SQLITE)
     }
 
+    /// Elasticsearch driver identifier (and OpenSearch).
+    #[must_use]
+    pub fn elasticsearch() -> Self {
+        Self::known(Self::ELASTICSEARCH)
+    }
+
+    /// DuckDB driver identifier.
+    #[must_use]
+    pub fn duckdb() -> Self {
+        Self::known(Self::DUCKDB)
+    }
+
     /// ClickHouse driver identifier.
     #[must_use]
     pub fn clickhouse() -> Self {
         Self::known(Self::CLICKHOUSE)
+    }
+
+    /// Redis driver identifier.
+    #[must_use]
+    pub fn redis() -> Self {
+        Self::known(Self::REDIS)
+    }
+
+    /// MongoDB driver identifier.
+    #[must_use]
+    pub fn mongodb() -> Self {
+        Self::known(Self::MONGODB)
     }
 
     /// Borrowed view of the identifier.
@@ -409,8 +441,16 @@ mod tests {
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
         assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
         assert_eq!(
+            DriverId::elasticsearch(),
+            DriverId::new("elasticsearch").expect("valid")
+        );
+        assert_eq!(
             DriverId::clickhouse(),
             DriverId::new("clickhouse").expect("valid")
+        );
+        assert_eq!(
+            DriverId::mongodb(),
+            DriverId::new("mongodb").expect("valid")
         );
     }
 

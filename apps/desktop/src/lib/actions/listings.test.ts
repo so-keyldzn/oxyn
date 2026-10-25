@@ -56,7 +56,13 @@ const SOURCES: ActionSources = {
     actions: workspace,
   },
   console: {
-    state: { canRun: true, running: true, cancelling: false, writing: false },
+    state: {
+      canRun: true,
+      canExplain: true,
+      running: true,
+      cancelling: false,
+      writing: false,
+    },
     actions: consoleActions,
   },
   catalog: {

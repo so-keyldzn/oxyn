@@ -33,6 +33,7 @@ import { ResultPanel } from "@/components/oxyn/result-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import {
+  absentObjectTabs,
   previewUnavailable,
   unsupportedReason,
 } from "@/features/metadata/capabilities"
@@ -140,11 +141,15 @@ export function ObjectView({
   // `Rename…` of a column, from the Structure tab's menu (ADR-0042).
   const columnOperation = useObjectOperation(open, () => undefined)
   const restoredAt = restored ? tabOf(restored) : null
-  const [chosenTab, setTab] = React.useState<ObjectTab>(() =>
-    restoredAt && !(restoredAt.tab === "data" && !previewable)
-      ? restoredAt.tab
-      : initialObjectTab(initialTab, previewable)
-  )
+  const absentTabs = absentObjectTabs(open)
+  const [chosenTab, setTab] = React.useState<ObjectTab>(() => {
+    const opened =
+      restoredAt && !(restoredAt.tab === "data" && !previewable)
+        ? restoredAt.tab
+        : initialObjectTab(initialTab, previewable)
+    // Saved on a session that could fill it: this one draws no such tab.
+    return absentTabs.has(opened) ? "structure" : opened
+  })
   // Wide, the definition sits beside the metadata instead of being a tab: the
   // choice is kept for the compact layout, which lists it again.
   const tab: ObjectTab =
@@ -366,6 +371,7 @@ export function ObjectView({
       tab={tab}
       onTabChange={chooseTab}
       compact={compact}
+      absentTabs={absentTabs}
       dataUnavailable={dataUnavailable}
       onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
       gridFocusRequest={gridFocusRequest}

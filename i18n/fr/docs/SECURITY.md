@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="65b7e2f38b46" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="4ce53eed5f84" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -54,7 +54,39 @@ l'éditeur ou le texte libre des conversations. Les lignes déjà présentes dan
 seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
 renouveler le mot de passe et protéger ou remplacer les fichiers de workspace
 concernés
-([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)). Les
+commandes Redis reçoivent le même traitement avec `<redacted>` : le mot de
+passe d'`AUTH` et de `HELLO … AUTH`, les règles de mot de passe
+d'`ACL SETUSER`, les valeurs d'identifiants de `CONFIG SET` et les `AUTH`/`AUTH2`
+de `MIGRATE`, reconnus sur les arguments tels que le serveur les décode,
+échappements compris. Un enregistrement qui ne porte pas son langage — un
+appel d'outil, une entrée d'audit réécrite, une requête sauvegardée
+mentionnée à un agent — est caviardé par toutes les grammaires
+([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
+
+Une commande MongoDB porte ses identifiants à trois endroits : le `pwd` de
+`createUser` et d'`updateUser`, le `payload` de `saslStart` et de
+`saslContinue`, et une chaîne de connexion avec son mot de passe dans une
+chaîne. Chacun est remplacé par `<redacted>`, tous les autres octets
+conservés, reconnu sur la commande telle que le serveur la décode — clés et
+noms de commande échappés, et commande citée dans une chaîne, compris. Les
+enregistrements qui connaissent leur langage — l'historique des requêtes,
+l'entrée du journal d'audit construite à partir de la commande — la lisent
+comme du MongoDB ; ceux qui ne le connaissent pas la lisent avec toutes les
+grammaires, MongoDB compris
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+
+Une requête Elasticsearch ou OpenSearch est lue par la même lecture JSON, sur
+son corps décodé, avec les clés sous lesquelles ces serveurs prennent un
+secret : `password`, `password_hash`, `current_password`, `access_token`,
+`refresh_token`, `kerberos_ticket`, `service_account_token`, `client_secret`,
+`secret_key`, `secure_settings_password`, `api_key` quand c'est une chaîne, un
+en-tête `Authorization` quelle que soit sa casse, et `hash` quand il porte un
+hachage bcrypt. Une requête collée depuis un shell perd les secrets de son
+en-tête `Authorization:`, le mot de passe du `-u user:password` de curl et
+celui d'une URL. L'historique des requêtes la lit comme du search DSL, tout
+autre enregistrement avec toutes les grammaires
+([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
 
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le

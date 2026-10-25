@@ -6,6 +6,7 @@ import {
   homonyms,
   hostileNames,
   manyConnections,
+  mongodbSummary,
   summaries,
 } from "./connection-fixtures"
 import { SavedConnections } from "./saved-connections"
@@ -359,5 +360,19 @@ export const MySQL: Story = {
     await expect(args.onOpen).toHaveBeenCalledWith(
       expect.objectContaining({ driver: "mysql", name: "inventory" })
     )
+  },
+}
+
+export const MongoDB: Story = {
+  args: { connections: [...summaries, mongodbSummary] },
+  play: async ({ canvas, args }) => {
+    const connection = canvas.getByRole("button", { name: /events/ })
+    await expect(connection).toHaveTextContent("MongoDB")
+    await expect(connection).toHaveTextContent("mongo.internal:27017 / events")
+    await expect(
+      connection.querySelector('svg[viewBox="0 0 120 258"]')
+    ).toHaveAttribute("aria-hidden", "true")
+    await userEvent.click(connection)
+    await expect(args.onOpen).toHaveBeenCalledWith(mongodbSummary)
   },
 }

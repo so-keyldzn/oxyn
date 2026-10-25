@@ -1,5 +1,6 @@
 import * as React from "react"
 import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
+import { queryLanguageOf } from "@/lib/query-language"
 import { useQuery } from "@tanstack/react-query"
 
 import {
@@ -364,6 +365,7 @@ export function AssistantPanel({
         }}
         connectionName={open.name}
         identifierQuote={identifierQuoteForDriver(open.driver)}
+        consoleLanguage={queryLanguageOf(open.capabilities)}
         environment={open.environment}
         tier={open.privacyTier}
         entry={entry}

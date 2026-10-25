@@ -4,6 +4,9 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 import { ConnectionForm } from "./connection-form"
 import {
   clickhouseDriver,
+  duckdbDriver,
+  elasticsearchDriver,
+  mongodbDriver,
   mysqlDriver,
   postgresDriver,
   savedConnections,
@@ -111,6 +114,44 @@ export const SQLite: Story = {
       )
     )
     await expect(args.onBrowse).toHaveBeenCalled()
+  },
+}
+
+/**
+ * DuckDB: a file and, optionally, the one folder SQL may reach (ADR-0059).
+ * DuckDB authenticates nobody: no secret field, nothing for the keychain.
+ */
+export const DuckDB: Story = {
+  args: {
+    driver: duckdbDriver,
+    onBrowse: fn(async () => "/Users/me/data/analytics.duckdb"),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(
+      canvas.getByLabelText(/^Folder SQL may read and write/)
+    ).toHaveAccessibleDescription(
+      /nowhere else.*Network access and extension downloads stay off/
+    )
+    await expect(canvas.queryByLabelText(/password/i)).toBeNull()
+
+    await userEvent.type(canvas.getByLabelText(/^Name/), "analytics")
+    const [databaseFile] = canvas.getAllByRole("button", { name: /Browse/ })
+    await userEvent.click(databaseFile!)
+    await waitFor(() =>
+      expect(canvas.getByLabelText(/^Database file/)).toHaveValue(
+        "/Users/me/data/analytics.duckdb"
+      )
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.objectContaining({
+            path: "/Users/me/data/analytics.duckdb",
+          }),
+        })
+      )
+    )
   },
 }
 
@@ -488,6 +529,160 @@ export const ClickHouse: Story = {
     await expect(args.onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/**
+ * MongoDB: a seed list of hosts, nothing else required, TLS verifying the
+ * peer by default. The password is typed into a masked field, travels as a
+ * secret and is never written anywhere on the page.
+ */
+export const MongoDB: Story = {
+  args: { driver: mongodbDriver },
+  play: async ({ canvas, canvasElement, args }) => {
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveValue("localhost")
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveAccessibleDescription(
+      /comma-separated, for a replica set seed list/
+    )
+    await expect(canvas.getByLabelText(/^Port/)).toHaveValue("27017")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(
+      canvas.getByLabelText(/^Authentication mechanism/)
+    ).toHaveValue("default")
+    await expect(
+      canvas.getByRole("switch", { name: /DNS seed list/ })
+    ).not.toBeChecked()
+    await expect(
+      canvas.getByRole("switch", { name: /Direct connection/ })
+    ).not.toBeChecked()
+    // Only the name is missing: the database, the user and the files are
+    // optional.
+    await expect(canvas.getByText(/Required: Name$/)).toBeVisible()
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+
+    await userEvent.type(canvas.getByLabelText(/^Name/), "events")
+    await userEvent.type(canvas.getByLabelText(/^User/), "reporting")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveAttribute("type", "password")
+    await userEvent.type(password, "story-mongo-password")
+    await expect(canvasElement.textContent).not.toContain(
+      "story-mongo-password"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            host: "localhost",
+            port: "27017",
+            tls: "verify-full",
+            user: "reporting",
+          }),
+          secrets: { password: "story-mongo-password" },
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/**
+ * MongoDB's files are certificates: their fields name no database file, the
+ * label and the help say what each one holds.
+ */
+export const MongoDBCertificateFiles: Story = {
+  args: { driver: mongodbDriver },
+  play: async ({ canvas }) => {
+    for (const label of [/^CA file/, /^Client certificate/]) {
+      const field = canvas.getByLabelText(label)
+      await expect(field).toHaveAttribute("placeholder", "/path/to/file")
+      await expect(field).toHaveAccessibleDescription(/PEM/)
+    }
+  },
+}
+
+/** A saved MongoDB connection: its stored password is never pre-filled. */
+export const MongoDBEditing: Story = {
+  args: {
+    driver: mongodbDriver,
+    existing: {
+      ...savedConnections[4]!,
+      // As the form saves them: a switch left off is saved "false".
+      values: {
+        host: "rs0-a.internal:27017,rs0-b.internal:27017",
+        port: "27017",
+        srv: "false",
+        database: "events",
+        user: "reporting",
+        authSource: "admin",
+        authMechanism: "default",
+        replicaSet: "rs0",
+        directConnection: "false",
+        tls: "verify-full",
+      },
+      hasStoredSecrets: true,
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveValue(
+      "rs0-a.internal:27017,rs0-b.internal:27017"
+    )
+    await expect(canvas.getByLabelText(/^Replica set/)).toHaveValue("rs0")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveValue("")
+    await expect(password).toHaveAttribute("type", "password")
+    await expect(password).toHaveAttribute(
+      "placeholder",
+      "Stored in the keyring"
+    )
+  },
+}
+
+/**
+ * Elasticsearch and OpenSearch are reached by URL; the API key travels as a
+ * typed secret, never among the saved values (I-03), and the certificate is
+ * verified by default.
+ */
+export const Elasticsearch: Story = {
+  args: { driver: elasticsearchDriver },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^URL/)).toHaveValue(
+      "https://localhost:9200"
+    )
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await userEvent.type(canvas.getByLabelText(/^Name/), "logs")
+    await userEvent.type(
+      canvas.getByLabelText(/^API key or bearer token/),
+      "story-api-key"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            url: "https://localhost:9200",
+            sslmode: "verify-full",
+          }),
+          secrets: expect.objectContaining({ token: "story-api-key" }),
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ token: expect.anything() }),
       })
     )
   },

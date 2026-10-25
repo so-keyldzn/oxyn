@@ -92,6 +92,7 @@ import type {
   CatalogNode,
   OpenConnection,
 } from "@/lib/ipc/types"
+import { queryLanguageOf } from "@/lib/query-language"
 
 export type { AsideItem } from "@/components/oxyn/workspace-aside"
 
@@ -541,10 +542,15 @@ export function WorkspaceScreen({
       const kept = session.state.workspaces.some(
         (held) => held.session === open.session
       )
-      if (text !== undefined) setSqlDraft(text, kept ? open.name : null)
+      if (text !== undefined)
+        setSqlDraft(
+          text,
+          kept ? open.name : null,
+          queryLanguageOf(open.capabilities)
+        )
     }
     wasVisible.current = visible
-  }, [visible, open.name, handles])
+  }, [visible, open.name, open.capabilities, handles])
 
   // The start screen names a hidden connection whose console holds a
   // transaction: it reads the sessions from here (ADR-0046).

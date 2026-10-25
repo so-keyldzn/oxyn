@@ -17,7 +17,6 @@ import { Elasticsearch } from "@/components/ui/svgs/elasticsearch"
 import { Memgraph } from "@/components/ui/svgs/memgraph"
 import { Milvus } from "@/components/ui/svgs/milvus"
 import { MilvusDarkMode } from "@/components/ui/svgs/milvusDarkMode"
-import { MongodbIconDark } from "@/components/ui/svgs/mongodbIconDark"
 import { MongodbIconLight } from "@/components/ui/svgs/mongodbIconLight"
 import { MysqlIconLight } from "@/components/ui/svgs/mysqlIconLight"
 import { Neo4j } from "@/components/ui/svgs/neo4j"
@@ -144,6 +143,19 @@ function ElasticsearchMark({
   )
 }
 
+/**
+ * The leaf as svgl draws it on a light surface; the token takes svgl's dark
+ * variant's green on a dark one.
+ */
+function MongodbMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <MongodbIconLight
+      {...props}
+      className={cn(className, "[&_path]:fill-(--driver-mongodb)")}
+    />
+  )
+}
+
 /** Chroma's dark lockup, cropped to its two discs. */
 const ChromaDarkSymbol = framed("0 0 3.94 2.565", {
   Mark: ChromaDarkMode,
@@ -168,6 +180,7 @@ const ChromaDarkSymbol = framed("0 0 3.94 2.565", {
 const logos: Partial<Record<string, Logo>> = {
   postgres: Postgresql,
   mysql: MysqlMark,
+  mongodb: MongodbMark,
   sqlite: SqliteMark,
   sqlserver: SqlServer,
   duckdb: DuckdbMark,
@@ -175,11 +188,6 @@ const logos: Partial<Record<string, Logo>> = {
   // The guidelines require the ® with the bug: it is not cropped off.
   snowflake: Snowflake,
   bigquery: Bigquery,
-  mongodb: framed(
-    "0 0 120 258",
-    { Mark: MongodbIconLight, width: 120, height: 258 },
-    { Mark: MongodbIconDark, width: 120, height: 257 }
-  ),
   redis: Redis,
   // The lockup's wordmark is white, invisible on a light page: only the eye.
   cassandra: framed("0 20 142 142.5", {

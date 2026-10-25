@@ -354,10 +354,10 @@ impl Backend {
         change: DocumentChange,
         cancel: CancelToken,
     ) -> Result<DocumentWrite, IpcError> {
+        // The language a console of this connection speaks: a MongoDB
+        // command saved as SQL would reopen under the wrong editor and agent.
         let language = match connection {
-            Some(connection) => QueryLanguage::Sql(oxyn_query::dialect_for(
-                &self.read_config(connection).await?.driver,
-            )),
+            Some(connection) => self.language_of(&self.read_config(connection).await?.driver),
             None => QueryLanguage::SQL,
         };
         let update = QueryDocumentUpdate {

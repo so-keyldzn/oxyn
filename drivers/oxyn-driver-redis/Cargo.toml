@@ -1,0 +1,33 @@
+[package]
+name = "oxyn-driver-redis"
+description = "Driver for the Redis serialization protocol: Redis and Valkey (ADR-0061)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxyn-core.workspace = true
+oxyn-catalog.workspace = true
+oxyn-data.workspace = true
+oxyn-driver.workspace = true
+oxyn-query.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt"] }
+tokio-rustls.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros"] }
