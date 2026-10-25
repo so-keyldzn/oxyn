@@ -69,15 +69,42 @@ bucket aggregation, `top_hits` — is a cell of the first row of its level only.
 ES|QL, `_sql` and OpenSearch SQL declare their columns, so their cells are typed
 (`boolean`, integers, `unsigned_long` as `UInt64`, floats, `date` with its
 offset as an instant); one value that does not conform turns its whole column
-into text, and the server type stays in the field metadata. A `_cat` answer in
-text is read as its table; any other object is one row.
+into text, and the server type stays in the field metadata. The request, not
+the answer's look, decides the reading: the endpoint names the tabular API
+(`/_query` is ES|QL, `/_sql` Elasticsearch SQL, `/_plugins/_sql` and
+`/_plugins/_ppl` OpenSearch's), since an `_sql` answer asked `columnar` has
+the `columns` and `values` of ES|QL and a cursor ES|QL has not; with
+`"columnar": true` in the body, `values` holds one array per column, read in
+that orientation, and an SQL cursor resends `"columnar": true` on every later
+page, as the server does not remember it. A `_cat` answer in text is read as
+its table only when the request asked `v`; without it there is no header, and
+every line is a row. Any other object is one row; a running asynchronous
+query is its status row (`id`, `is_running`), never its partial table.
+
+A read whose answer says it is incomplete is refused, naming why, on its
+first page and on every later one: `timed_out: true` beside `_shards`,
+`_shards.failed` above zero (with the first failure's reason), `_clusters`
+counting partial or failed clusters, `is_partial: true` once the query no
+longer runs, and any `_msearch` response that is one of these or an error
+object. Both products answer `200` with what the remaining shards found —
+`allow_partial_search_results` and ES|QL's `allow_partial_results` default to
+`true` — and such an answer reads as the whole data: a count, an aggregation,
+the short last page of a point in time. `_shards.skipped` (shards the
+pre-filter proved empty) and `terminated_early` (asked by `terminate_after`)
+are not failures.
 
 Every answer is read in chunks and capped at 16 MiB before decoding; batches
 are cut at 4 MiB, a null cell counted for its offset. The decoded table of one
 answer is refused past 64 MiB and 4,096 columns: the wire cap does not bound
 it, since aggregation keys repeat and distinct `_source` keys make a sparse
-grid. A page of hits gives its first 1,024 `_source` keys a column each, and
-the others to `_other`. A search that pages continues with the server's own protocol,
+grid. Both bounds hold before the first Arrow allocation and on every page:
+a tabular answer declaring more than 4,096 columns is refused before any field
+or builder, and each typed cell is charged its Arrow cost — eight bytes for a
+`long` whose JSON is one byte, a text's bytes and its offset, a validity bit,
+the 64-byte padding of each buffer — against the 64 MiB of the whole page,
+never reset when a batch is cut. Aggregations are flattened straight into the
+bounded table, one row at a time. A page of hits gives its first 1,024
+`_source` keys a column each, and the others to `_other`. A search that pages continues with the server's own protocol,
 never with deep `from`/`size`: `search_after` within the point in time the
 request opened (`/_pit` and `id` on Elasticsearch, `/_search/point_in_time`
 and `pit_id` on OpenSearch), `/_search/scroll` for a `?scroll=` request, the
@@ -167,8 +194,9 @@ connection. HTTP 408, 429, 502, 503 and 504 are transient for a read. For a
 write, 408, 429 and every 5xx are ambiguous, as are a timeout, a transport
 loss and a refusal too large to read; an oversized answer to a write that
 succeeded is `OutcomeUnknown`. A 200 `_bulk`
-answer with item failures, or a by-query answer with `failures`, is an error
-naming how many items failed, not a success.
+answer with item failures, or a by-query answer with `failures` or
+`timed_out: true`, is an error naming how many items failed or that the
+operation stopped midway, not a success.
 
 A request's text is persisted — history, audit journal, tool calls, a saved
 console mentioned to an agent — after the shared redaction
