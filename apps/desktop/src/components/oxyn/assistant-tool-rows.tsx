@@ -425,68 +425,77 @@ export function AssistantToolRows({
               />
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-3 py-1.5 text-xs text-muted-foreground">
-            <span className="tabular-nums">
-              {rowsCaption(range, rows, state.truncated)}
-            </span>
-            {paged ? (
-              <span className="flex items-center gap-0.5">
-                <PageButton
-                  label="Previous page"
-                  icon={ArrowLeft01Icon}
-                  blocked={
-                    stopped ?? (page === 0 ? "This is the first page" : null)
-                  }
-                  onClick={() => go(page - 1)}
-                />
-                <PageButton
-                  label="Next page"
-                  icon={ArrowRight01Icon}
-                  blocked={
-                    stopped ??
-                    (page >= pages - 1 ? "This is the last page" : null)
-                  }
-                  onClick={() => go(page + 1)}
-                />
-                <span className="sr-only" aria-live="polite" aria-atomic>
-                  {current.announced}
-                </span>
+          <div className="flex flex-col gap-1 border-t px-3 py-1.5 text-xs text-muted-foreground">
+            {/* Where the rows are on the left, what can be done with them on
+                the right: the actions wrap together, never one by one. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="tabular-nums">
+                {rowsCaption(range, rows, state.truncated)}
               </span>
-            ) : null}
-            <span>· shown to you only; the model got the count</span>
-            {plan ? (
-              <FooterAction
-                releasedBy={expired ? releasedId : null}
-                size="xs"
-                variant={charted ? "secondary" : "ghost"}
-                aria-pressed={charted}
-                className="ml-auto"
-                onClick={() => setCharted((on) => !on)}
-              >
-                <HugeiconsIcon
-                  icon={ChartBarLineIcon}
-                  strokeWidth={2}
-                  data-icon="inline-start"
-                />
-                Chart
-              </FooterAction>
-            ) : null}
-            {onOpenAll ? (
-              <FooterAction
-                releasedBy={expired ? releasedId : null}
-                size="xs"
-                variant="outline"
-                className={plan ? undefined : "ml-auto"}
-                onClick={onOpenAll}
-              >
-                <HugeiconsIcon
-                  icon={ArrowExpand01Icon}
-                  strokeWidth={2}
-                  data-icon="inline-start"
-                />
-                Open all rows
-              </FooterAction>
-            ) : null}
+              {paged ? (
+                <span className="flex items-center gap-0.5">
+                  <PageButton
+                    label="Previous page"
+                    icon={ArrowLeft01Icon}
+                    blocked={
+                      stopped ?? (page === 0 ? "This is the first page" : null)
+                    }
+                    onClick={() => go(page - 1)}
+                  />
+                  <PageButton
+                    label="Next page"
+                    icon={ArrowRight01Icon}
+                    blocked={
+                      stopped ??
+                      (page >= pages - 1 ? "This is the last page" : null)
+                    }
+                    onClick={() => go(page + 1)}
+                  />
+                  <span className="sr-only" aria-live="polite" aria-atomic>
+                    {current.announced}
+                  </span>
+                </span>
+              ) : null}
+              {plan || onOpenAll ? (
+                <span className="ml-auto flex items-center gap-1">
+                  {plan ? (
+                    <FooterAction
+                      releasedBy={expired ? releasedId : null}
+                      size="xs"
+                      variant={charted ? "secondary" : "ghost"}
+                      aria-pressed={charted}
+                      onClick={() => setCharted((on) => !on)}
+                    >
+                      <HugeiconsIcon
+                        icon={ChartBarLineIcon}
+                        strokeWidth={2}
+                        data-icon="inline-start"
+                      />
+                      Chart
+                    </FooterAction>
+                  ) : null}
+                  {onOpenAll ? (
+                    <FooterAction
+                      releasedBy={expired ? releasedId : null}
+                      size="xs"
+                      variant="outline"
+                      onClick={onOpenAll}
+                    >
+                      <HugeiconsIcon
+                        icon={ArrowExpand01Icon}
+                        strokeWidth={2}
+                        data-icon="inline-start"
+                      />
+                      Open all rows
+                    </FooterAction>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+            {/* The text stays as the spec quotes it; the capital is drawn. */}
+            <p className="first-letter:uppercase">
+              shown to you only; the model got the count
+            </p>
           </div>
         </div>
       )
