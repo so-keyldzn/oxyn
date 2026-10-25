@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="8ea297666b08" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="f6b31a0f82c5" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1386,7 +1386,13 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   numérote les lignes du résultat. Une nouvelle page repart d'une grille nette
   — sélection, cellule active, défilement —, et la lecture d'une page qui
   répond après que l'utilisateur l'a quittée ne remplit jamais la page
-  affichée. Un autre résultat sous la vue — un autre appel, une nouvelle
+  affichée. Les largeurs de colonnes que l'utilisateur a réglées et l'ordre
+  dans lequel il a déplacé les colonnes appartiennent au résultat, pas à la
+  page : ils tiennent sur `Next page` et au retour par `Previous page`, et ne
+  repartent de zéro que lorsqu'un autre résultat est affiché ou que les
+  colonnes du même résultat diffèrent en nombre, en nom ou en type. Seule la
+  vue sous l'appel les garde, pour un résultat à la fois, et ils partent avec
+  elle. Un autre résultat sous la vue — un autre appel, une nouvelle
   tentative — commence à sa première page. La grille du chat ne trie ni ne
   filtre : aucune page n'est jamais montrée réordonnée. Un résultat qui tient
   en une page n'a pas de pager ; son pied compte ses lignes (« 3 rows »).
@@ -1399,10 +1405,20 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   **vide** (« The query returned no rows. », sans alerte) ; erreur (le message
   du backend entier, `Try again` seulement s'il est déclaré retentable — pour
   la lecture d'une page, il relit cette page et rien d'autre) ; **expirée**
-  (« Result no longer available », sans rien proposer qui relance la requête)
-  — à l'ouverture, ou à la lecture d'une page quand la rétention a libéré le
-  tampon pendant que l'utilisateur feuilletait : le pager est alors désactivé,
-  et `Chart` et `Open all rows` sont retirés.
+  (« Result no longer available », sans rien proposer qui relance la
+  requête). À l'ouverture, rien n'a été montré : le message est seul, sans
+  pied et sans rien à désactiver. Une fois des lignes montrées — à la lecture
+  d'une page, ou à celle du graphique, quand la rétention a libéré le tampon
+  pendant que l'utilisateur feuilletait ou dessinait — le message prend la
+  place de la grille ou du graphique et est annoncé une fois, poliment, sans
+  prendre le focus. Le pied reste : la légende garde la plage où
+  l'utilisateur se trouvait (« Rows 101–200 of 250,000 »), le message portant
+  l'état ; le pager est désactivé ; `Chart`, quand il était proposé, et
+  `Open all rows` restent à leur place et dans l'ordre de tabulation,
+  **désactivés**, décrits par le message et avec « Result no longer
+  available » pour infobulle. Aucun clic sur eux n'ouvre, ne dessine ni ne
+  lit rien, et aucun `Try again` n'est proposé : l'expiration n'est pas une
+  erreur.
 * **Graphique.** Le pied offre `Chart`, qui bascule entre la grille et un
   graphique, quand les colonnes comptent au moins une colonne numérique
   (entier, flottant, décimal) et de quoi la dessiner : une date (`Date*`,

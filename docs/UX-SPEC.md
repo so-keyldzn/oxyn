@@ -1319,8 +1319,14 @@ footer recalls it ("shown to you only; the model got the count").
   scrolling; the grid's name carries it ("Rows the query returned, 101–200 of
   250,000") and its gutter numbers the result's rows. A new page starts the
   grid clean — selection, active cell, scroll —, and a page read that answers
-  after the user left its page never fills the page shown. Another result
-  under the view — another call, a retry — starts on its first page. The chat
+  after the user left its page never fills the page shown. The column widths
+  the user set and the order they moved the columns into belong to the
+  result, not to the page: they hold on `Next page` and on the way back with
+  `Previous page`, and start over only when another result is shown or the
+  same result's columns differ in number, name or type. They are kept by the
+  view under the call alone, for one result at a time, and go with it.
+  Another result under the view — another call, a retry — starts on its first
+  page. The chat
   grid neither sorts nor filters: no page is ever shown reordered. A result
   that fits one page has no pager; its footer counts its rows ("3 rows").
   `Open all rows` opens the whole result in a result tab of the workspace — the
@@ -1332,10 +1338,18 @@ footer recalls it ("shown to you only; the model got the count").
   query returned no rows.", without an alert); error (the backend's whole
   message, `Try again` only if it is declared retryable — for a page read, it
   reads that page again and nothing else); **expired** ("Result no longer
-  available", without offering anything that re-runs the query) — at opening,
-  or on a page read when retention released the buffer while the user was
-  paging: the pager is then disabled, and `Chart` and `Open all rows` are
-  withdrawn.
+  available", without offering anything that re-runs the query). At opening,
+  nothing was shown: the message stands alone, with no footer and nothing to
+  disable. Once rows were shown — on a page read, or the chart's, when
+  retention released the buffer while the user was paging or charting — the
+  message takes the place of the grid or of the chart and is announced once,
+  politely, without taking the focus. The footer stays: the caption keeps the
+  range the user was on ("Rows 101–200 of 250,000"), the message carrying the
+  state; the pager is disabled; `Chart`, when it was offered, and `Open all
+  rows` stay in place and in the tab order, **disabled**, described by the
+  message and with "Result no longer available" as their tooltip. No click on
+  them opens, draws or reads anything, and no `Try again` is offered: expiry
+  is not an error.
 * **Chart.** The footer offers `Chart`, which toggles between the grid and a
   chart, when the columns include at least one numeric column (integer, float,
   decimal) and something to draw it with: a date (`Date*`, `Timestamp`) or a
