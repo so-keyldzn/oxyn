@@ -19,6 +19,7 @@ import {
   rangeText,
   rowsCaption,
 } from "@/components/oxyn/assistant-tool-rows-pages"
+import { gridLayoutStore, schemaOf } from "@/components/oxyn/grid-layout"
 import { chartPlan } from "@/components/oxyn/result-chart-model"
 import { HEADER_HEIGHT, ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/tooltip"
 import { BackendError } from "@/lib/ipc/client"
 import type { ResultColumn } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /** Rows drawn before the chat grid scrolls. */
 const VISIBLE_ROWS = 8
@@ -74,9 +76,12 @@ interface Failure {
   retryable: boolean
 }
 
-function Released() {
+function Released({ id }: { id?: string }) {
   return (
-    <p className="flex items-start gap-1.5 px-3 py-2 text-xs text-muted-foreground">
+    <p
+      id={id}
+      className="flex items-start gap-1.5 px-3 py-2 text-xs text-muted-foreground"
+    >
       <HugeiconsIcon
         icon={TimeQuarterPassIcon}
         strokeWidth={2}
@@ -170,6 +175,43 @@ function PageButton({
 }
 
 /**
+ * A footer action once the rows it works on were released: still drawn and
+ * focusable, so nothing moves under the keyboard, inert, and described by the
+ * message that says why. Its tooltip only exists then — the label says the
+ * rest — but it is always mounted, so focus is not lost when the rows go.
+ */
+function FooterAction({
+  releasedBy,
+  onClick,
+  children,
+  className,
+  ...props
+}: Omit<React.ComponentProps<typeof Button>, "disabled"> & {
+  /** The id of the message saying the rows were released, once they were. */
+  releasedBy: string | null
+}) {
+  return (
+    <Tooltip disabled={releasedBy === null}>
+      <TooltipTrigger
+        render={
+          <Button
+            {...props}
+            aria-describedby={releasedBy ?? undefined}
+            disabled={releasedBy !== null}
+            focusableWhenDisabled
+            className={cn("data-disabled:opacity-50", className)}
+            onClick={releasedBy === null ? onClick : undefined}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>Result no longer available</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * The rows an agent's query returned, under its tool call — for the user only.
  *
  * The model was told the shape of the result, never these values (ADR-0006,
@@ -196,6 +238,7 @@ export function AssistantToolRows({
   const open = state.status === "open" ? state : null
   const result = open?.result ?? null
   const rows = open?.rows ?? 0
+  const columns = open?.columns ?? null
 
   // Another result — another call, a retry — starts on its first page.
   const [paging, setPaging] = React.useState(() => firstPage(result))
@@ -204,7 +247,19 @@ export function AssistantToolRows({
   const page = clampPage(current.page, rows)
   const range = pageRange(page, rows)
   const pages = pageCount(rows)
-  const pageKey = `${result ?? ""}:${range.start}:${current.attempt}`
+  // The page's identity carries the columns: other columns under the same
+  // result are another grid, whose widths and order start over.
+  const schema = columns ? schemaOf(columns) : ""
+  const pageKey = `${result ?? ""}:${schema}:${range.start}:${current.attempt}`
+
+  // Widths and order belong to the result, not to the page: the grid is
+  // remounted on each page and finds them here. Gone with this view.
+  const [layoutStore] = React.useState(gridLayoutStore)
+  const layout = React.useMemo(
+    () => (result === null ? undefined : { store: layoutStore, key: result }),
+    [layoutStore, result]
+  )
+  const releasedId = React.useId()
 
   // Expiry is the result's, whatever page found it; a failure is the page's,
   // and a read for a page already left never shows over the one shown.
@@ -246,7 +301,6 @@ export function AssistantToolRows({
     }
   }, [fetchPage, start, end, pageKey, result])
 
-  const columns = open?.columns ?? null
   const chartRows = end - start
   // Offered only when the columns allow one: a button that draws nothing
   // would be a control that lies about what it offers.
@@ -313,9 +367,13 @@ export function AssistantToolRows({
           data-slot="assistant-tool-rows"
           className="flex min-w-0 flex-col border-t"
         >
-          {expired ? (
-            <Released />
-          ) : failed ? (
+          {/* Mounted empty, so the release is announced once, politely,
+              wherever focus is; it takes the place of the grid as of the
+              chart — neither stays drawn from rows Oxyn no longer holds. */}
+          <div role="status">
+            {expired ? <Released id={releasedId} /> : null}
+          </div>
+          {expired ? null : failed ? (
             <ReadFailure
               message={failed.message}
               retryable={failed.retryable}
@@ -349,9 +407,11 @@ export function AssistantToolRows({
             >
               <ResultGrid
                 // Selection, active cell and scroll start clean on each page,
-                // and a page's reads are cached under it alone.
+                // and a page's reads are cached under it alone; its widths
+                // and order are the result's.
                 key={pageKey}
                 resultKey={pageKey}
+                layout={layout}
                 columns={state.columns}
                 rowCount={end - start}
                 firstRow={start}
@@ -394,8 +454,9 @@ export function AssistantToolRows({
               </span>
             ) : null}
             <span>· shown to you only; the model got the count</span>
-            {plan && !expired ? (
-              <Button
+            {plan ? (
+              <FooterAction
+                releasedBy={expired ? releasedId : null}
                 size="xs"
                 variant={charted ? "secondary" : "ghost"}
                 aria-pressed={charted}
@@ -408,10 +469,11 @@ export function AssistantToolRows({
                   data-icon="inline-start"
                 />
                 Chart
-              </Button>
+              </FooterAction>
             ) : null}
-            {onOpenAll && !expired ? (
-              <Button
+            {onOpenAll ? (
+              <FooterAction
+                releasedBy={expired ? releasedId : null}
                 size="xs"
                 variant="outline"
                 className={plan ? undefined : "ml-auto"}
@@ -423,7 +485,7 @@ export function AssistantToolRows({
                   data-icon="inline-start"
                 />
                 Open all rows
-              </Button>
+              </FooterAction>
             ) : null}
           </div>
         </div>

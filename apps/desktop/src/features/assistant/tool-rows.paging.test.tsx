@@ -246,7 +246,16 @@ describe("paging the rows kept under an assistant answer", () => {
         .getByRole("button", { name: "Next page" })
         .getAttribute("aria-disabled")
     ).toBe("true")
-    expect(screen.queryByRole("button", { name: /Open all rows/ })).toBeNull()
+    const readsAtExpiry = reads().length
+
+    // Still offered, inert: the whole result is gone with the page.
+    const openAll = screen.getByRole("button", { name: /Open all rows/ })
+    expect(openAll.getAttribute("aria-disabled")).toBe("true")
+    await click("Open all rows")
+    await click("Next page")
+    await click("Previous page")
+
+    expect(reads()).toHaveLength(readsAtExpiry)
     expect(backend.openRetainedResult).toHaveBeenCalledOnce()
     expect(backend.openAgentResult).not.toHaveBeenCalled()
   })

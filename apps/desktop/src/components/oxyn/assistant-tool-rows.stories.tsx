@@ -1,7 +1,7 @@
 import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
-import type { Mock } from "storybook/test"
+import type { Mock, within } from "storybook/test"
 
 import { AssistantToolRows } from "./assistant-tool-rows"
 import type { ToolRowsState } from "./assistant-tool-rows"
@@ -456,16 +456,27 @@ const releasedAfterFirst = fn<FetchPage>((offset, limit) =>
     : Promise.resolve({ type: "expired" })
 )
 
+const RELEASED =
+  "Result no longer available: Oxyn released these rows. Nothing is rerun to bring them back."
+
+/**
+ * Chart and Open all rows stay where they were, inert, in the tab order, and
+ * say why: the rows they would work on are gone, and nothing reruns them.
+ */
+async function withheld(button: HTMLElement) {
+  await expect(button).toHaveAttribute("aria-disabled", "true")
+  await expect(button).toHaveAccessibleDescription(RELEASED)
+}
+
 export const ExpiredWhilePaging: Story = {
   args: { ...paged, fetchPage: releasedAfterFirst },
-  play: async ({ canvas }) => {
+  play: async ({ args, canvas }) => {
     await canvas.findByRole("rowheader", { name: "Row 1" })
     const next = canvas.getByRole("button", { name: "Next page" })
     await userEvent.click(next)
-    await expect(
-      await canvas.findByText(/Result no longer available: Oxyn released/)
-    ).toBeVisible()
-    await expect(canvas.getByText(/Nothing is rerun/)).toBeVisible()
+    await expect(await canvas.findByText(RELEASED)).toBeVisible()
+    // Said once, politely, without taking the focus.
+    await expect(canvas.getByRole("status")).toHaveTextContent(RELEASED)
     await expect(canvas.queryByRole("grid")).toBeNull()
     await inert(next, "Result no longer available")
     await inert(
@@ -473,10 +484,26 @@ export const ExpiredWhilePaging: Story = {
       "Result no longer available"
     )
     await expect(next).toHaveFocus()
-    await expect(
-      canvas.queryByRole("button", { name: /Open all rows/ })
-    ).toBeNull()
+    // Where the reader was, not a promise that the rows are still there.
+    await expect(canvas.getByText("Rows 101–200 of 250,000")).toBeVisible()
+    const reads = releasedAfterFirst.mock.calls.length
+
+    const chart = canvas.getByRole("button", { name: "Chart" })
+    const openAll = canvas.getByRole("button", { name: /Open all rows/ })
+    await withheld(chart)
+    await withheld(openAll)
+    await userEvent.tab()
+    await expect(chart).toHaveFocus()
+    await userEvent.tab()
+    await expect(openAll).toHaveFocus()
+
+    await userEvent.click(openAll)
+    await userEvent.keyboard("{Enter}")
+    await userEvent.click(chart)
+    await expect(args.onOpenAll).not.toHaveBeenCalled()
+    await expect(chart).toHaveAttribute("aria-pressed", "false")
     await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+    await expect(releasedAfterFirst.mock.calls.length).toBe(reads)
     await readInside(releasedAfterFirst, BIG)
   },
 }
@@ -619,5 +646,187 @@ export const ChartedPage: Story = {
     await expect(
       await canvas.findByText("Drawn from the page shown: rows 101–200 of 250.")
     ).toBeVisible()
+  },
+}
+
+const chartReleasedAfterFirst = fn<FetchPage>((offset, limit) =>
+  offset < 100
+    ? pagesOf(manyStatuses)(offset, limit)
+    : Promise.resolve({ type: "expired" })
+)
+
+/** The chart was drawn when the rows went: the message takes its place. */
+export const ExpiredWhileCharted: Story = {
+  args: {
+    state: { ...open, columns: byStatus.columns, rows: manyStatuses.length },
+    fetchPage: chartReleasedAfterFirst,
+  },
+  play: async ({ args, canvas }) => {
+    const chart = canvas.getByRole("button", { name: "Chart" })
+    await userEvent.click(chart)
+    await expect(
+      await canvas.findByText("Drawn from the page shown: rows 1–100 of 250.")
+    ).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await expect(await canvas.findByText(RELEASED)).toBeVisible()
+    await expect(canvas.queryByText(/Drawn from the page shown/)).toBeNull()
+    await expect(canvas.queryByRole("grid")).toBeNull()
+    await withheld(chart)
+    await withheld(canvas.getByRole("button", { name: /Open all rows/ }))
+    const reads = chartReleasedAfterFirst.mock.calls.length
+    // Neither going back to the grid nor opening the result reads anything.
+    await userEvent.click(chart)
+    await userEvent.click(canvas.getByRole("button", { name: /Open all rows/ }))
+    await expect(canvas.queryByRole("grid")).toBeNull()
+    await expect(args.onOpenAll).not.toHaveBeenCalled()
+    await expect(chartReleasedAfterFirst.mock.calls.length).toBe(reads)
+  },
+}
+
+/** The column names the header draws, in the order it draws them. */
+const headerOrder = (grid: HTMLElement) =>
+  Array.from(
+    grid.querySelectorAll('[role="columnheader"] > span:first-child'),
+    (name) => name.textContent
+  ).filter((name) => name !== "Row number")
+
+type Canvas = ReturnType<typeof within>
+
+const handleOf = (canvas: Canvas, column: string) =>
+  canvas.findByRole("separator", { name: `Resize column ${column}` })
+
+const widthOf = async (canvas: Canvas, column: string) =>
+  Number((await handleOf(canvas, column)).getAttribute("aria-valuenow"))
+
+/**
+ * On the page shown: `customer` moved first from the keyboard, then widened
+ * from its handle. Returns its width before and after.
+ */
+async function arrange(canvas: Canvas) {
+  await waitFor(() =>
+    expect(canvas.getAllByText("Acme SA").length).toBeGreaterThan(0)
+  )
+  const grid = canvas.getByRole("grid")
+  grid.focus()
+  await userEvent.keyboard("{ArrowDown}{ArrowRight}")
+  await userEvent.keyboard("{Alt>}{Shift>}{ArrowLeft}{/Shift}{/Alt}")
+  await waitFor(() =>
+    expect(headerOrder(grid).slice(0, 2)).toEqual(["customer", "id"])
+  )
+  const before = await widthOf(canvas, "customer")
+  ;(await handleOf(canvas, "customer")).focus()
+  await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}")
+  await waitFor(async () =>
+    expect(await widthOf(canvas, "customer")).toBeGreaterThan(before)
+  )
+  return { before, widened: await widthOf(canvas, "customer") }
+}
+
+async function arranged(canvas: Canvas, width: number) {
+  await waitFor(() =>
+    expect(headerOrder(canvas.getByRole("grid")).slice(0, 2)).toEqual([
+      "customer",
+      "id",
+    ])
+  )
+  await expect(await widthOf(canvas, "customer")).toBe(width)
+}
+
+async function byDefault(canvas: Canvas, width: number) {
+  await waitFor(() =>
+    expect(headerOrder(canvas.getByRole("grid")).slice(0, 2)).toEqual([
+      "id",
+      "customer",
+    ])
+  )
+  await waitFor(async () =>
+    expect(await widthOf(canvas, "customer")).toBe(width)
+  )
+}
+
+/**
+ * A column widened and another order chosen on the first page hold on the
+ * next one and on the way back: they are the result's, not the page's.
+ * Selection still starts clean on each page.
+ */
+export const LayoutKeptAcrossPages: Story = {
+  args: paged,
+  play: async ({ canvas }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    const { widened } = await arrange(canvas)
+
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await canvas.findByRole("rowheader", { name: "Row 101" })
+    await arranged(canvas, widened)
+    await expect(
+      canvas.queryAllByRole("gridcell", { selected: true })
+    ).toHaveLength(0)
+
+    await userEvent.click(canvas.getByRole("button", { name: "Previous page" }))
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    await arranged(canvas, widened)
+    await expect(
+      canvas.queryAllByRole("gridcell", { selected: true })
+    ).toHaveLength(0)
+  },
+}
+
+/** Another result brings other columns: widths and order start over. */
+export const LayoutResetsOnAnotherResult: Story = {
+  args: paged,
+  render: (args) => <AnotherCall {...args} />,
+  play: async ({ canvas }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    const { before } = await arrange(canvas)
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await canvas.findByRole("rowheader", { name: "Row 101" })
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Next tool call" })
+    )
+    await expect(canvas.getByText("Rows 1–100 of 300")).toBeVisible()
+    await byDefault(canvas, before)
+  },
+}
+
+/** The same result answering other columns: the page stays, the layout goes. */
+function OtherColumns(args: React.ComponentProps<typeof AssistantToolRows>) {
+  const [changed, setChanged] = React.useState(false)
+  const state: ToolRowsState = {
+    ...open,
+    rows: BIG,
+    columns: changed
+      ? invoiceColumns.map((column) =>
+          column.name === "notes"
+            ? { ...column, dataType: "LargeUtf8" }
+            : column
+        )
+      : invoiceColumns,
+  }
+  return (
+    <div className="flex flex-col">
+      <Button
+        size="xs"
+        variant="outline"
+        className="m-2 self-start"
+        onClick={() => setChanged(true)}
+      >
+        Other columns
+      </Button>
+      <AssistantToolRows {...args} state={state} />
+    </div>
+  )
+}
+
+export const LayoutResetsOnOtherColumns: Story = {
+  args: paged,
+  render: (args) => <OtherColumns {...args} />,
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await canvas.findByRole("rowheader", { name: "Row 101" })
+    const { before } = await arrange(canvas)
+    await userEvent.click(canvas.getByRole("button", { name: "Other columns" }))
+    await expect(canvas.getByText("Rows 101–200 of 250,000")).toBeVisible()
+    await canvas.findByRole("rowheader", { name: "Row 101" })
+    await byDefault(canvas, before)
   },
 }
