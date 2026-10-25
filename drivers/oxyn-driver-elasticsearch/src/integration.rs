@@ -17,8 +17,10 @@
 //! | here | opening, errors, read-only, classification against the server, results |
 //! | [`catalog`] | indices, aliases, data streams, mappings, hostile names, preview |
 //! | [`stop`] | the two tests the checklist imposes |
+//! | [`partial`] | partial answers refused, `_cat` without `v`, ES\|QL columnar |
 
 mod catalog;
+mod partial;
 mod stop;
 
 use arrow::array::{Array, StringArray};
