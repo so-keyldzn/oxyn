@@ -3,7 +3,7 @@ paths:
   - "**/*.rs"
 ---
 
-<!-- oxyn-translation source=".claude/rules/rust.md" sha256="318d41a7287e" -->
+<!-- oxyn-translation source=".claude/rules/rust.md" sha256="59367fa77b6f" -->
 
 > Traduction française de [.claude/rules/rust.md](../../../../.claude/rules/rust.md). **La version anglaise fait foi.**
 
@@ -86,12 +86,13 @@ la condition est vraie ici et **qui** la maintiendra vraie.
 Les conventions vivent dans [tests.md](tests.md) : ce qui se teste, les entrées
 hostiles, les trois niveaux de test d'interface, les bancs d'essai.
 
-Le renvoi reste nécessaire, mais pas pour la raison qu'on lisait ici : le
-`paths:` de [tests.md](tests.md) couvre désormais `**/*_tests.rs` et
-`**/tests.rs` en plus des répertoires. Ce qu'il ne couvre toujours pas, c'est un
-`#[cfg(test)] mod tests` écrit **au bas d'un fichier source** — et c'est la forme
-majoritaire ici. La conclusion tenait ; l'exemple qui la justifiait avait
-vieilli.
+Où ils vivent : un module dont les tests dépassent environ 150 lignes les garde
+hors du fichier, dans `<module>/tests.rs` déclaré par `#[cfg(test)] mod tests;`
+(`tests.rs` à côté de `lib.rs` pour une racine de crate). Le `paths:` de
+[tests.md](tests.md) couvre ce fichier : la règle se charge donc quand on lit un
+test, et un fichier source ne porte que ce qui est livré. Un module plus court
+peut garder un `#[cfg(test)] mod tests { … }` au bas de son fichier — la seule
+forme que `paths:` ne couvre pas, ce qui explique que ce renvoi demeure.
 
 ## Vérifier
 
