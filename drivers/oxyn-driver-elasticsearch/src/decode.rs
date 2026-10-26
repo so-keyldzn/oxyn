@@ -111,7 +111,7 @@ pub(crate) fn decode(reply: &Reply, asked: &Asked<'_>, stream: Stream<'_>) -> Re
     }
     let object = object(&reply.bytes)?;
     if asked.read
-        && let Some(why) = complete::incomplete(&object)
+        && let Some(why) = complete::incomplete(&object, complete::Read::of(asked.path))
     {
         return Err(OxynError::Query(why));
     }
@@ -139,7 +139,7 @@ pub(crate) fn decode(reply: &Reply, asked: &Asked<'_>, stream: Stream<'_>) -> Re
 /// shape, refused like a first page when it says it is incomplete.
 pub(crate) fn next_tabular(reply: &Reply, columns: &Columns, shape: Shape) -> Result<Decoded> {
     let object = object(&reply.bytes)?;
-    if let Some(why) = complete::incomplete(&object) {
+    if let Some(why) = complete::incomplete(&object, complete::Read::Other) {
         return Err(OxynError::Query(why));
     }
     columnar::next_page(columns, &object, shape)
