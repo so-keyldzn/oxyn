@@ -182,6 +182,16 @@ pub trait Session: Send + Sync {
     /// The completion applies from the first page: ordering page 0 by one
     /// column and page 1 by two would make a row reappear exactly at the
     /// boundary.
+    ///
+    /// With no sort requested, an implementation orders by the unique key
+    /// **exactly when** the relation it describes says
+    /// [`Relation::previews_in_key_order`](oxyn_catalog::model::Relation::previews_in_key_order),
+    /// and by nothing otherwise
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)). It
+    /// sets that flag, in `describe_relation`, only for a relation where
+    /// `ORDER BY key LIMIT n` is a bounded read: the interface offers pages
+    /// from the same flag, so an order composed without it — or the flag
+    /// without the order — shows a page that repeats or skips rows.
     async fn preview_request(
         &self,
         _path: &CatalogPath,

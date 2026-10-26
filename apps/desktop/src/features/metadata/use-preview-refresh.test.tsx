@@ -104,6 +104,7 @@ function renderPreviews(open: OpenConnection, relations: Array<string>) {
           address: address(relation),
           enabled: true,
           visible: visible.get(relation) ?? false,
+          described: null,
         })
       ),
     {

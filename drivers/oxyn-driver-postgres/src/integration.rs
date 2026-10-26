@@ -2594,6 +2594,80 @@ async fn pages_of_a_sorted_preview_neither_overlap_nor_omit_a_row() {
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_plain_preview_is_ordered_exactly_when_the_description_says_so() {
+    use oxyn_catalog::CatalogPath;
+
+    let Some(session) = session().await else {
+        return;
+    };
+    for sql in [
+        "CREATE TABLE oxyn_order_keyed (id bigint PRIMARY KEY, name text)",
+        "CREATE TABLE oxyn_order_swapped (a int, b int, note text, PRIMARY KEY (b, a))",
+        "CREATE TABLE oxyn_order_parts (id int, at date, PRIMARY KEY (id, at)) \
+         PARTITION BY RANGE (at)",
+        "CREATE TABLE oxyn_order_parts_1 PARTITION OF oxyn_order_parts \
+         FOR VALUES FROM ('2020-01-01') TO ('2030-01-01')",
+        "CREATE TABLE oxyn_order_parent (id int PRIMARY KEY)",
+        "CREATE TABLE oxyn_order_child () INHERITS (oxyn_order_parent)",
+        "CREATE VIEW oxyn_order_view AS SELECT * FROM oxyn_order_keyed",
+        "CREATE TABLE oxyn_order_keyless (x text)",
+    ] {
+        apply(&*session, sql).await;
+    }
+    let token = CancelToken::new();
+    for (relation, order) in [
+        ("oxyn_order_keyed", Some("ORDER BY \"id\" ASC LIMIT")),
+        // The index's order, not the table's: `a, b` would sort every row.
+        (
+            "oxyn_order_swapped",
+            Some("ORDER BY \"b\" ASC, \"a\" ASC LIMIT"),
+        ),
+        (
+            "oxyn_order_parts",
+            Some("ORDER BY \"id\" ASC, \"at\" ASC LIMIT"),
+        ),
+        ("oxyn_order_parent", None),
+        ("oxyn_order_view", None),
+        ("oxyn_order_keyless", None),
+    ] {
+        let path = CatalogPath::for_relation(None, Some("public"), relation).expect("path");
+        let described = session
+            .catalog()
+            .describe_relation(&path, &token)
+            .await
+            .unwrap_or_else(|error| panic!("describing `{relation}`: {error}"));
+        let request = session
+            .preview_request(&path, 200, &PreviewShape::unordered(), &token)
+            .await
+            .unwrap_or_else(|error| panic!("composing `{relation}`: {error}"));
+        assert_eq!(
+            request.text.contains("ORDER BY"),
+            described.previews_in_key_order(),
+            "the page the interface offers and the order must agree on `{relation}`: {}",
+            request.text
+        );
+        match order {
+            Some(order) => assert!(request.text.contains(order), "{}", request.text),
+            None => assert!(!request.text.contains("ORDER BY"), "{}", request.text),
+        }
+        let mut cursor = session
+            .execute(request, &token)
+            .await
+            .unwrap_or_else(|error| panic!("executing `{relation}`: {error}"));
+        let _ = drain(&mut cursor).await;
+    }
+    for sql in [
+        "DROP VIEW oxyn_order_view",
+        "DROP TABLE oxyn_order_keyed, oxyn_order_swapped, oxyn_order_parts, \
+         oxyn_order_child, oxyn_order_parent, oxyn_order_keyless",
+    ] {
+        apply(&*session, sql).await;
+    }
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement() {
     use arrow::array::{Array as _, AsArray as _};
     use oxyn_catalog::CatalogPath;

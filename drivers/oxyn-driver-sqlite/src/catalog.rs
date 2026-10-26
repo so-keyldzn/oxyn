@@ -224,6 +224,7 @@ impl CatalogProvider for SqliteCatalog {
                 };
                 Ok(Some(RawRelation {
                     kind,
+                    is_virtual: is_virtual(connection, &database, &name)?,
                     columns: table_info(connection, &database, &name)?,
                 }))
             })
@@ -241,7 +242,16 @@ impl CatalogProvider for SqliteCatalog {
             .map(RawColumn::into_field)
             .collect();
         // `estimated_rows` and `comment` stay absent: see the module note.
-        Ok(Relation::new(visible, described.kind).with_fields(fields))
+        let relation = Relation::new(visible, described.kind).with_fields(fields);
+        // A b-tree table answers `ORDER BY key LIMIT n` from its index; a view
+        // has no key to order on, and says so by having none. A virtual table
+        // may have to read every row first: its previews are left unordered
+        // until the user asks for an order.
+        Ok(if described.is_virtual {
+            relation
+        } else {
+            relation.with_key_order_preview()
+        })
     }
 
     async fn list_indexes(
@@ -351,6 +361,9 @@ impl CatalogProvider for SqliteCatalog {
 /// A relation as the engine describes it, before translation.
 struct RawRelation {
     kind: RelationKind,
+    /// A virtual table: its module, not the engine, decides what reading it in
+    /// key order costs.
+    is_virtual: bool,
     columns: Vec<RawColumn>,
 }
 
@@ -362,6 +375,9 @@ struct RawColumn {
     not_null: bool,
     default: Option<String>,
     primary_key: bool,
+    /// `pk` is the column's rank in the key, from 1, which is the order of the
+    /// key's index — not the order of the columns in the table.
+    key_rank: Option<u32>,
 }
 
 impl RawColumn {
@@ -377,6 +393,7 @@ impl RawColumn {
         // repeats what the server says, it does not recompute it.
         field.nullable = !self.not_null;
         field.is_primary_key = self.primary_key;
+        field.primary_key_rank = self.key_rank;
         field.default = self.default;
         field
     }
@@ -446,18 +463,35 @@ fn relation_kind(
     }))
 }
 
+/// Whether `name` is a virtual table, by the engine's own `PRAGMA table_list`.
+///
+/// Both values are **bound**: a table named `"x"; DROP TABLE y; --` is legal.
+fn is_virtual(connection: &Connection, database: &str, name: &str) -> Result<bool> {
+    let mut statement = connection
+        .prepare("SELECT type FROM pragma_table_list WHERE schema = ?1 AND name = ?2")
+        .map_err(read)?;
+    let mut rows = statement.query([database, name]).map_err(read)?;
+    let Some(row) = rows.next().map_err(read)? else {
+        return Ok(false);
+    };
+    let kind: String = row.get(0).map_err(read)?;
+    Ok(kind == "virtual")
+}
+
 /// The columns of a relation.
 fn table_info(connection: &Connection, database: &str, name: &str) -> Result<Vec<RawColumn>> {
     let mut columns = Vec::new();
     connection
         .pragma(Some(database), "table_info", name, |row| {
+            let key_rank: i64 = row.get("pk")?;
             columns.push(RawColumn {
                 cid: row.get("cid")?,
                 name: row.get("name")?,
                 declared: row.get::<_, Option<String>>("type")?.unwrap_or_default(),
                 not_null: row.get::<_, i64>("notnull")? != 0,
                 default: row.get("dflt_value")?,
-                primary_key: row.get::<_, i64>("pk")? != 0,
+                primary_key: key_rank != 0,
+                key_rank: u32::try_from(key_rank).ok().filter(|rank| *rank > 0),
             });
             Ok(())
         })

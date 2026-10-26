@@ -1,10 +1,16 @@
-<!-- oxyn-translation source="docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md" sha256="39f59036fca3" -->
+<!-- oxyn-translation source="docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md" sha256="135fd8fbf82c" -->
 
 > Traduction française de [docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md). **La version anglaise fait foi.**
 
 # ADR-0028 — Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total
 
 **Statut :** accepté · **Date :** 2026-09-15
+
+> **Remplacé en partie par [ADR-0068](0068-a-preview-comes-in-key-order.md)**
+> (2026-10-26), sur les points de décision 1 et 2 pour une relation qui a une clé
+> primaire et dont le driver se porte garant : un tel aperçu arrive dans l'ordre
+> de la clé et offre des pages. Cet ADR reste la référence pour l'absence de
+> page sans ordre total (`NoUniqueKey`) et pour le point 3.
 
 **Précise :** [ADR-0020](0020-apercu-trie-filtre-parcouru.md), dont la décision
 « sans tri demandé, le driver ordonne par la clé primaire seule » n'a pas été

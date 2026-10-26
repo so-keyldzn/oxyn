@@ -66,6 +66,23 @@ Two consequences drivers miss most often:
   from the sample but present further on must produce an explicit error or
   a schema widening — never a silently lost value.
 
+**A preview comes in key order only where that order is a bounded read**
+([ADR-0068](adr/0068-a-preview-comes-in-key-order.md), which lists who vouches
+and why). A driver sets `Relation::key_order_preview` in `describe_relation`
+only for a relation where `ORDER BY <key> LIMIT n` reads about `n` rows, not
+the whole relation. With no sort requested, it composes `ORDER BY <key> ASC`
+**exactly when** `Relation::previews_in_key_order()` holds, and no order
+otherwise. The key columns come in the **index's** order, not the table's: the
+driver fills `Field::primary_key_rank` with the engine's rank, which
+`Relation::primary_key()` orders by — a composite key ordered in table order
+can sort the whole relation. The interface offers pages from that same flag,
+so an order without the flag, or the flag without the order, shows a page that
+repeats or skips rows. A driver that cannot tell leaves the flag at its default, `false`.
+
+**Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
+it declares a primary key, makes a click on that table read every vector into a
+temporary b-tree before the first row appears.
+
 ### 4. It distinguishes three families of errors, and classifies them
 
 | Family | Examples | What the caller does |

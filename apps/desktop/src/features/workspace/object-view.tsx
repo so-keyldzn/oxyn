@@ -14,7 +14,11 @@ import {
   initialObjectTab,
 } from "@/components/oxyn/object-view-frame"
 import type { ObjectTab } from "@/components/oxyn/object-view-frame"
-import { PreviewControls } from "@/components/oxyn/preview-controls"
+import {
+  PreviewControls,
+  SortToBrowsePages,
+  previewFooterNote,
+} from "@/components/oxyn/preview-controls"
 import { RelationConstraints } from "@/components/oxyn/relation-constraints"
 import {
   DefinitionActions,
@@ -176,12 +180,19 @@ export function ObjectView({
   )
   const source = `preview:${open.connection}:${addressKey(node.address)}`
   const facets = useRelationFacets(open, node.address)
+  const detailFreshness = facets.facets?.detail.freshness
   const preview = usePreview({
     open,
     address: node.address,
     enabled: previewable,
     visible: active && tab === "data" && !held,
+    described:
+      detailFreshness?.state === "fetched"
+        ? detailFreshness.fetchedAt
+        : (detailFreshness?.state ?? null),
   })
+  // Held here: the footer's `Sort to browse pages` opens it too.
+  const [sortOpen, setSortOpen] = React.useState(false)
 
   const placeChange = React.useRef(onPlaceChange)
   placeChange.current = onPlaceChange
@@ -217,6 +228,9 @@ export function ObjectView({
   React.useEffect(() => {
     if (held) return
     switch (tab) {
+      // The rows are paged by the relation's key, which only its description
+      // tells the backend (ADR-0068): described once, like the Structure tab.
+      case "data":
       case "structure":
       case "indexes":
         ensure("detail")
@@ -321,6 +335,7 @@ export function ObjectView({
   const density = useResultDensity()
   const filterRef = React.useRef<HTMLInputElement>(null)
   const { applySort } = preview
+  const sortable = open.capabilities.includes("PREVIEW_SORT")
   const gridMenu = useGridMenu({
     open,
     connection: open.connection,
@@ -328,7 +343,7 @@ export function ObjectView({
     origin: "preview",
     address: node.address,
     filterable: open.capabilities.includes("PREVIEW_FILTER"),
-    sortable: open.capabilities.includes("PREVIEW_SORT"),
+    sortable,
     sort: React.useCallback(
       (column: string, descending: boolean) =>
         applySort([{ column, descending }]),
@@ -423,7 +438,7 @@ export function ObjectView({
             {moduleMissing ? null : (
               <PreviewControls
                 canFilter={open.capabilities.includes("PREVIEW_FILTER")}
-                canSort={open.capabilities.includes("PREVIEW_SORT")}
+                canSort={sortable}
                 columns={
                   data?.detail.value?.fields.map((field) => field.name) ?? null
                 }
@@ -438,6 +453,8 @@ export function ObjectView({
                 onCancel={preview.cancel}
                 onLoadColumns={() => void facets.refresh("detail")}
                 filterRef={filterRef}
+                sortOpen={sortOpen}
+                onSortOpenChange={setSortOpen}
               />
             )}
             {preview.approvalRefused ? (
@@ -460,15 +477,23 @@ export function ObjectView({
                   onCancel={preview.cancel}
                   onRetry={preview.refresh}
                   context={{ connectionName: open.name, statement: null }}
-                  footerNote="Preview · total row count not requested"
+                  footerNote={previewFooterNote(
+                    preview.pagination,
+                    state.status === "populated" ? state.rows : 0
+                  )}
                   density={density}
                   gridMenu={gridMenu}
                   // Compact: the export sits in `Actions`, and the footer shows
                   // only a running export's progress and its Cancel.
                   footerActions={
-                    !compact || exporter.state.status === "exporting"
-                      ? exportMenu
-                      : null
+                    <>
+                      {preview.pagination?.type === "needsOrder" && sortable ? (
+                        <SortToBrowsePages onClick={() => setSortOpen(true)} />
+                      ) : null}
+                      {!compact || exporter.state.status === "exporting"
+                        ? exportMenu
+                        : null}
+                    </>
                   }
                   compactActions={
                     compact ? (

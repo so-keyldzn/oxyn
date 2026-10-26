@@ -133,6 +133,19 @@ FROM pg_catalog.pg_class c \
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
 WHERE n.nspname = $1 AND c.relname = $2";
 
+/// [`SQL_RELATION`], and whether the relation has inheritance children — which
+/// [`previews_in_key_order`] needs.
+///
+/// A distinct text rather than one more column for every flavor: Redshift never
+/// orders a preview by default, and its truncated `pg_class` is not given a
+/// column to refuse.
+const SQL_RELATION_POSTGRES: &str = "\
+SELECT c.relkind::text, pg_catalog.obj_description(c.oid, 'pg_class'), c.reltuples, \
+       c.relhassubclass \
+FROM pg_catalog.pg_class c \
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+WHERE n.nspname = $1 AND c.relname = $2";
+
 /// The columns of a relation, in declaration order.
 ///
 /// `attnum > 0` excludes system columns (`ctid`, `xmin`…); `NOT attisdropped`
@@ -309,10 +322,16 @@ impl PostgresCatalog {
 
     /// Composes a relation's preview, and reads what its shape requires.
     ///
-    /// Two metadata reads, each paid only when it is used: the columns to
-    /// render as text for the projection, and the relation's description when a
-    /// sort or a page requires an order. A preview without request therefore
-    /// makes no more round trips than before.
+    /// On PostgreSQL, one metadata read on every preview: the typed column list,
+    /// which carries the primary key in index order and what decides whether
+    /// the preview comes in key order
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)). A
+    /// plain preview pays the round trip it already paid for the columns to
+    /// render as text; a sorted or paged one no longer pays a full description
+    /// on top of it.
+    ///
+    /// On Redshift, the description is read only when a sort, a page or a
+    /// projection depends on it, and a preview is never ordered by default.
     ///
     /// # Errors
     /// [`OxynError::Cancelled`] if the token fires, those of
@@ -330,21 +349,15 @@ impl PostgresCatalog {
             return Err(OxynError::Cancelled);
         }
         let dialect = self.variant.flavor.dialect();
-        // The unique key and the column list serve to compose an `ORDER BY`,
-        // and on Redshift to check a projection: without sort, page or
-        // projection to check, nothing reads them. The predicate, for its part,
-        // goes out as is and needs no metadata.
-        let redshift = dialect == oxyn_core::SqlDialect::Redshift;
-        // Redshift has no typed column list below, so a projection is checked
-        // against this description instead; PostgreSQL checks it against that
-        // list, and pays no extra round trip for it.
-        let facts = if shape.needs_total_order() || (redshift && shape.columns.is_some()) {
-            crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
-        } else {
-            crate::preview::RelationFacts::default()
-        };
-        // Redshift does not expose PostgreSQL's complete type catalog.
-        if redshift {
+        // Redshift does not expose PostgreSQL's complete type catalog: no typed
+        // column list, so a projection is checked against the description. The
+        // predicate, for its part, goes out as is and needs no metadata.
+        if self.variant.flavor == PostgresFlavor::Redshift {
+            let facts = if shape.needs_total_order() || shape.columns.is_some() {
+                crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
+            } else {
+                crate::preview::RelationFacts::default()
+            };
             return crate::preview::request(&self.database, dialect, path, limit, shape, &facts);
         }
         let (Some(namespace), Some(relation)) = (path.namespace(), path.relation()) else {
@@ -355,10 +368,8 @@ impl PostgresCatalog {
         let rows = self
             .fetch(cancel, crate::preview::SQL_COLUMNS, &[namespace, relation])
             .await?;
-        let columns = rows
-            .iter()
-            .map(|row| Ok((row.try_get::<String, _>(0)?, row.try_get::<bool, _>(1)?)))
-            .collect::<std::result::Result<Vec<_>, sqlx::Error>>()
+        let (columns, facts) = self
+            .typed_columns(&rows)
             .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
         crate::preview::request_with_columns(
             &self.database,
@@ -369,6 +380,42 @@ impl PostgresCatalog {
             shape,
             &facts,
         )
+    }
+
+    /// Reads the rows of [`crate::preview::SQL_COLUMNS`]: the columns to
+    /// project, each with whether it is read as text, and the ordering facts.
+    fn typed_columns(
+        &self,
+        rows: &[PgRow],
+    ) -> std::result::Result<(Vec<(String, bool)>, crate::preview::RelationFacts), sqlx::Error>
+    {
+        let mut columns = Vec::with_capacity(rows.len());
+        let mut key = Vec::new();
+        // Every row repeats the relation's own facts; none at all (no
+        // relation, or no column) leaves it unordered.
+        let mut key_order = false;
+        for row in rows {
+            let name = row.try_get::<String, _>(0)?;
+            let as_text = row.try_get::<bool, _>(1)?;
+            if let Some(rank) = row.try_get::<Option<i64>, _>(2)? {
+                key.push((rank, name.clone()));
+            }
+            let kind = row.try_get::<Option<String>, _>(3)?;
+            // Unknown is read as "has children": the order is then not vouched
+            // for, which costs a page, never a scan.
+            let has_children = row.try_get::<Option<bool>, _>(4)?.unwrap_or(true);
+            key_order = kind.is_some_and(|kind| {
+                previews_in_key_order(self.variant.flavor, &kind, has_children)
+            });
+            columns.push((name, as_text));
+        }
+        key.sort_by_key(|(rank, _)| *rank);
+        let names = columns.iter().map(|(name, _)| name.clone()).collect();
+        let key = key.into_iter().map(|(_, name)| name).collect();
+        Ok((
+            columns,
+            crate::preview::RelationFacts::typed(names, key, key_order),
+        ))
     }
 
     /// Checks that a path targets this session's database.
@@ -556,7 +603,13 @@ impl CatalogProvider for PostgresCatalog {
     ) -> Result<Relation> {
         let (ns, name) = self.require_relation(relation)?;
 
-        let headers = self.fetch(cancel, SQL_RELATION, &[ns, name]).await?;
+        let redshift = self.variant.flavor == PostgresFlavor::Redshift;
+        let header_sql = if redshift {
+            SQL_RELATION
+        } else {
+            SQL_RELATION_POSTGRES
+        };
+        let headers = self.fetch(cancel, header_sql, &[ns, name]).await?;
         let Some(header) = headers.first() else {
             return Err(OxynError::CatalogUnavailable(
                 "this relation does not exist, or the account is not allowed to see it".to_owned(),
@@ -566,6 +619,15 @@ impl CatalogProvider for PostgresCatalog {
         let kind: String = read_text(header, 0)?;
         let comment: Option<String> = header.try_get(1).unwrap_or(None);
         let estimation: Option<f32> = header.try_get(2).ok();
+        // Redshift's header carries no such column, and is never ordered by
+        // default. Unreadable is read as "has children", like the preview reads
+        // it: the two must reach the same answer.
+        let key_order = !redshift
+            && previews_in_key_order(
+                self.variant.flavor,
+                &kind,
+                header.try_get(3).unwrap_or(true),
+            );
 
         let mut described_relation =
             Relation::new(name, relation_kind(&kind).unwrap_or(RelationKind::Table));
@@ -613,7 +675,12 @@ impl CatalogProvider for PostgresCatalog {
             fields.push(field);
         }
 
-        Ok(described_relation.with_fields(fields))
+        let described_relation = described_relation.with_fields(fields);
+        Ok(if key_order {
+            described_relation.with_key_order_preview()
+        } else {
+            described_relation
+        })
     }
 
     /// The indexes of a relation.
@@ -787,6 +854,41 @@ fn read_text(row: &PgRow, ordinal: usize) -> Result<String> {
     })
 }
 
+/// Whether a preview of this relation may come in primary key order when no
+/// sort is asked for — the driver's word behind
+/// [`Relation::key_order_preview`].
+///
+/// Decided in one place for the two readers that must agree: the description,
+/// from which the interface offers a page, and the typed column list, from
+/// which the preview is composed.
+///
+/// - An ordinary table answers `ORDER BY key LIMIT n` from its key's index.
+/// - A partitioned one too, merging its partitions' indexes: a key on it spans
+///   every partition, and is unique across them.
+/// - An ordinary table with **inheritance children** is not vouched for: its
+///   key covers none of them — a child has neither its index nor its
+///   uniqueness — so ordering reads and sorts every child row. A TimescaleDB
+///   hypertable is one, and a compressed chunk has no index to read in order.
+/// - A view, a materialized view, a foreign table have no primary key to order
+///   on, and are not vouched for either way.
+/// - Amazon Redshift never: its keys are informational, not enforced — so not
+///   unique in fact — and ordering a warehouse table on every opening is a
+///   distributed scan billed per read.
+pub(crate) fn previews_in_key_order(
+    flavor: PostgresFlavor,
+    relkind: &str,
+    has_children: bool,
+) -> bool {
+    if flavor == PostgresFlavor::Redshift {
+        return false;
+    }
+    match relkind {
+        "p" => true,
+        "r" => !has_children,
+        _ => false,
+    }
+}
+
 /// Translates a `pg_class` `relkind`.
 ///
 /// An unknown value returns `None`: it comes from a PostgreSQL version newer
@@ -955,6 +1057,25 @@ mod tests {
                 !query.contains("information_schema.")
                     || query.contains("nspname = 'information_schema'"),
                 "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_tables_whose_key_covers_every_row_are_previewed_in_key_order() {
+        let postgres = PostgresFlavor::Postgres;
+        assert!(previews_in_key_order(postgres, "r", false));
+        // A partitioned table always has children: its key spans them.
+        assert!(previews_in_key_order(postgres, "p", true));
+        // An inheritance parent: no child carries its index or its uniqueness.
+        assert!(!previews_in_key_order(postgres, "r", true));
+        for kind in ["v", "m", "f", "S", "i", "c", ""] {
+            assert!(!previews_in_key_order(postgres, kind, false), "{kind}");
+        }
+        for (kind, children) in [("r", false), ("p", true)] {
+            assert!(
+                !previews_in_key_order(PostgresFlavor::Redshift, kind, children),
+                "Redshift keys are not enforced: {kind}"
             );
         }
     }

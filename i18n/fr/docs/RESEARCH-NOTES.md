@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="81f81f056049" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="9b1ba9956aab" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3287,3 +3287,20 @@ n'ajoute aucune dépendance : il utilise `reqwest` 0.13.4 (`rustls`), `arrow`
 | `create_table_query` montre le `PASSWORD` de la source d'un dictionnaire et la clé secrète d'un moteur `S3` sous la forme `'[HIDDEN]'` ; `format_display_secrets_in_show_and_select` vaut `false` par défaut et n'agit que si la configuration du serveur le permet | la lecture de définition du pilote le fixe à `0` dès que le compte peut porter des réglages, et retient la définition s'il vaut encore `1` | observé sur 26.3.59.10 |
 | `sleepEachRow` refuse plus de 3 s par bloc (`Code: 160 TOO_SLOW`) ; `max_execution_time` arrête une lecture avec le code 159 | le test de délai lit des blocs d'une ligne | observé sur 26.3.59.10 |
 | `errorCodeToName` renvoie, pour chacun des 54 codes que la classification nomme, le nom que le pilote lui donne (8 `THERE_IS_NO_COLUMN` … 394 `QUERY_WAS_CANCELLED`, 497 `ACCESS_DENIED`, 516 `AUTHENTICATION_FAILED`, 999 `KEEPER_EXCEPTION`) | les codes de la classification sont ceux du serveur | une requête sur toute la liste, sur 26.3.59.10 |
+
+## Ordre par défaut d'un aperçu — vérifié le 2026-10-26
+
+Question : où `ORDER BY <clé primaire> LIMIT n` est-il une lecture bornée, de
+sorte qu'un driver puisse s'en porter garant ? Les réponses fondent
+[ADR-0068](adr/0068-a-preview-comes-in-key-order.md).
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Sur une table `vec0`, `EXPLAIN QUERY PLAN SELECT * FROM <table vec0> ORDER BY rowid LIMIT 200` rapporte `SCAN … VIRTUAL TABLE INDEX 0:1` puis `USE TEMP B-TREE FOR ORDER BY` : le module ne sert pas l'ordre, et SQLite lit chaque ligne, vecteurs compris, avant de rendre la première | exécuté sur le SQLite 3.50.2 embarqué (`libsqlite3-sys` 0.35.0) avec `sqlite-vec` 0.1.9 ; la conséquence est tenue par `a_vec0_table_is_not_ordered_by_default_but_can_be_sorted` (`drivers/oxyn-driver-sqlite/src/vector_tests.rs`) | 2026-10-26 |
+| `vec0` déclare sa colonne de clé comme clé primaire de la table virtuelle : `sqlite3_str_appendf(createStr, "\"%.*w\" primary key, ", …)`, si bien que `PRAGMA table_info` y rapporte une clé | source de la crate `sqlite-vec-0.1.9/sqlite-vec.c` l. 4955 | 2026-10-26 |
+| Amazon Redshift : « Uniqueness, primary key, and foreign key constraints are informational only; they are not enforced by Amazon Redshift when you populate a table » | [contraintes de table Redshift](https://docs.aws.amazon.com/redshift/latest/dg/t_Defining_constraints.html) | 2026-10-26 |
+| DuckDB : l'index ART est « mainly used to ensure primary key constraints » et sert à « speed up point and very highly selective (i.e., < 0.1%) queries » ; la page ne décrit aucun parcours ordonné pour `ORDER BY` | [index DuckDB](https://duckdb.org/docs/2.0/sql/indexes.html), la page vers laquelle `stable` redirige | 2026-10-26 |
+| DuckDB, 10 millions de lignes, base en mémoire, Apple M1 Max, profil dev avec le moteur à `opt-level` 2, 3 passes : sans `ORDER BY` 1,8–2 ms ; `ORDER BY id LIMIT 200` 1,9 ms dans l'ordre d'insertion, environ 25 ms mélangées ; avec `OFFSET 5000000`, environ 130 ms, 430–540 ms mélangées. Le plan est un `TOP_N` sur un `SEQ_SCAN` avec un filtre dynamique sur la clé (zone maps). Une base sur fichier n'a pas été mesurée | test jetable depuis supprimé ; chiffres consignés dans le commentaire de `drivers/oxyn-driver-duckdb/src/catalog.rs` | 2026-10-26 |
+| PostgreSQL 17.11 : avec `PRIMARY KEY (b, a)` sur une table déclarée `(a, b)`, `ORDER BY a, b LIMIT 200` s'exécute en Seq Scan suivi d'un Sort de toute la table, `ORDER BY b, a` utilise l'index. Une table qui hérite d'un parent n'a ni l'index de clé primaire du parent ni son unicité | `EXPLAIN` sur un PostgreSQL 17.11 local ; l'accord de l'aperçu est tenu par `a_plain_preview_is_ordered_exactly_when_the_description_says_so` (`drivers/oxyn-driver-postgres/src/integration.rs`) | 2026-10-26 |
+| SQLite : ordonner une clé composite dans l'ordre de rang de la colonne `pk` de `PRAGMA table_info` ne laisse aucun `USE TEMP B-TREE FOR ORDER BY` dans `EXPLAIN QUERY PLAN` | `a_composite_key_is_ordered_as_its_index_not_as_its_table` (`drivers/oxyn-driver-sqlite/src/lib.rs`), SQLite 3.50.2 embarqué | 2026-10-26 |
+| MySQL/MariaDB : un aperçu simple exécute désormais 2 instructions de métadonnées (l'en-tête, puis les colonnes, chacune en prepare/execute/close) là où il n'en exécutait aucune | compté dans le code du driver ; **non mesuré** sur un serveur réel, aucun n'était disponible | 2026-10-26 |

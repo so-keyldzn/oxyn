@@ -583,6 +583,13 @@ async fn the_catalog_lists_databases_collections_views_and_indexes() {
     assert!(described.has_inferred_schema());
     assert_eq!(described.estimated_rows, Some(1));
     assert!(described.field("_id").is_some_and(|f| f.is_primary_key));
+    assert!(described.previews_in_key_order());
+    let recent = CatalogPath::for_relation(None, Some(&database), "recent").expect("path");
+    let recent = catalog
+        .describe_relation(&recent, &token)
+        .await
+        .expect("describe the view");
+    assert!(!recent.key_order_preview && !recent.previews_in_key_order());
     let indexes = catalog
         .list_indexes(&orders, &token)
         .await
@@ -737,6 +744,68 @@ async fn a_preview_is_bounded_ordered_by_id_when_sorted_and_read_only() {
     // g = 2 for ids 2, 5, 8, …, 29 (ten of them), ordered by _id: skip five.
     assert_eq!(ids.value(0), 17);
     drop(cursor);
+    drop_database(&*session, &database).await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MongoDB server: see the module documentation"]
+async fn a_plain_preview_comes_in_id_order_and_a_view_in_natural_order() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let database = database(&*session, "preview_order").await;
+    // Inserted out of `_id` order: natural order would put 3 first.
+    insert(
+        &*session,
+        &database,
+        "items",
+        r#"[{"_id": 3}, {"_id": 1}, {"_id": 2}]"#,
+    )
+    .await;
+    run(
+        &*session,
+        format!(
+            r#"{{"create": "items_view", "$db": "{database}", "viewOn": "items", "pipeline": []}}"#
+        ),
+    )
+    .await
+    .expect("view");
+    let preview = |name: &str| CatalogPath::for_relation(None, Some(&database), name);
+    let request = session
+        .preview_request(
+            &preview("items").expect("path"),
+            10,
+            &PreviewShape::unordered(),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("composed");
+    assert!(
+        request.text.contains(r#""sort":{"_id":1}"#),
+        "{}",
+        request.text
+    );
+    let mut cursor = session
+        .execute(request, &CancelToken::new())
+        .await
+        .expect("runs");
+    let batch = cursor.next_batch().await.expect("stream").expect("rows");
+    let ids = batch
+        .column(batch.schema().index_of("_id").expect("_id"))
+        .as_primitive::<arrow::datatypes::Int32Type>();
+    assert_eq!(ids.value(0), 1);
+    drop(cursor);
+    let view = session
+        .preview_request(
+            &preview("items_view").expect("path"),
+            10,
+            &PreviewShape::unordered(),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("composed");
+    assert!(!view.text.contains("sort"), "{}", view.text);
     drop_database(&*session, &database).await;
     session.close().await.expect("close");
 }

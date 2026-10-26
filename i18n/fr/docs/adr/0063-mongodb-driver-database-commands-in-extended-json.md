@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="7d8287a06107" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="8eefaaa9d647" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -11,6 +11,10 @@ une base documentaire reçoit sa propre crate (OP_MSG et BSON ne partagent rien
 avec les drivers déjà écrits), et son langage de requête est
 `QueryLanguage::MongoQuery`, défini ci-dessous comme des commandes de base, pas
 comme un shell JavaScript.
+
+> **Précisé par [ADR-0068](0068-a-preview-comes-in-key-order.md)** (2026-10-26) :
+> l'aperçu d'une collection ordinaire est trié sur `_id` quand aucun tri n'est
+> demandé, là où cet ADR dit « sans ordre imposé ».
 
 ## Contexte
 

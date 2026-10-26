@@ -184,8 +184,12 @@ impl Session for DuckDbSession {
         })
     }
 
-    /// Composes a read-only preview, reading the relation's description when
-    /// the shape needs it.
+    /// Composes a read-only preview, reading the relation's description first.
+    ///
+    /// The description is read on every preview, since one with no sort asked
+    /// for still comes in key order
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)): it
+    /// reads DuckDB's own catalog functions, not the table.
     ///
     /// # Errors
     /// [`OxynError::Cancelled`], those of the composition, and the engine's.
@@ -199,11 +203,8 @@ impl Session for DuckDbSession {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        let facts = if shape.needs_total_order() || shape.columns.is_some() {
-            crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?)
-        } else {
-            crate::preview::RelationFacts::default()
-        };
+        let facts =
+            crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?);
         crate::preview::request(path, limit, shape, &facts)
     }
 

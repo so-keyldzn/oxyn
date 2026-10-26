@@ -15,46 +15,75 @@ use oxyn_core::{
     StatementIntent,
 };
 
-// Resolve array elements and domain bases without asking SQLx to decode their
-// type metadata. UNION also stops cycles in malformed catalogs.
+/// The typed column list of a relation, with what ordering it needs: one round
+/// trip carries the whole preview's metadata on PostgreSQL.
+///
+/// Per column: its name, whether it is read as text, and its rank in the
+/// primary key (`NULL` outside it). Repeated on every row: the relation's
+/// `relkind` and `relhassubclass`, from which
+/// [`crate::catalog::previews_in_key_order`] decides whether a preview comes in
+/// key order — the same decision `describe_relation` declares, so the order and
+/// the page the interface offers agree.
+///
+/// The rank is the column's place **in the index**, not in the table: ordering
+/// a key declared `(b, a)` as `a, b` cannot use the index, and reads and sorts
+/// the whole table to return 200 rows (seen on 17.11, 2026-10-26).
+///
+/// Array elements and domain bases are resolved without asking SQLx to decode
+/// their type metadata. UNION also stops cycles in malformed catalogs.
 pub(crate) const SQL_COLUMNS: &str = "\
-WITH RECURSIVE column_types(attnum, attname, type_oid) AS ( \
-    SELECT a.attnum, a.attname, a.atttypid \
-    FROM pg_catalog.pg_attribute a \
-    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+WITH RECURSIVE target AS ( \
+    SELECT c.oid, c.relkind, c.relhassubclass \
+    FROM pg_catalog.pg_class c \
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
     WHERE n.nspname = $1 AND c.relname = $2 \
-      AND a.attnum > 0 AND NOT a.attisdropped \
+), column_types(attnum, attname, type_oid) AS ( \
+    SELECT a.attnum, a.attname, a.atttypid \
+    FROM pg_catalog.pg_attribute a JOIN target ON target.oid = a.attrelid \
+    WHERE a.attnum > 0 AND NOT a.attisdropped \
     UNION \
     SELECT c.attnum, c.attname, \
            CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.typelem END \
     FROM column_types c JOIN pg_catalog.pg_type t ON t.oid = c.type_oid \
     WHERE t.typtype = 'd' OR (t.typcategory = 'A' AND t.typelem <> 0) \
+), key_columns(attnum, rank) AS ( \
+    SELECT k.attnum, k.rank \
+    FROM pg_catalog.pg_index i JOIN target ON target.oid = i.indrelid \
+    CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, rank) \
+    WHERE i.indisprimary \
 ) \
 SELECT c.attname::text, \
        bool_or(t.typsend = 0 OR t.typcategory = 'Z' OR \
          (n.nspname = 'pg_catalog' AND t.typname IN \
            ('regproc', 'regprocedure', 'regoper', 'regoperator', 'regclass', \
             'regtype', 'regconfig', 'regdictionary', 'regnamespace', \
-            'regrole', 'regcollation', 'int2vector', 'oidvector'))) \
+            'regrole', 'regcollation', 'int2vector', 'oidvector'))), \
+       min(k.rank), \
+       (SELECT target.relkind::text FROM target), \
+       (SELECT target.relhassubclass FROM target) \
 FROM column_types c JOIN pg_catalog.pg_type t ON t.oid = c.type_oid \
 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
+LEFT JOIN key_columns k ON k.attnum = c.attnum \
 GROUP BY c.attnum, c.attname ORDER BY c.attnum";
 
 /// What the catalog says about a relation, as far as ordering — and, on
 /// Redshift, projecting — needs it.
 ///
-/// Read from the server **only** when the requested shape depends on it — a
-/// plain preview pays no metadata round trip for a clause it does not compose.
-/// An empty [`Self::columns`] therefore means « nothing was read », and it is
-/// only ever paired with a shape that asks for no order, and with a projection
-/// only when the typed column list checks it instead.
+/// On PostgreSQL it comes with the typed column list, in the same round trip,
+/// on every preview: one with no sort asked for still comes in key order
+/// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)). On
+/// Redshift it is read only when the shape depends on it, and never orders a
+/// preview by default. An empty [`Self::columns`] means « nothing was read »:
+/// on Redshift, a shape that asks for neither order nor projection.
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     /// Column names, as the catalog spells them.
     columns: Vec<String>,
     /// The columns of a known unique key, empty when none is declared.
     key: Vec<String>,
+    /// Whether the key orders the preview when no sort is asked for: see
+    /// [`Relation::previews_in_key_order`].
+    ordered_by_default: bool,
 }
 
 impl RelationFacts {
@@ -72,6 +101,21 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
+            ordered_by_default: relation.previews_in_key_order(),
+        }
+    }
+
+    /// The facts read with the typed column list.
+    ///
+    /// `key` is in index order. `key_order` is the driver's word that this
+    /// relation's previews come in key order; without a key it orders nothing,
+    /// exactly as [`Relation::previews_in_key_order`] decides.
+    pub(crate) fn typed(columns: Vec<String>, key: Vec<String>, key_order: bool) -> Self {
+        let ordered_by_default = key_order && !key.is_empty();
+        Self {
+            columns,
+            key,
+            ordered_by_default,
         }
     }
 }
@@ -220,7 +264,8 @@ fn select_list(
 /// The order does **not** depend on the page: the unique key completes the
 /// requested sort even on the first page. Ordering page 0 by `name` alone and
 /// page 1 by `name, id` would show a tied row twice and hide another, exactly
-/// at the boundary nobody inspects.
+/// at the boundary nobody inspects. For the same reason a relation ordered by
+/// default is ordered on its key from the first page, sort or no sort.
 ///
 /// # Errors
 /// [`OxynError::Query`] when a sort names a column the relation does not
@@ -232,7 +277,7 @@ fn order_by(
     facts: &RelationFacts,
     style: QuoteStyle,
 ) -> Result<Option<String>> {
-    if shape.sort.is_empty() && shape.offset == 0 {
+    if !shape.needs_total_order() && !facts.ordered_by_default {
         return Ok(None);
     }
     let mut terms = Vec::with_capacity(shape.sort.len() + facts.key.len());
@@ -290,8 +335,19 @@ mod tests {
         Relation::new("t", RelationKind::Table).with_fields(fields)
     }
 
+    /// The facts of an ordinary PostgreSQL table, whose previews the driver
+    /// vouches come in key order.
     fn facts(columns: &[(&str, bool)]) -> RelationFacts {
-        RelationFacts::of(&relation(columns))
+        RelationFacts::of(&relation(columns).with_key_order_preview())
+    }
+
+    /// The facts as the typed column list gives them: the key in index order.
+    fn typed(columns: &[&str], key: &[&str]) -> RelationFacts {
+        RelationFacts::typed(
+            columns.iter().map(|name| (*name).to_owned()).collect(),
+            key.iter().map(|name| (*name).to_owned()).collect(),
+            true,
+        )
     }
 
     fn path() -> CatalogPath {
@@ -303,11 +359,94 @@ mod tests {
     }
 
     #[test]
-    fn a_preview_without_request_composes_neither_where_nor_order_by() {
+    fn a_preview_without_request_composes_neither_where_nor_order_by_when_no_key_is_known() {
         let request =
             compose(&PreviewShape::unordered(), &RelationFacts::default()).expect("plain preview");
         assert_eq!(request.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
         assert!(request.params.is_empty());
+        // A relation vouched for but without a key — a keyless table — is read
+        // as the server returns it: no page could be offered over it either way.
+        for keyless in [facts(&[("name", false)]), typed(&["name"], &[])] {
+            let request = compose(&PreviewShape::unordered(), &keyless).expect("keyless preview");
+            assert_eq!(request.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
+        }
+    }
+
+    #[test]
+    fn a_preview_without_request_comes_in_key_order() {
+        for keyed in [
+            facts(&[("id", true), ("name", false)]),
+            typed(&["id", "name"], &["id"]),
+        ] {
+            let request = compose(&PreviewShape::unordered(), &keyed).expect("keyed preview");
+            assert_eq!(
+                request.text,
+                "SELECT * FROM \"public\".\"t\" ORDER BY \"id\" ASC LIMIT 200"
+            );
+        }
+        // A filter changes the rows, not the order they come in.
+        let filtered = PreviewShape {
+            predicate: Some("name <> ''".into()),
+            ..PreviewShape::default()
+        };
+        let request = compose(&filtered, &typed(&["id", "name"], &["id"])).expect("filtered");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"public\".\"t\" WHERE (name <> ''\n) ORDER BY \"id\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_composite_key_orders_in_index_order_not_table_order() {
+        // `PRIMARY KEY (b, a)` over columns `a, b`: ordering `a, b` cannot use
+        // the index and sorts the whole table to return 200 rows.
+        let request = compose(
+            &PreviewShape::unordered(),
+            &typed(&["a", "b", "note"], &["b", "a"]),
+        )
+        .expect("composite key");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"public\".\"t\" ORDER BY \"b\" ASC, \"a\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_relation_not_vouched_for_is_ordered_only_when_asked() {
+        // An inheritance parent: its key exists, but no child carries its index.
+        let unvouched = [
+            RelationFacts::of(&relation(&[("id", true), ("name", false)])),
+            RelationFacts::typed(vec!["id".into(), "name".into()], vec!["id".into()], false),
+        ];
+        for facts in &unvouched {
+            let plain = compose(&PreviewShape::unordered(), facts).expect("plain preview");
+            assert_eq!(plain.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
+            // Its key still completes a page, so the page stays honest.
+            let page = PreviewShape {
+                offset: 200,
+                ..PreviewShape::default()
+            };
+            assert_eq!(
+                compose(&page, facts).expect("page").text,
+                "SELECT * FROM \"public\".\"t\" ORDER BY \"id\" ASC LIMIT 200 OFFSET 200"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redshift_preview_is_never_ordered_by_default() {
+        // What `describe_relation` returns on Redshift: a key, never the flag.
+        let described = RelationFacts::of(&relation(&[("id", true), ("name", false)]));
+        let request = request(
+            "db",
+            SqlDialect::Redshift,
+            &path(),
+            200,
+            &PreviewShape::unordered(),
+            &described,
+        )
+        .expect("redshift preview");
+        assert_eq!(request.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
     }
 
     #[test]
@@ -554,7 +693,8 @@ mod tests {
             &path(),
             5,
             &shape,
-            &facts(&[("id", true), ("name", false)]),
+            // Redshift's description never carries the flag.
+            &RelationFacts::of(&relation(&[("id", true), ("name", false)])),
         )
         .expect("projection");
         assert_eq!(

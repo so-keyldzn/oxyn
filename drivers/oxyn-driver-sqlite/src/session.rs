@@ -196,10 +196,10 @@ impl Session for SqliteSession {
     /// Composes the preview of a relation, and reads what its shape requires.
     ///
     /// The description of the relation — its columns and its primary key — is read
-    /// only if a sort or a page requires an order, or if a projection names columns
-    /// to check: a preview without request does not pay a `PRAGMA table_info` for a
-    /// clause it does not compose. This read goes through the worker thread and is
-    /// interrupted like the others.
+    /// on every preview, since one with no sort asked for still comes in key order
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)). A
+    /// `PRAGMA table_info` is a read of the schema the connection already holds; it
+    /// goes through the worker thread and is interrupted like the others.
     ///
     /// # Errors
     /// [`OxynError::Cancelled`] if the token fires, those of the composition —
@@ -217,10 +217,29 @@ impl Session for SqliteSession {
         }
         // A projection is checked against the same description: a name the
         // relation does not declare is refused here, not by the engine.
-        let facts = if shape.needs_total_order() || shape.columns.is_some() {
-            crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?)
-        } else {
-            crate::preview::RelationFacts::default()
+        // Described where the preview reads: the catalog looks at the namespace
+        // alone, and a preview path may carry the database as a catalog.
+        let described = oxyn_catalog::CatalogPath::for_relation(
+            None,
+            Some(crate::preview::database_of(path)?),
+            path.relation().ok_or_else(|| {
+                OxynError::CatalogUnavailable("preview path must name a relation".into())
+            })?,
+        )?;
+        let facts = match self.catalog.describe_relation(&described, cancel).await {
+            Ok(relation) => crate::preview::RelationFacts::of(&relation),
+            // A table whose module this connection does not load cannot be
+            // described, and nothing here needs it: the read that follows fails
+            // with the same module as data, which is what the Data tab explains.
+            // Only a shape that depends on the description fails here.
+            Err(error)
+                if error.missing_module().is_some()
+                    && !shape.needs_total_order()
+                    && shape.columns.is_none() =>
+            {
+                crate::preview::RelationFacts::default()
+            }
+            Err(error) => return Err(error),
         };
         crate::preview::request(path, limit, shape, &facts)
     }

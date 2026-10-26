@@ -1050,7 +1050,7 @@ Important flows still to be wired, checked in the code:
 | Flow | Remaining work |
 |---|---|
 | Home: native acceptance test | The overlap is fixed and tested on the rendered rectangles; observing it on screen, at several widths and in both themes, remains to be done |
-| Table preview | Done, according to [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md): `PreviewSort` and `PreviewFilter` are in the command, the capabilities `PREVIEW_SORT` and `PREVIEW_FILTER` are declared, both drivers compose the quoted translation, and the next page exists when the order is deterministic. A pending decision remains on the default sort — see the open questions at the end of the document |
+| Table preview | Done, according to [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md): `PreviewSort` and `PreviewFilter` are in the command, the capabilities `PREVIEW_SORT` and `PREVIEW_FILTER` are declared, both drivers compose the quoted translation, and the next page exists when the order is deterministic. The default sort is decided by [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) (2026-10-26): a relation whose driver vouches for it comes in key order and offers pages without a sort. Remaining: the default order on a file-backed DuckDB database is not measured (in-memory is, in [RESEARCH-NOTES](RESEARCH-NOTES.md#default-preview-order--checked-on-2026-10-26)); the follow-ups ADR-0068 leaves out of scope — ClickHouse, Elasticsearch/OpenSearch, Redis — are not scheduled |
 | Session recovery | The shutdown marker is in place ([ADR-0021](adr/0021-marqueur-d-arret.md)): a `⌘Q` no longer triggers recovery, a session without a close whose heartbeat has aged does. Restoring the object location that [UX-SPEC](UX-SPEC.md#restoring-after-an-abrupt-stop) promises is held again in `apps/desktop` since 2026-09-25 (`ObjectLocation`, read by `read_object_location`) — see "Recovery and library" |
 | Cross-workspace library | Done: the filters carry the historical connections that were deleted or are outside the current workspace, through `Command::ListHistoryConnections` |
 | AI workspace | The [I-04](../CLAUDE.md#i-04) leak is closed: `ToolOutcome::Failed` carries a report with private fields whose only constructor requires the connection's tier, and the filter applies **at construction** — under `Local`/`Metadata`, the server's message never enters the structure. `PrivacyTier` now lives on the `ConnectionConfig`, as its documentation already claimed. Provider configuration, the conditional `Ask AI` entry (`190:1549`), proposals through the bus and persistent provenance of documents are done, and `oxyn-ai` is a declared dependency of `oxyn-app` — of `oxyn-desktop` since the removal of GPUI |
@@ -2511,6 +2511,14 @@ correct. It carries `accepted` since the
 [review of 2026-09-24](#3-the-status-of-adrs-review-of-2026-09-24), which cites its two
 tests. The status of ADR-0020, which it clarifies, falls under that same review.
 
+**Closed by [ADR-0068](adr/0068-a-preview-comes-in-key-order.md)** on
+2026-10-26. ADR-0028's second reconsideration condition was met — the user read
+the missing page control on an unsorted SQLite table as a flaw — and ADR-0068
+supersedes its points 1 and 2 for a relation with a primary key whose driver
+vouches for the order: such a preview comes in key order and offers pages.
+ADR-0020's remedy is restored there; ADR-0028 still holds `NoUniqueKey` and the
+check of the order against the shape the rows came from.
+
 ### 2. Two values for the first-display threshold
 
 **Resolved.** [ARCHITECTURE](ARCHITECTURE.md) no longer puts a number on this threshold since
@@ -2546,7 +2554,7 @@ carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepted | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
 | [0026](adr/0026-agents-externes-acp.md) | accepted | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
 | [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepted | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepted | `a_preview_without_request_composes_neither_where_nor_order_by` (both drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepted | `a_preview_without_request_composes_neither_where_nor_order_by_when_no_key_is_known` (SQLite driver), `a_plain_preview_is_ordered_exactly_when_the_description_says_so` (PostgreSQL driver), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`). Superseded in part on 2026-10-26 by [ADR-0068](adr/0068-a-preview-comes-in-key-order.md), points 1 and 2 for a relation the driver vouches for |
 | [0029](adr/0029-interface-tauri-shadcn.md) | accepted | `check_dependency_graph` of `.claude/verifier_socle.py` (through `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). The measurement campaign is its **reconsideration** condition, not a prerequisite |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepted | "rejects what the grid could not draw, rather than letting it through" (`apps/desktop/src/lib/ipc/types.test.ts`), "degrades an unknown ending instead of refusing the event" (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepted | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
@@ -2556,7 +2564,7 @@ carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | proposed | **code/ADR deviation**: its § 2 says that the columns "join no statement", whereas since `d6cf80b` they enter the `PreviewRelation` through `PreviewShape::columns`, quoted by the driver ([Phase 3](#phase-3--the-ai-workspace)). The rest is held (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`); the sentence must be clarified before accepting |
 | [0005](adr/0005-wasm-plugins.md) | proposed | WIT and component instantiation return "phase 4" (`oxyn-plugin/src/host.rs`) |
 | [0007](adr/0007-driver-sidecar.md) | proposed | no sidecar, postponed to phase 4 |
-| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposed | its default order on the primary key is contradicted by the code and by ADR-0028, which clarifies it |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposed | its default order on the primary key is contradicted by the code and by ADR-0028, which clarifies it. Since 2026-10-26, [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) restores that order where the driver vouches for it |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposed | implemented (`DRAFT_IDLE_MS`), but neither the delay nor the three immediate writes are tested |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | proposed | the Rust composer is tested, but the gesture is not mounted: `useSchemaProposal` has no caller |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposed | **code/ADR deviation**: § 2 bis promises one write per question, `WriteGate` applies "one pending request at a time" (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — to be decided |

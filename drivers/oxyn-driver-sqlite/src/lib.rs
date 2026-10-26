@@ -1564,6 +1564,84 @@ mod tests {
         session.close().await.expect("close");
     }
 
+    /// What `PRAGMA table_info` reports as the key's rank is the order of its
+    /// index, and an `ORDER BY` in table order cannot be served by that index:
+    /// SQLite would read and sort the whole table to open it.
+    #[tokio::test]
+    async fn a_composite_key_is_ordered_as_its_index_not_as_its_table() {
+        let session = workshop().await;
+        run_to_end(
+            session.as_ref(),
+            "CREATE TABLE grants (a INTEGER, b INTEGER, note TEXT, PRIMARY KEY (b, a))",
+        )
+        .await;
+        run_to_end(
+            session.as_ref(),
+            "CREATE VIEW grant_notes AS SELECT note FROM grants",
+        )
+        .await;
+        let cancel_token = CancelToken::new();
+        let path = |name: &str| CatalogPath::for_relation(None, Some(MAIN), name).expect("path");
+
+        let relation = session
+            .catalog()
+            .describe_relation(&path("grants"), &cancel_token)
+            .await
+            .expect("described");
+        let key: Vec<&str> = relation
+            .primary_key()
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(key, ["b", "a"], "index order, not column order");
+        assert!(relation.previews_in_key_order());
+
+        let plain = session
+            .preview_request(
+                &path("grants"),
+                200,
+                &PreviewShape::default(),
+                &cancel_token,
+            )
+            .await
+            .expect("plain preview");
+        assert!(
+            plain.text.contains("ORDER BY \"b\" ASC, \"a\" ASC"),
+            "{}",
+            plain.text
+        );
+        let plan = first_batch(&*session, &format!("EXPLAIN QUERY PLAN {}", plain.text)).await;
+        let details: String = (0..plan.num_rows())
+            .map(|row| {
+                arrow::util::display::array_value_to_string(plan.column(3), row).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            !details.contains("TEMP B-TREE"),
+            "the key's index serves the order, nothing is sorted: {details}"
+        );
+
+        // A view has no key: it is read as the engine returns it.
+        let view = session
+            .catalog()
+            .describe_relation(&path("grant_notes"), &cancel_token)
+            .await
+            .expect("view described");
+        assert!(!view.previews_in_key_order());
+        let plain_view = session
+            .preview_request(
+                &path("grant_notes"),
+                200,
+                &PreviewShape::default(),
+                &cancel_token,
+            )
+            .await
+            .expect("plain preview of a view");
+        assert!(!plain_view.text.contains("ORDER BY"), "{}", plain_view.text);
+        session.close().await.expect("close");
+    }
+
     #[tokio::test]
     async fn a_hostile_predicate_destroys_nothing_and_does_not_overflow_its_clause() {
         let session = preview_workshop().await;

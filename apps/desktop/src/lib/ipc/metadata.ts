@@ -44,8 +44,15 @@ export const PLAIN_SHAPE: PreviewShape = {
   offset: 0,
 }
 
-/** Which page controls the rows on screen allow (ADR-0028). */
+/**
+ * Which page controls the rows on screen allow (ADR-0028, ADR-0068).
+ *
+ * `unknown` until the relation is described: its key decides the rest.
+ * `orderedBy` names the key columns while the default order is in force, and
+ * is null under the user's sort.
+ */
 export const Pagination = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("unknown") }),
   z.object({ type: z.literal("needsOrder") }),
   z.object({ type: z.literal("noUniqueKey") }),
   z.object({
@@ -53,6 +60,7 @@ export const Pagination = z.discriminatedUnion("type", [
     previous: z.boolean(),
     next: z.boolean(),
     firstRow: z.number().int().nonnegative(),
+    orderedBy: z.array(z.string()).nullable(),
   }),
 ])
 export type Pagination = z.infer<typeof Pagination>

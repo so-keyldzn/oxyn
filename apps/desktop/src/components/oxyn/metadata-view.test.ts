@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest"
 import { addressKey, staleExpanded } from "./catalog-tree"
 import { freshnessLabel } from "./facet-frame"
 import { sizeLabel } from "./object-inspector"
-import { draftDiffers, previewNotice, sameShape } from "./preview-controls"
+import {
+  draftDiffers,
+  previewFooterNote,
+  previewNotice,
+  sameShape,
+} from "./preview-controls"
 import { findSummary } from "./result-find-bar"
 import { renderedBytes } from "./value-page-dialog"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
@@ -23,7 +28,13 @@ describe("previewNotice", () => {
       ...loaded,
       status: "failed",
       reshaped: true,
-      pagination: { type: "ready", previous: true, next: true, firstRow: 201 },
+      pagination: {
+        type: "ready",
+        previous: true,
+        next: true,
+        firstRow: 201,
+        orderedBy: null,
+      },
     })
     expect(notice?.warning).toBe(true)
     expect(notice?.text).toMatch(/refused/)
@@ -64,12 +75,66 @@ describe("previewNotice", () => {
   })
 
   it("says why there is no page without a total order", () => {
+    const unordered = previewNotice({
+      ...loaded,
+      pagination: { type: "needsOrder" },
+    })
+    expect(unordered?.text).toBe(
+      "Rows come in no guaranteed order, and putting this relation in order may mean reading all of it first. Sort the preview to browse it page by page."
+    )
+    expect(unordered?.offersSort).toBe(true)
+    const keyless = previewNotice({
+      ...loaded,
+      pagination: { type: "noUniqueKey" },
+    })
+    expect(keyless?.text).toMatch(/no unique key/)
+    // Sorting would not give it pages: nothing offers to.
+    expect(keyless?.offersSort).toBeFalsy()
+  })
+
+  it("claims nothing before the relation is described", () => {
     expect(
-      previewNotice({ ...loaded, pagination: { type: "needsOrder" } })?.text
-    ).toMatch(/no guaranteed order/)
+      previewNotice({ ...loaded, pagination: { type: "unknown" } })
+    ).toBeNull()
+  })
+
+  it("names the key a default order follows", () => {
     expect(
-      previewNotice({ ...loaded, pagination: { type: "noUniqueKey" } })?.text
-    ).toMatch(/no unique key/)
+      previewNotice({
+        ...loaded,
+        pagination: {
+          type: "ready",
+          previous: false,
+          next: true,
+          firstRow: 1,
+          orderedBy: ["tenant_id", "id"],
+        },
+      })?.text
+    ).toBe(
+      "Rows come in the order of the primary key (tenant_id, id). Sort the preview to choose another order."
+    )
+  })
+
+  it("numbers the rows of a later page in the footer", () => {
+    const later = {
+      type: "ready" as const,
+      previous: true,
+      next: true,
+      firstRow: 201,
+      orderedBy: ["id"],
+    }
+    expect(previewFooterNote(later, 200)).toBe(
+      "Preview · rows 201–400 · total row count not requested"
+    )
+    expect(previewFooterNote({ ...later, firstRow: 1 }, 200)).toBe(
+      "Preview · total row count not requested"
+    )
+    expect(previewFooterNote({ type: "needsOrder" }, 200)).toBe(
+      "Preview · total row count not requested"
+    )
+    expect(previewFooterNote(null, 0)).toBe(
+      "Preview · total row count not requested"
+    )
   })
 
   it("says a page after the first is a new read", () => {
@@ -85,16 +150,23 @@ describe("previewNotice", () => {
         previous: true,
         next: false,
         firstRow: 1201,
+        orderedBy: null,
       },
     })?.text
     expect(text).toMatch(/^Rows 1,201–1,400 of this order/)
   })
 
-  it("stays silent on a first ordered page", () => {
+  it("stays silent on the first page of the user's own order", () => {
     expect(
       previewNotice({
         ...loaded,
-        pagination: { type: "ready", previous: false, next: true, firstRow: 1 },
+        pagination: {
+          type: "ready",
+          previous: false,
+          next: true,
+          firstRow: 1,
+          orderedBy: null,
+        },
       })
     ).toBeNull()
   })

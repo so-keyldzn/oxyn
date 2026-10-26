@@ -15,13 +15,18 @@ Protocol checked on 2026-09-16 (PostgreSQL 17.11, Postgres.app):
 export PATH=/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH
 initdb -D "$SP/pg/data" -U oxyn_test --auth=trust -E UTF8 --no-locale
 pg_ctl -D "$SP/pg/data" -l "$SP/pg/server.log" -o "-p 55439 -h 127.0.0.1 -k ''" start -w
-env OXYN_PG_TEST_URL="postgres://oxyn_test@127.0.0.1:55439/postgres" \
-  cargo test -p oxyn-driver-postgres -- --ignored --test-threads=1
+env OXYN_PG_TEST_URL="postgres://oxyn_test@127.0.0.1:55439/postgres?sslmode=disable" \
+  cargo test -p oxyn-driver-postgres --lib -- --ignored --test-threads=1
 pg_ctl -D "$SP/pg/data" stop -m fast -w   # in every case
 ```
 
 `-k ''` disables the Unix socket: the scratchpad path exceeds the maximum length
 of a socket path. `oxyn_test` role in `trust`, no password.
+
+`?sslmode=disable` is required since TLS became mandatory by default (seen
+2026-10-26): without it **every** test fails at connect with "server does not
+support TLS" — a fresh `initdb` cluster has no certificate. Not a regression.
+Run the full ignored suite in about 35 s.
 
 **Red tests that are not regressions** (as of 2026-09-16):
 `read_only_is_enforced_by_the_server` and

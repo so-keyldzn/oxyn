@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="a233eb09ff6d" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="38bef51d8e75" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -1055,7 +1055,7 @@ Parcours importants encore à raccorder, vérifiés dans le code :
 | Parcours | Travail restant |
 |---|---|
 | Accueil : recette native | La superposition est corrigée et testée sur les rectangles rendus ; l'observer à l'écran, à plusieurs largeurs et dans les deux thèmes, reste à faire |
-| Aperçu de table | Réalisé, selon [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : `PreviewSort` et `PreviewFilter` sont dans la commande, les capacités `PREVIEW_SORT` et `PREVIEW_FILTER` sont déclarées, les deux drivers composent la traduction citée, et la page suivante existe quand l'ordre est déterministe. Une réserve d'arbitrage subsiste sur le tri par défaut — voir les questions ouvertes en fin de document |
+| Aperçu de table | Réalisé, selon [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : `PreviewSort` et `PreviewFilter` sont dans la commande, les capacités `PREVIEW_SORT` et `PREVIEW_FILTER` sont déclarées, les deux drivers composent la traduction citée, et la page suivante existe quand l'ordre est déterministe. Le tri par défaut est tranché par [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) (2026-10-26) : une relation dont le driver se porte garant arrive dans l'ordre de la clé et offre des pages sans tri. Reste : l'ordre par défaut sur une base DuckDB sur fichier n'est pas mesuré (en mémoire, il l'est, dans [RESEARCH-NOTES](RESEARCH-NOTES.md#ordre-par-défaut-dun-aperçu--vérifié-le-2026-10-26)) ; les suites qu'ADR-0068 laisse hors périmètre — ClickHouse, Elasticsearch/OpenSearch, Redis — ne sont pas planifiées |
 | Reprise de session | Le marqueur d'arrêt est en place ([ADR-0021](adr/0021-marqueur-d-arret.md)) : un `⌘Q` ne déclenche plus la reprise, une session sans fermeture au battement vieilli si. La restauration de l'emplacement d'objet qu'[UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal) promet est de nouveau tenue dans `apps/desktop` depuis le 2026-09-25 (`ObjectLocation`, lu par `read_object_location`) — voir « Reprise et bibliothèque » |
 | Bibliothèque inter-workspaces | Réalisé : les filtres portent les connexions historiques supprimées ou extérieures au workspace courant, par `Command::ListHistoryConnections` |
 | Workspace IA | La fuite [I-04](../CLAUDE.md#i-04) est fermée : `ToolOutcome::Failed` porte un rapport aux champs privés dont le seul constructeur exige le niveau de la connexion, et le filtre s'applique **à la construction** — sous `Local`/`Metadata`, le message du serveur n'entre jamais dans la structure. `PrivacyTier` vit désormais sur la `ConnectionConfig`, comme sa documentation l'affirmait déjà. La configuration des fournisseurs, l'entrée conditionnelle `Ask AI` (`190:1549`), les propositions par le bus et la provenance persistante des documents sont réalisées, et `oxyn-ai` est une dépendance déclarée d'`oxyn-app` — d'`oxyn-desktop` depuis le retrait de GPUI |
@@ -2532,6 +2532,15 @@ correcte. Il porte `accepté` depuis la
 [revue du 2026-09-24](#3-le-statut-des-adr--revue-du-2026-09-24), qui cite ses deux
 tests. Le statut d'ADR-0020, qu'il précise, relève de cette même revue.
 
+**Close par [ADR-0068](adr/0068-a-preview-comes-in-key-order.md)** le
+2026-10-26. La deuxième condition de réexamen d'ADR-0028 était remplie —
+l'utilisateur a lu l'absence de contrôle de page sur une table SQLite non triée
+comme un défaut — et ADR-0068 remplace ses points 1 et 2 pour une relation à clé
+primaire dont le driver se porte garant de l'ordre : un tel aperçu arrive dans
+l'ordre de la clé et offre des pages. Le remède d'ADR-0020 y est rétabli ;
+ADR-0028 tient toujours `NoUniqueKey` et la vérification de l'ordre contre la
+forme dont viennent les lignes.
+
 ### 2. Deux valeurs pour le seuil de premier affichage
 
 **Résolue.** [ARCHITECTURE](ARCHITECTURE.md) ne chiffre plus ce seuil depuis le
@@ -2567,7 +2576,7 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
 | [0026](adr/0026-agents-externes-acp.md) | accepté | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
 | [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `a_preview_without_request_composes_neither_where_nor_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `a_preview_without_request_composes_neither_where_nor_order_by_when_no_key_is_known` (driver SQLite), `a_plain_preview_is_ordered_exactly_when_the_description_says_so` (driver PostgreSQL), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`). Remplacé en partie le 2026-10-26 par [ADR-0068](adr/0068-a-preview-comes-in-key-order.md), points 1 et 2 pour une relation dont le driver se porte garant |
 | [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `check_dependency_graph` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
@@ -2577,7 +2586,7 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | proposé | **écart code/ADR** : son § 2 dit que les colonnes « ne rejoignent aucune instruction », alors que depuis `d6cf80b` elles entrent dans le `PreviewRelation` par `PreviewShape::columns`, citées par le driver ([Phase 3](#phase-3--le-workspace-ia)). Le reste est tenu (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`) ; la phrase est à préciser avant d'accepter |
 | [0005](adr/0005-wasm-plugins.md) | proposé | WIT et instanciation des composants renvoient « phase 4 » (`oxyn-plugin/src/host.rs`) |
 | [0007](adr/0007-driver-sidecar.md) | proposé | aucun sidecar, reporté en phase 4 |
-| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposé | son ordre par défaut sur la clé primaire est contredit par le code et par ADR-0028, qui le précise |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposé | son ordre par défaut sur la clé primaire est contredit par le code et par ADR-0028, qui le précise. Depuis le 2026-10-26, [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) rétablit cet ordre là où le driver s'en porte garant |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposé | implémenté (`DRAFT_IDLE_MS`), mais ni le délai ni les trois écritures immédiates ne sont testés |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | proposé | le composeur Rust est testé, mais le geste n'est pas monté : `useSchemaProposal` n'a aucun appelant |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposé | **écart code/ADR** : le § 2 bis promet une écriture par question, `WriteGate` applique « une demande en attente à la fois » (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — à arbitrer |

@@ -801,8 +801,11 @@ This preview has its own grid and its own cancellation. It replaces neither the
 SQL draft nor the editor's results. A new selection cancels the previous
 preview; its late responses are ignored. **Refresh data** explicitly reloads
 the rows; no automatic refresh follows an error. Loading, empty result, failure
-and cancellation are distinct. Without a requested sort, the order of the rows
-is not guaranteed, and the preview never counts the whole table.
+and cancellation are distinct. Without a requested sort, the rows of a relation
+whose driver vouches for it come in the order of its primary key; any other
+relation comes in no guaranteed order
+([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)). The preview never
+counts the whole table.
 
 A read that fails **because** the connection does not load the module a table
 needs — the engine's `no such module: <module>`, which the driver names as data
@@ -868,11 +871,32 @@ sending.
 
 The next page is a **new execution**, not a scroll: scrolling through the rows
 already received never triggers a query. It is only offered if the order is
-total — the requested sort, completed by a unique key that the catalog
-declares. Without a known key, the preview stays on its first page and says
-why: an `OFFSET` on an uncertain order would show the same row twice and omit
-another one, without signaling anything. Between two pages, the server's data
-may have changed; the preview does not claim to be a snapshot
+total — the requested sort completed by a unique key that the catalog
+declares, or, with no sort, the primary key's order where the driver vouches
+for it ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)). The Data tab
+loads the relation's description once when it opens; until it is read, neither
+a notice nor a pager is shown. Then the line under the bar says which case
+holds:
+
+* **default order** — the rows come in key order and pages are offered at
+  once: "Rows come in the order of the primary key (a, b). Sort the preview to
+  choose another order.", naming the key columns;
+* **a key, but no default order** — a virtual table, Amazon Redshift, where
+  ordering may mean reading the whole relation: "Rows come in no guaranteed
+  order, and putting this relation in order may mean reading all of it first.
+  Sort the preview to browse it page by page.", followed by a `Sort…` action.
+  A `Sort to browse pages` link, among the footer actions on the right rather
+  than inside the footer note, opens the same Sort menu. Once the user sorts, pages are offered, and the cost is theirs to
+  choose;
+* **no known unique key** — the preview stays on its first page and says why:
+  an `OFFSET` on an uncertain order would show the same row twice and omit
+  another one, without signaling anything.
+
+On a later page, the line reads "Rows 1,201–1,400 of this order. Each page is
+a new read: the server may have changed between two of them.", and the footer
+"Preview · rows 1,201–1,400 · total row count not requested" — numbers grouped
+the en-US way. The preview does not
+claim to be a snapshot
 ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
 
 In this read-only preview, `Edit rows…` is disabled. A tooltip, also

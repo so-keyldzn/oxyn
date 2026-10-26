@@ -720,6 +720,13 @@ async fn the_catalog_lists_databases_schemas_relations_and_constraints() {
         .await
         .expect("describe");
     assert_eq!(described.primary_key().len(), 1);
+    assert!(described.previews_in_key_order());
+    let view = CatalogPath::for_relation(Some("shop"), Some("main"), "big").expect("path");
+    let view = catalog
+        .describe_relation(&view, &cancel)
+        .await
+        .expect("describe view");
+    assert!(!view.key_order_preview && !view.previews_in_key_order());
     let total = described.field("total").expect("total");
     assert_eq!(total.raw_type, "DECIMAL(18,2)");
     let keys = catalog
@@ -809,6 +816,56 @@ async fn a_preview_of_a_hostile_name_reads_that_table_only() {
         single(&run_ok(session.as_ref(), "SELECT count(*) FROM audit").await),
         "1"
     );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn a_preview_without_request_comes_in_key_order_and_a_view_does_not() {
+    let session = memory().await;
+    // Inserted out of key order: without an `ORDER BY`, a small table comes
+    // back in insertion order, so `3` first would mean no order was composed.
+    run_ok(
+        session.as_ref(),
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, name VARCHAR); \
+         INSERT INTO t VALUES (3, 'c'), (1, 'a'), (2, 'b'); \
+         CREATE VIEW v AS SELECT * FROM t",
+    )
+    .await;
+    let database = session
+        .catalog()
+        .list_catalogs(&CancelToken::new())
+        .await
+        .expect("dbs")
+        .into_iter()
+        .find(|d| d.is_default)
+        .expect("default")
+        .name()
+        .to_owned();
+    let preview = |name: &str| CatalogPath::for_relation(Some(&database), Some("main"), name);
+    let table = session
+        .preview_request(
+            &preview("t").expect("path"),
+            200,
+            &PreviewShape::unordered(),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("table preview");
+    assert!(table.text.contains("ORDER BY \"id\" ASC"), "{}", table.text);
+    assert_eq!(
+        single(&run(session.as_ref(), table).await.expect("runs")),
+        "1"
+    );
+    let view = session
+        .preview_request(
+            &preview("v").expect("path"),
+            200,
+            &PreviewShape::unordered(),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("view preview");
+    assert!(!view.text.contains("ORDER BY"), "{}", view.text);
     session.close().await.expect("close");
 }
 
