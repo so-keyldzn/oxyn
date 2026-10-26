@@ -205,7 +205,21 @@ sha2          = "0.11.0"
 memmap2       = "0.9.11"
 
 # --- plugins (optional, `wasm-host` feature) ---------------------------------
-wasmtime      = "48.0.5"
+# wasmtime's default features minus `cache`, the only one that pulls
+# `wasmtime-internal-cache` and with it `zstd` 0.13 / `zstd-safe` 7.3, which
+# carry a batch of RUSTSEC advisories (0391, 0395 to 0406, 0410; checked on
+# 2026-10-26), fixed only in `zstd` 0.14, which no `wasmtime` release accepts
+# yet (`wasmtime-internal-cache` requires `zstd ^0.13` up to 50.0.0). Oxyn never
+# turns the compilation cache on (`WasmHost::new` builds a bare `Config::new()`),
+# so nothing is lost. The list is the `default` array of wasmtime 48.0.7; re-read
+# it at each wasmtime bump, a feature added upstream would otherwise stay off.
+wasmtime      = { version = "48.0.5", default-features = false, features = [
+    "addr2line", "anyhow", "async", "backtrace", "compile-time-builtins",
+    "component-model", "component-model-async", "coredump", "cranelift", "debug",
+    "debug-builtins", "demangle", "gc", "gc-copying", "gc-drc", "gc-null",
+    "parallel-compilation", "pooling-allocator", "profiling", "runtime", "stack-switching",
+    "std", "threads", "wat", "wit-parser",
+] }
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
