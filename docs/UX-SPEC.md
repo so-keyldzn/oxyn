@@ -1311,22 +1311,60 @@ footer recalls it ("shown to you only; the model got the count").
   conversation's connection, then reads pages bounded by `read_result_page`;
   the cells are formatted in Rust. A result produced on a connection other than
   the conversation's is not offered.
-* **Bounded.** The grid reaches at most the first 100 rows, shows eight before
-  scrolling, and says "First 100 rows of N" when there are more.
+* **Bounded, by pages.** The grid holds one page of 100 rows at a time, in the
+  order the buffer holds them, and shows eight before scrolling. A result of
+  more than 100 rows has a pager in the footer: the caption names the rows
+  shown ("Rows 101–200 of 250,000", followed by "cut at the row limit" when the
+  result stopped at its row limit), next to `Previous page` and `Next page`.
+  Each page is read from the **retained buffer** by `read_result_page` alone —
+  never the server, **never a re-execution**, and nothing is opened again: no
+  second `OpenRetainedResult`, no other reader. The pages are bounded by the
+  rows counted when the result was opened: no read asks for a row past them,
+  and the last page may be short. At a bound, the button stays in place and in
+  the tab order, disabled, and says why ("This is the first page", "This is the
+  last page"). The range is announced once per page change, never while
+  scrolling; the grid's name carries it ("Rows the query returned, 101–200 of
+  250,000") and its gutter numbers the result's rows. A new page starts the
+  grid clean — selection, active cell, scroll —, and a page read that answers
+  after the user left its page never fills the page shown. The column widths
+  the user set and the order they moved the columns into belong to the
+  result, not to the page: they hold on `Next page` and on the way back with
+  `Previous page`, and start over only when another result is shown or the
+  same result's columns differ in number, name or type. They are kept by the
+  view under the call alone, for one result at a time, and go with it.
+  Another result under the view — another call, a retry — starts on its first
+  page. The chat
+  grid neither sorts nor filters: no page is ever shown reordered. A result
+  that fits one page has no pager; its footer counts its rows ("3 rows").
   `Open all rows` opens the whole result in a result tab of the workspace — the
   retained buffer, **never a re-execution**. This tab does not offer opening the
   statement in a console: it only enters one with its provenance, from the
   agent's answer.
-* **States.** Reading in progress; populated; **empty** ("The query returned no
-  rows.", without an alert); error (the backend's whole message, `Try again`
-  only if it is declared retryable); **expired** ("Result no longer
-  available", without offering anything that re-runs the query).
+* **States.** Reading in progress (the opening, then each page: its cells wait
+  drawn as placeholders, the grid marked busy); populated; **empty** ("The
+  query returned no rows.", without an alert); error (the backend's whole
+  message, `Try again` only if it is declared retryable — for a page read, it
+  reads that page again and nothing else); **expired** ("Result no longer
+  available", without offering anything that re-runs the query). At opening,
+  nothing was shown: the message stands alone, with no footer and nothing to
+  disable. Once rows were shown — on a page read, or the chart's, when
+  retention released the buffer while the user was paging or charting — the
+  message takes the place of the grid or of the chart and is announced once,
+  politely, without taking the focus. The footer stays: the caption keeps the
+  range the user was on ("Rows 101–200 of 250,000"), the message carrying the
+  state; the pager is disabled; `Chart`, when it was offered, and `Open all
+  rows` stay in place and in the tab order, **disabled**, described by the
+  message and with "Result no longer available" as their tooltip. No click on
+  them opens, draws or reads anything, and no `Try again` is offered: expiry
+  is not an error.
 * **Chart.** The footer offers `Chart`, which toggles between the grid and a
   chart, when the columns include at least one numeric column (integer, float,
   decimal) and something to draw it with: a date (`Date*`, `Timestamp`) or a
   category (text, boolean) for the axis; failing that, two numeric columns, or
   a single row. Otherwise the button **does not exist**. Four series at most.
-  The chart reads the same bounded page as the grid (100 rows at most). The
+  The chart reads the page the grid shows (100 rows at most) and, when the
+  result spans several pages, says which rows it drew ("Drawn from the page
+  shown: rows 101–200 of 250,000"). The
   numbers are read back from the cells formatted by Rust, and only if they are
   unambiguous (digits, decimal point, exponent, thousands separator U+00A0); a
   column that contains anything else — a cut value, `NaN`, text — is left out

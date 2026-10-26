@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { DatabaseIcon, InformationCircleIcon } from "@hugeicons/core-free-icons"
 
 import { AssistantComposer } from "./assistant-composer"
+import { AssistantDestinationChips } from "./assistant-destination-chips"
 import { AssistantEntryButton } from "./assistant-entry-button"
 import { destinations, enabledEntry } from "./assistant-fixtures"
 import { AssistantHeader } from "./assistant-header"
@@ -514,23 +515,30 @@ function AssistantColumn() {
         connectionName="billing primary"
         environment="production"
         tier="metadata"
-        destinations={destinations}
         selected={selected}
         model={model}
-        models={draftModels}
         running={false}
         context={null}
-        onSelectDestination={() => undefined}
-        onSelectModel={setModel}
-        efforts={["low", "medium", "high"]}
-        effort={effort}
-        onSelectEffort={setEffort}
       />
       <div className="mt-auto p-2">
         <AssistantComposer
           running={false}
           onSubmit={() => false}
           onStop={() => undefined}
+          controls={
+            <AssistantDestinationChips
+              destinations={destinations}
+              selected={selected}
+              model={model}
+              models={draftModels}
+              running={false}
+              onSelectDestination={() => undefined}
+              onSelectModel={setModel}
+              efforts={["low", "medium", "high"]}
+              effort={effort}
+              onSelectEffort={setEffort}
+            />
+          }
         />
       </div>
     </div>

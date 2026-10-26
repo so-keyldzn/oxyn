@@ -904,24 +904,26 @@ export function canContinue(exchange: Exchange) {
 /** What an ending says on its last line. */
 export function endingLine(ending: Ending): string {
   switch (ending.type) {
-    case "answered":
-      if (!ending.truncated) return `Answered in ${ending.turns} turn(s).`
+    case "answered": {
+      const turns = counted(ending.turns, "turn")
+      if (!ending.truncated) return `Answered in ${turns}.`
       // Named from the backend's reason, never assumed: raising the token
       // limit does nothing for an answer that filled the context window.
       switch (ending.cut) {
         case "tokenLimit":
-          return `Answer cut short by the token limit after ${ending.turns} turn(s). It is not finished.`
+          return `Answer cut short by the token limit after ${turns}. It is not finished.`
         case "contextWindow":
-          return `Answer cut short: the conversation filled the model's context window after ${ending.turns} turn(s). Raising the token limit will not help; start a shorter conversation.`
+          return `Answer cut short: the conversation filled the model's context window after ${turns}. Raising the token limit will not help; start a shorter conversation.`
         case "providerError":
-          return `The provider reported an error mid-answer after ${ending.turns} turn(s). The answer is not finished.`
+          return `The provider reported an error mid-answer after ${turns}. The answer is not finished.`
         default:
-          return `Answer cut short after ${ending.turns} turn(s). It is not finished.`
+          return `Answer cut short after ${turns}. It is not finished.`
       }
+    }
     case "cancelled":
       return ending.turns === 0
         ? "Stopped before the agent answered."
-        : `Stopped after ${ending.turns} turn(s).`
+        : `Stopped after ${counted(ending.turns, "turn")}.`
     case "turnLimit":
       return `Turn limit reached after ${ending.turns} turns, with no final answer. This is neither a success nor a failure; what ran, ran.`
     case "refused":

@@ -10,8 +10,8 @@ import { cn } from "@/lib/utils"
 const AWAITING_REVIEW =
   "Waiting for your review: a command the agent submitted has not run."
 
-/** Endings that ask for the reader's attention. */
-function notable(ending: Ending) {
+/** Endings that ask for the reader's attention: never folded into a meta row. */
+export function notable(ending: Ending) {
   return (
     (ending.type === "answered" && ending.truncated) ||
     ending.type === "paused" ||
@@ -39,13 +39,30 @@ export function AssistantEnding({
   awaitingReview = false,
   onContinue,
   continueDisabled = false,
+  quiet = false,
 }: {
   ending: Ending
   awaitingReview?: boolean
   onContinue?: () => void
   continueDisabled?: boolean
+  /**
+   * Said as the first item of the answer's meta row, beside its usage. Only
+   * for an ending that asks nothing of the reader: one that does keeps its
+   * own line, whatever the caller asks.
+   */
+  quiet?: boolean
 }) {
   const attention = awaitingReview || notable(ending)
+  if (quiet && !attention && !onContinue)
+    return (
+      <span
+        data-slot="assistant-ending"
+        data-ending={ending.type}
+        className="tabular-nums"
+      >
+        {endingLine(ending)}
+      </span>
+    )
   return (
     <div
       data-slot="assistant-ending"

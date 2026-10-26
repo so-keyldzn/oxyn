@@ -10,7 +10,9 @@ import { SidebarProvider, useSidebar } from "@/components/ui/sidebar"
 /**
  * The inside of `Sidebar`, framed the way the sidebar frames it — without its
  * mobile sheet, which the narrow test browser would otherwise pick. The
- * `group` carries `data-collapsible`, as the real sidebar does.
+ * `group` carries `data-collapsible`, as the real sidebar does, and so does
+ * its padding: the `inset` variant folds to the rail's 64px plus its own
+ * `p-2` and border (`ui/sidebar.tsx`), which a bare 64px box hides.
  */
 function SidebarFrame({
   children,
@@ -27,11 +29,15 @@ function SidebarFrame({
       data-collapsible={state === "collapsed" ? "icon" : ""}
     >
       <div
-        data-sidebar="sidebar"
-        className="flex h-[640px] flex-col bg-sidebar text-sidebar-foreground"
-        style={{ width: state === "collapsed" ? 64 : width }}
+        className="p-2"
+        style={{ width: state === "collapsed" ? 64 + 16 + 2 : width }}
       >
-        {children}
+        <div
+          data-sidebar="sidebar"
+          className="flex h-[640px] w-full flex-col bg-sidebar text-sidebar-foreground"
+        >
+          {children}
+        </div>
       </div>
     </div>
   )
@@ -51,7 +57,8 @@ const meta = {
   ],
   args: {
     connectionName: "billing",
-    driver: "PostgreSQL",
+    // The driver id, as the app passes it: it picks the tile's logo.
+    driver: "postgres",
     supported: true,
     nodes: catalog,
     loading: new Set<string>(),
@@ -222,8 +229,22 @@ export const Rail: Story = {
       </SidebarProvider>
     ),
   ],
-  play: async ({ canvas }) => {
+  play: async ({ canvas, canvasElement }) => {
     await expect(canvas.queryByRole("tree")).toBeNull()
+    // The connection tile and the catalog icon sit on one axis: the rail is
+    // read as a column, and a tile off to one side looks like a mistake.
+    // `NaN` for a missing element: the comparison below then fails.
+    const centerOf = (element: Element | null) => {
+      const box = element?.getBoundingClientRect()
+      return box ? box.left + box.width / 2 : Number.NaN
+    }
+    const tile = canvasElement.querySelector(
+      '[data-slot="catalog-connection"] > div'
+    )
+    const icon = canvas.getByRole("button", { name: "Catalog" })
+    await expect(Math.abs(centerOf(tile) - centerOf(icon))).toBeLessThanOrEqual(
+      0.5
+    )
     await userEvent.click(canvas.getByRole("button", { name: "Catalog" }))
     await waitFor(() =>
       expect(canvas.getByRole("tree", { name: "Catalog" })).toBeVisible()

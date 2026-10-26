@@ -1,4 +1,5 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="20f829c449de" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="fb5bc2f9b7d6" -->
+
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1375,23 +1376,66 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   appartient à la connexion de la conversation, puis lit des pages bornées par
   `read_result_page` ; les cellules sont formatées en Rust. Un résultat produit
   sur une autre connexion que celle de la conversation n'est pas proposé.
-* **Bornée.** La grille atteint au plus les 100 premières lignes, en affiche
-  huit avant de défiler, et dit « First 100 rows of N » quand il y en a plus.
+* **Bornée, par pages.** La grille tient une page de 100 lignes à la fois,
+  dans l'ordre où le tampon les tient, et en affiche huit avant de défiler. Un
+  résultat de plus de 100 lignes a un pager dans le pied : la légende nomme
+  les lignes affichées (« Rows 101–200 of 250,000 », suivi de « cut at the row
+  limit » quand le résultat s'est arrêté à sa limite de lignes), à côté de
+  `Previous page` et `Next page`. Chaque page est lue dans le **tampon
+  retenu** par `read_result_page` seul — jamais le serveur, **jamais une
+  réexécution**, et rien n'est rouvert : pas de second `OpenRetainedResult`,
+  pas d'autre lecteur. Les pages sont bornées par les lignes comptées à
+  l'ouverture du résultat : aucune lecture ne demande une ligne au-delà, et la
+  dernière page peut être courte. À une borne, le bouton reste à sa place et
+  dans l'ordre de tabulation, désactivé, et dit pourquoi (« This is the first
+  page », « This is the last page »). La plage est annoncée une fois par
+  changement de page, jamais pendant le défilement ; le nom de la grille la
+  porte (« Rows the query returned, 101–200 of 250,000 ») et sa gouttière
+  numérote les lignes du résultat. Une nouvelle page repart d'une grille nette
+  — sélection, cellule active, défilement —, et la lecture d'une page qui
+  répond après que l'utilisateur l'a quittée ne remplit jamais la page
+  affichée. Les largeurs de colonnes que l'utilisateur a réglées et l'ordre
+  dans lequel il a déplacé les colonnes appartiennent au résultat, pas à la
+  page : ils tiennent sur `Next page` et au retour par `Previous page`, et ne
+  repartent de zéro que lorsqu'un autre résultat est affiché ou que les
+  colonnes du même résultat diffèrent en nombre, en nom ou en type. Seule la
+  vue sous l'appel les garde, pour un résultat à la fois, et ils partent avec
+  elle. Un autre résultat sous la vue — un autre appel, une nouvelle
+  tentative — commence à sa première page. La grille du chat ne trie ni ne
+  filtre : aucune page n'est jamais montrée réordonnée. Un résultat qui tient
+  en une page n'a pas de pager ; son pied compte ses lignes (« 3 rows »).
   `Open all rows` ouvre le résultat entier dans un onglet de résultat du
   workspace — le tampon retenu, **jamais une réexécution**. Cet onglet n'offre
   pas d'ouvrir l'instruction dans une console : elle n'y entre qu'avec sa
   provenance, depuis la réponse de l'agent.
-* **États.** En cours de lecture ; peuplée ; **vide** (« The query returned no
-  rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
-  seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
-  available », sans rien proposer qui relance la requête).
+* **États.** En cours de lecture (l'ouverture, puis chaque page : ses cellules
+  attendent dessinées en emplacements, la grille marquée occupée) ; peuplée ;
+  **vide** (« The query returned no rows. », sans alerte) ; erreur (le message
+  du backend entier, `Try again` seulement s'il est déclaré retentable — pour
+  la lecture d'une page, il relit cette page et rien d'autre) ; **expirée**
+  (« Result no longer available », sans rien proposer qui relance la
+  requête). À l'ouverture, rien n'a été montré : le message est seul, sans
+  pied et sans rien à désactiver. Une fois des lignes montrées — à la lecture
+  d'une page, ou à celle du graphique, quand la rétention a libéré le tampon
+  pendant que l'utilisateur feuilletait ou dessinait — le message prend la
+  place de la grille ou du graphique et est annoncé une fois, poliment, sans
+  prendre le focus. Le pied reste : la légende garde la plage où
+  l'utilisateur se trouvait (« Rows 101–200 of 250,000 »), le message portant
+  l'état ; le pager est désactivé ; `Chart`, quand il était proposé, et
+  `Open all rows` restent à leur place et dans l'ordre de tabulation,
+  **désactivés**, décrits par le message et avec « Result no longer
+  available » pour infobulle. Aucun clic sur eux n'ouvre, ne dessine ni ne
+  lit rien, et aucun `Try again` n'est proposé : l'expiration n'est pas une
+  erreur.
 * **Graphique.** Le pied offre `Chart`, qui bascule entre la grille et un
   graphique, quand les colonnes comptent au moins une colonne numérique
   (entier, flottant, décimal) et de quoi la dessiner : une date (`Date*`,
   `Timestamp`) ou une catégorie (texte, booléen) pour l'axe ; à défaut, deux
   colonnes numériques, ou une seule ligne. Sinon le bouton **n'existe pas**.
-  Quatre séries au plus. Le graphique lit la même page bornée que la grille
-  (100 lignes au plus). Les nombres sont relus depuis les cellules formatées
+  Quatre séries au plus. Le graphique lit la page que montre la grille
+  (100 lignes au plus) et, quand le résultat s'étend sur plusieurs pages, dit
+  quelles lignes il a dessinées (« Drawn from the page shown: rows 101–200 of
+  250,000 »). Les nombres sont relus depuis les cellules formatées
   par Rust, et seulement s'ils en sont sans ambiguïté (chiffres, point décimal,
   exposant, séparateur de milliers U+00A0) ; une colonne qui contient autre
   chose — une valeur coupée, `NaN`, du texte — est laissée de côté **et

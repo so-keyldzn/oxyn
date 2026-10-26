@@ -72,6 +72,9 @@ export const destinations: Array<DestinationOption> = [
     reach: "remote",
     usable: true,
     reason: null,
+    // What `destinationOptions` gives an Anthropic provider: its models wear
+    // Claude's mark in the chat.
+    brand: "claude",
   },
   {
     key: `agent:${externalAgent.id}`,
@@ -82,6 +85,7 @@ export const destinations: Array<DestinationOption> = [
     reach: "unresolved",
     usable: true,
     reason: null,
+    brand: "claude-code",
   },
 ]
 

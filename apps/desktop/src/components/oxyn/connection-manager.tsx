@@ -9,6 +9,7 @@ import {
 
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { PrivacyTierBadge } from "@/components/oxyn/privacy-tier"
 import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
@@ -138,7 +139,7 @@ export function ConnectionManager({
                 data-connection-row={index}
               >
                 <ItemMedia variant="icon">
-                  <HugeiconsIcon icon={DatabaseIcon} strokeWidth={2} />
+                  <DriverLogo driver={connection.driver} className="size-4" />
                 </ItemMedia>
                 {/* A real basis, not `flex-1`'s zero: the item wraps its actions
                 onto a second line once the name has less than 10 rem, rather

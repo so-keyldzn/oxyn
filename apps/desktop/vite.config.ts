@@ -38,7 +38,11 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
   plugins: [
-    devtools(),
+    // Console piping relays the page's `console.*` to this terminal and the
+    // server's back to the page: one `console.error` in the browser (the
+    // backend missing in a plain browser, for instance) bounced between both
+    // sides, each pass nesting the last, until the log reached 180 MB.
+    devtools({ consolePiping: { enabled: false } }),
     tailwindcss(),
     tanstackStart({
       spa: {
