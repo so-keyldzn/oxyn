@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="9af5f6ff58bc" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="b750ce7523fb" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -69,6 +69,26 @@ Deux conséquences que les drivers ratent le plus souvent :
   cette inférence est déclarée comme telle jusqu'à l'interface. Un champ absent
   de l'échantillon mais présent plus loin doit produire une erreur explicite ou
   un élargissement de schéma — jamais une valeur silencieusement perdue.
+
+**Un aperçu n'arrive dans l'ordre de la clé que là où cet ordre est une lecture
+bornée** ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md), qui dit qui
+s'en porte garant et pourquoi). Un driver ne pose `Relation::key_order_preview`
+dans `describe_relation` que pour une relation où `ORDER BY <clé> LIMIT n` lit
+de l'ordre de `n` lignes, pas la relation entière. Sans tri demandé, il compose
+`ORDER BY <clé> ASC` **exactement quand** `Relation::previews_in_key_order()`
+est vrai, et aucun ordre sinon. Les colonnes de la clé viennent dans l'ordre
+de l'**index**, pas dans celui de la table : le driver remplit
+`Field::primary_key_rank` avec le rang du moteur, d'après lequel
+`Relation::primary_key()` ordonne — une clé composite ordonnée dans l'ordre de
+la table peut trier toute la relation. L'interface offre les pages d'après ce
+même drapeau, si bien qu'un ordre sans le drapeau, ou le drapeau sans l'ordre,
+montre une page qui répète ou saute des lignes. Un driver qui ne sait pas
+laisse le drapeau à sa valeur par défaut, `false`.
+
+**Panne concrète :** un driver qui se porte garant d'une table `vec0` de
+SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette
+table chaque vecteur dans un b-tree temporaire avant que la première ligne
+n'apparaisse.
 
 ### 4. Il distingue trois familles d'erreurs, et il les classe
 

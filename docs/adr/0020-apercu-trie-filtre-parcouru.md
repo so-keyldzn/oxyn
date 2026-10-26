@@ -17,6 +17,10 @@ a result page from a table page.
 > `ORDER BY`: the two passages of this ADR that describe an imposed sort are
 > stale, and following them would reintroduce the silent failure this ADR
 > exists to prevent.
+>
+> **Since [ADR-0068](0068-a-preview-comes-in-key-order.md) (2026-10-26)**, the
+> remedy proposed here is restored where the driver vouches that ordering by the
+> key is a bounded read: read ADR-0068 before either.
 
 ## Context
 

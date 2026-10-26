@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0020-apercu-trie-filtre-parcouru.md" sha256="e5d457502474" -->
+<!-- oxyn-translation source="docs/adr/0020-apercu-trie-filtre-parcouru.md" sha256="f5131abcc275" -->
 
 > Traduction française de [docs/adr/0020-apercu-trie-filtre-parcouru.md](../../../../docs/adr/0020-apercu-trie-filtre-parcouru.md). **La version anglaise fait foi.**
 
@@ -21,6 +21,10 @@ une page de résultat d'une page de table.
 > `ORDER BY` par défaut : les deux passages de cet ADR qui décrivent un tri
 > imposé sont périmés, et les suivre réintroduirait la panne silencieuse que cet
 > ADR existe pour empêcher.
+>
+> **Depuis [ADR-0068](0068-a-preview-comes-in-key-order.md) (2026-10-26)**, le
+> remède proposé ici est rétabli là où le driver se porte garant qu'ordonner par
+> la clé est une lecture bornée : lire ADR-0068 avant l'un comme l'autre.
 
 ## Contexte
 

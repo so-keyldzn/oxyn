@@ -99,6 +99,7 @@ To locate the boards and their states before implementation, see
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | An agent declares the query languages it writes (`languages`, `[sql]` by default); the assistant opens on every language an agent writes, SQL prompts unchanged (refines 0049, 0055) | accepted |
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | A session tells the risk of a non-SQL request it classified as a write: `Session::classify_risk`, consulted only after a mutating `classify_intent`, can only raise the risk, `None` by default (refines 0064) | accepted |
 | [0067](adr/0067-ci-tests-the-packages-a-pull-request-changes.md) | On a pull request, CI checks only the Rust packages it changes and those that depend on them (`OXYN_PACKAGES`); anything it cannot attribute to one package checks the whole workspace, and `main` always does (refines 0045) | accepted |
+| [0068](adr/0068-a-preview-comes-in-key-order.md) | A preview comes in key order, and offers pages, wherever the driver vouches that this order is a bounded read (`Relation::key_order_preview`); virtual tables, Redshift and keyless relations stay unordered (supersedes 0028 points 1 and 2, refines 0063) | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 
@@ -142,6 +143,10 @@ ADRs stay `proposed` until the first code commit that implements them.
 > argument — an `OFFSET` over an unguaranteed order duplicates and omits rows —
 > is kept, its remedy is not. No order is imposed; no page is offered until the
 > order is total.
+>
+> [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) **supersedes in part**
+> ADR-0028 (2026-10-26): where the driver vouches for it, a preview comes in
+> primary key order and offers pages, which restores ADR-0020's remedy there.
 
 New decision: [`/adr`](../.claude/commands/adr.md), from the
 [template](../.claude/templates/adr.md).

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a9e34835e686" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="043020459d7e" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -850,8 +850,10 @@ brouillon SQL ni les résultats de l'éditeur. Une nouvelle sélection annule
 l'aperçu précédent ; ses réponses tardives sont ignorées. **Refresh data**
 relit explicitement les lignes ; aucun rafraîchissement automatique ne suit une
 erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distincts.
-Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
-jamais la table entière.
+Sans tri demandé, les lignes d'une relation dont le driver se porte garant
+arrivent dans l'ordre de sa clé primaire ; toute autre relation arrive dans un
+ordre non garanti ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)).
+L'aperçu ne compte jamais la table entière.
 
 Une lecture qui échoue **parce que** la connexion ne charge pas le module dont
 une table a besoin — le `no such module: <module>` du moteur, que le driver
@@ -921,11 +923,34 @@ refusée avant l'envoi.
 
 La page suivante est une **nouvelle exécution**, pas un défilement : faire
 défiler les lignes déjà reçues ne déclenche jamais de requête. Elle n'est
-offerte que si l'ordre est total — le tri demandé, complété par une clé unique
-que le catalogue déclare. Sans clé connue, l'aperçu reste à sa première page et
-dit pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
-ligne et en omettrait une autre, sans rien signaler. Entre deux pages, les
-données du serveur ont pu changer ; l'aperçu ne prétend pas être un instantané
+offerte que si l'ordre est total — le tri demandé complété par une clé unique
+que le catalogue déclare, ou, sans tri, l'ordre de la clé primaire là où le
+driver s'en porte garant ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)).
+L'onglet Data charge la description de la relation une fois, à son ouverture ;
+tant qu'elle n'est pas lue, ni avis ni paginateur ne s'affichent. Ensuite, la
+ligne sous la barre dit quel cas s'applique :
+
+* **ordre par défaut** — les lignes arrivent dans l'ordre de la clé et les
+  pages sont offertes d'emblée : « Rows come in the order of the primary key
+  (a, b). Sort the preview to choose another order. », qui nomme les colonnes
+  de la clé ;
+* **une clé, mais pas d'ordre par défaut** — une table virtuelle, Amazon
+  Redshift, où mettre en ordre peut vouloir dire lire toute la relation :
+  « Rows come in no guaranteed order, and putting this relation in order may
+  mean reading all of it first. Sort the preview to browse it page by page. »,
+  suivi d'une action `Sort…`. Un lien `Sort to browse pages`, parmi les
+  actions du pied de page à droite et non dans sa note, ouvre le même menu
+  Sort. Une fois que l'utilisateur trie, les pages
+  sont offertes, et le coût est le sien à choisir ;
+* **aucune clé unique connue** — l'aperçu reste à sa première page et dit
+  pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
+  ligne et en omettrait une autre, sans rien signaler.
+
+Sur une page suivante, la ligne indique « Rows 1,201–1,400 of this order. Each
+page is a new read: the server may have changed between two of them. », et le
+pied de page « Preview · rows 1,201–1,400 · total row count not requested » —
+nombres groupés à la manière en-US. L'aperçu ne
+prétend pas être un instantané
 ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
 
 Dans cet aperçu en lecture seule, `Edit rows…` est désactivé. Une infobulle,

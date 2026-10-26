@@ -2,6 +2,12 @@
 
 **Status:** accepted · **Date:** 2026-09-15
 
+> **Superseded in part by [ADR-0068](0068-a-preview-comes-in-key-order.md)**
+> (2026-10-26), on decision points 1 and 2 for a relation that has a primary
+> key and whose driver vouches for it: such a preview comes in key order and
+> offers pages. This ADR stays the reference for no page without a total order
+> (`NoUniqueKey`) and for point 3.
+
 **Clarifies:** [ADR-0020](0020-apercu-trie-filtre-parcouru.md), whose decision
 "without a requested sort, the driver orders by the primary key alone" was not
 implemented — and for a good reason, left unrecorded until now.

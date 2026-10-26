@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="c07558c7ea88" -->
+<!-- oxyn-translation source="docs/README.md" sha256="edbd3e23108b" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -103,6 +103,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | Une session dit le risque d'une requête non SQL qu'elle a classée comme écriture : `Session::classify_risk`, consultée seulement après un `classify_intent` mutant, ne peut que relever le risque, `None` par défaut (précise 0064) | accepté |
 | [0067](adr/0067-ci-tests-the-packages-a-pull-request-changes.md) | Sur une pull request, la CI ne vérifie que les paquets Rust qu'elle modifie et ceux qui en dépendent (`OXYN_PACKAGES`) ; ce qu'elle ne sait pas attribuer à un seul paquet vérifie tout l'espace de travail, et `main` le fait toujours (précise 0045) | accepté |
+| [0068](adr/0068-a-preview-comes-in-key-order.md) | Un aperçu arrive dans l'ordre de la clé, et offre des pages, partout où le driver se porte garant que cet ordre est une lecture bornée (`Relation::key_order_preview`) ; tables virtuelles, Redshift et relations sans clé restent sans ordre (remplace les points 1 et 2 de 0028, précise 0063) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
@@ -147,6 +148,11 @@ Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre
 > — un `OFFSET` sur un ordre non garanti duplique et omet des lignes — est
 > retenu, son remède ne l'est pas. Aucun ordre n'est imposé ; aucune page n'est
 > offerte tant que l'ordre n'est pas total.
+>
+> [ADR-0068](adr/0068-a-preview-comes-in-key-order.md) **remplace en partie**
+> ADR-0028 (2026-10-26) : là où le driver s'en porte garant, un aperçu arrive
+> dans l'ordre de la clé primaire et offre des pages, ce qui y rétablit le
+> remède d'ADR-0020.
 
 Nouvelle décision : [`/adr`](../claude/commands/adr.md), à partir du
 [gabarit](../claude/templates/adr.md).

@@ -8,6 +8,10 @@ the drivers already written), and its query language is
 `QueryLanguage::MongoQuery`, defined below as database commands, not as a
 JavaScript shell.
 
+> **Refined by [ADR-0068](0068-a-preview-comes-in-key-order.md)** (2026-10-26):
+> a preview of a plain collection is sorted on `_id` when no sort is requested,
+> where this ADR says "with no imposed order".
+
 ## Context
 
 MongoDB is the first document database Oxyn speaks to. Four properties of the
