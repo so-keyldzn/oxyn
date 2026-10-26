@@ -612,6 +612,17 @@ pub struct Field {
     pub comment: Option<String>,
     /// Does the field take part in the primary key?
     pub is_primary_key: bool,
+    /// Where the field stands in the primary key, from 1, when the engine
+    /// reports it.
+    ///
+    /// The order of a composite key is the order of its **index**, which is not
+    /// the order of its columns in the table: `PRIMARY KEY (b, a)` over a
+    /// table declared `(a, b)`. An `ORDER BY` in table order cannot be served
+    /// by that index, and reads and sorts the whole table
+    /// ([`Relation::primary_key`] reads this first). Absent, the position in
+    /// the table stands in.
+    #[serde(default)]
+    pub primary_key_rank: Option<u32>,
     /// Does the field come from an **inference by sampling** rather than from
     /// a declaration of the server?
     ///
@@ -643,8 +654,18 @@ impl Field {
             default: None,
             comment: None,
             is_primary_key: false,
+            primary_key_rank: None,
             inferred: false,
         }
+    }
+
+    /// Says where the field stands in the primary key, from 1: see
+    /// [`Self::primary_key_rank`]. Declares it a member of that key.
+    #[must_use]
+    pub fn with_primary_key_rank(self, rank: u32) -> Self {
+        let mut field = self.primary_key();
+        field.primary_key_rank = Some(rank);
+        field
     }
 
     /// Declares the field non-null.
@@ -706,6 +727,18 @@ pub struct Relation {
     pub size_bytes: Option<u64>,
     /// The fields, in the order the server gives them.
     pub fields: Vec<Field>,
+    /// The driver vouches that reading this relation in the order of its
+    /// primary key costs a bounded read, not a scan of the whole source.
+    ///
+    /// Declared by the driver when it describes the relation, because only the
+    /// engine knows: a b-tree table answers `ORDER BY key LIMIT 200` from its
+    /// index, a virtual table whose module does not deliver that order reads
+    /// every row into a temporary b-tree first (measured on SQLite `vec0`,
+    /// 2026-10-26), and a warehouse billed per byte read pays for the scan.
+    /// Absent, `false`: a driver that says nothing never has its previews
+    /// ordered behind its back. Read through [`Self::previews_in_key_order`].
+    #[serde(default)]
+    pub key_order_preview: bool,
 }
 
 impl Relation {
@@ -719,7 +752,16 @@ impl Relation {
             estimated_rows: None,
             size_bytes: None,
             fields: Vec::new(),
+            key_order_preview: false,
         }
+    }
+
+    /// Says that a preview of this relation may come in key order: see
+    /// [`Self::key_order_preview`].
+    #[must_use]
+    pub fn with_key_order_preview(mut self) -> Self {
+        self.key_order_preview = true;
+        self
     }
 
     /// Attaches the fields.
@@ -750,7 +792,9 @@ impl Relation {
         self.fields.iter().find(|col| col.name == name)
     }
 
-    /// The primary key fields, in position order.
+    /// The primary key fields, in key order: the rank the engine reports
+    /// ([`Field::primary_key_rank`]), then the position in the table for the
+    /// fields it does not rank.
     ///
     /// Empty when the relation has none — which is the common case outside the
     /// relational model.
@@ -761,8 +805,21 @@ impl Relation {
             .iter()
             .filter(|col| col.is_primary_key)
             .collect();
-        keys.sort_by_key(|col| col.position);
+        keys.sort_by_key(|col| (col.primary_key_rank.unwrap_or(u32::MAX), col.position));
         keys
+    }
+
+    /// Does a preview of this relation come in the order of its primary key
+    /// when no sort is asked for?
+    ///
+    /// True when the driver vouches for it ([`Self::key_order_preview`]) and a
+    /// primary key is declared. Shared by the drivers, which compose the order,
+    /// and by the interface, which decides from it whether a page is offered:
+    /// the two must not disagree. A relation left out keeps its key for the
+    /// sorts the user asks for, and pays for those knowingly.
+    #[must_use]
+    pub fn previews_in_key_order(&self) -> bool {
+        self.key_order_preview && self.fields.iter().any(|col| col.is_primary_key)
     }
 
     /// Is the schema of this relation, in whole or in part, **deduced**?
@@ -1084,6 +1141,66 @@ mod tests {
             .map(|col| col.name.as_str())
             .collect();
         assert_eq!(names, ["order", "line"]);
+    }
+
+    #[test]
+    fn the_primary_key_follows_the_rank_the_engine_reports_over_the_table_position() {
+        // `PRIMARY KEY (b, a)` over a table declared `(a, b)`: the index is
+        // ordered b then a, and an ORDER BY in table order would sort it all.
+        let relation = Relation::new("grants", RelationKind::Table).with_fields(vec![
+            Field::new("a", 0, LogicalType::INT64, "int8").with_primary_key_rank(2),
+            Field::new("b", 1, LogicalType::INT64, "int8").with_primary_key_rank(1),
+            Field::new("note", 2, LogicalType::Text, "text"),
+        ]);
+        let names: Vec<&str> = relation
+            .primary_key()
+            .iter()
+            .map(|col| col.name.as_str())
+            .collect();
+        assert_eq!(names, ["b", "a"]);
+    }
+
+    #[test]
+    fn a_preview_comes_in_key_order_only_when_the_driver_vouches_for_it_and_a_key_exists() {
+        let keyed = || {
+            vec![
+                Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
+                Field::new("name", 1, LogicalType::Text, "text"),
+            ]
+        };
+        let table = Relation::new("t", RelationKind::Table)
+            .with_fields(keyed())
+            .with_key_order_preview();
+        assert!(table.previews_in_key_order());
+
+        // A driver that says nothing never has its previews ordered: the key
+        // stays available to complete a sort, nothing more.
+        let unvouched = Relation::new("t", RelationKind::Table).with_fields(keyed());
+        assert!(!unvouched.previews_in_key_order());
+        assert_eq!(unvouched.primary_key().len(), 1);
+
+        // Vouching for an order does not invent a key to order on.
+        let keyless = Relation::new("v", RelationKind::View)
+            .with_fields(vec![Field::new("name", 0, LogicalType::Text, "text")])
+            .with_key_order_preview();
+        assert!(
+            !keyless.previews_in_key_order(),
+            "no key, no order to impose"
+        );
+        assert!(
+            !Relation::new("empty", RelationKind::Table)
+                .with_key_order_preview()
+                .previews_in_key_order()
+        );
+    }
+
+    #[test]
+    fn a_relation_cached_before_the_flag_existed_is_not_ordered() {
+        let older = r#"{"name":"t","kind":"table","comment":null,"estimated_rows":null,
+            "size_bytes":null,"fields":[]}"#;
+        let relation: Relation =
+            serde_json::from_str(older).expect("relation from before the flag");
+        assert!(!relation.key_order_preview);
     }
 
     #[test]

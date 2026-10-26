@@ -66,6 +66,16 @@ struct Listed {
     comment: Option<String>,
 }
 
+impl Listed {
+    /// Is `_id` a unique, indexed key of this relation?
+    ///
+    /// Only on a plain collection: a view's documents are whatever its
+    /// pipeline makes, and a time-series collection's `_id` is not unique.
+    fn keyed_by_id(&self) -> bool {
+        self.kind == RelationKind::Collection && self.server_type == "collection"
+    }
+}
+
 impl MongoCatalog {
     pub(crate) fn new(shared: Arc<Shared>, version: String) -> Self {
         Self { shared, version }
@@ -188,6 +198,32 @@ impl MongoCatalog {
             &self.entry(database, name, cancel).await?,
             Detail::Full,
         ))
+    }
+
+    /// Does a preview of `relation` with no sort asked for come in `_id`
+    /// order?
+    ///
+    /// The same condition [`CatalogProvider::describe_relation`] flags
+    /// [`Relation::key_order_preview`] on, read from the `listCollections`
+    /// entry alone: a plain preview pays one metadata command, not the
+    /// sample of documents and the `count` a description reads.
+    ///
+    /// # Errors
+    /// [`OxynError::CatalogUnavailable`] for a path that names no database
+    /// and collection, [`OxynError::Query`] for a relation that does not
+    /// exist, and the server's.
+    pub(crate) async fn previews_in_id_order(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<bool> {
+        let database = database_of(relation)?;
+        let Some(name) = relation.relation() else {
+            return Err(OxynError::CatalogUnavailable(
+                "a MongoDB relation path names a collection".to_owned(),
+            ));
+        };
+        Ok(self.listed(database, name, cancel).await?.keyed_by_id())
     }
 
     /// The raw `listCollections` entry of one relation.
@@ -429,10 +465,7 @@ impl CatalogProvider for MongoCatalog {
         let plan = Plan::infer(sample.iter().map(AsRef::as_ref)).map_err(|error| {
             OxynError::CatalogUnavailable(format!("the sampled documents cannot be read: {error}"))
         })?;
-        // `_id` is unique and indexed in a collection; a view's documents are
-        // whatever its pipeline makes, and a time-series collection's `_id`
-        // is not unique.
-        let keyed = listed.kind == RelationKind::Collection && listed.server_type == "collection";
+        let keyed = listed.keyed_by_id();
         let fields = plan
             .fields()
             .enumerate()
@@ -464,6 +497,11 @@ impl CatalogProvider for MongoCatalog {
             ));
         }
         if keyed {
+            // `sort: {_id: 1}` with a `limit` walks the `_id` index and stops:
+            // a preview in key order is a bounded read. The interface offers
+            // pages from this flag; the plain preview reads the same condition
+            // from the listing ([`Self::previews_in_id_order`]).
+            described = described.with_key_order_preview();
             // Metadata, not a scan: `count` without a filter. Only on a plain
             // collection: a time-series collection is a view over its
             // buckets, where the count would unpack them. A failure costs the

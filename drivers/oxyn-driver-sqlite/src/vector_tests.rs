@@ -400,3 +400,77 @@ async fn a_stopped_write_into_vec0_is_ambiguous() {
     }
     session.close().await.expect("close");
 }
+
+/// `ORDER BY` over a `vec0` table is not served by the module: SQLite reads
+/// every row, vectors included, into a temporary b-tree before it can return
+/// the first page (`EXPLAIN QUERY PLAN` reports `USE TEMP B-TREE FOR ORDER
+/// BY`, measured on 2026-10-26). A table opened for a glance must not pay it,
+/// so a `vec0` table keeps its key for the sorts the user asks for and is not
+/// ordered otherwise ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)).
+#[tokio::test]
+async fn a_vec0_table_is_not_ordered_by_default_but_can_be_sorted() {
+    let session = in_memory().await;
+    apply(
+        session.as_ref(),
+        "CREATE VIRTUAL TABLE vectors USING vec0(chunk_id integer primary key, embedding float[4])",
+    )
+    .await;
+    apply(
+        session.as_ref(),
+        "CREATE TABLE notes (id integer primary key, body text)",
+    )
+    .await;
+    let cancel = CancelToken::new();
+    let path = |name: &str| CatalogPath::for_relation(None, Some(MAIN), name).expect("path");
+
+    let vectors = session
+        .catalog()
+        .describe_relation(&path("vectors"), &cancel)
+        .await
+        .expect("a vec0 table is described when the module is loaded");
+    assert_eq!(
+        vectors.primary_key().len(),
+        1,
+        "vec0 declares its key column as the primary key"
+    );
+    assert!(!vectors.previews_in_key_order());
+
+    let notes = session
+        .catalog()
+        .describe_relation(&path("notes"), &cancel)
+        .await
+        .expect("an ordinary table is described");
+    assert!(notes.previews_in_key_order());
+
+    let plain = session
+        .preview_request(&path("vectors"), 200, &PreviewShape::default(), &cancel)
+        .await
+        .expect("plain preview");
+    assert!(!plain.text.contains("ORDER BY"), "{}", plain.text);
+    let ordinary = session
+        .preview_request(&path("notes"), 200, &PreviewShape::default(), &cancel)
+        .await
+        .expect("plain preview of an ordinary table");
+    assert!(
+        ordinary.text.contains("ORDER BY \"id\" ASC"),
+        "{}",
+        ordinary.text
+    );
+
+    // The user may still ask for it, and for pages over it.
+    let page = PreviewShape {
+        sort: vec![oxyn_core::PreviewSort::ascending("chunk_id")],
+        offset: 200,
+        ..PreviewShape::default()
+    };
+    let request = session
+        .preview_request(&path("vectors"), 200, &page, &cancel)
+        .await
+        .expect("a sorted page over a vec0 table");
+    assert!(
+        request.text.contains("ORDER BY \"chunk_id\" ASC"),
+        "{}",
+        request.text
+    );
+    session.close().await.expect("close");
+}

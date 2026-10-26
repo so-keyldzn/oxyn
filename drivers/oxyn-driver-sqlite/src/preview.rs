@@ -24,10 +24,11 @@ const STYLE: QuoteStyle = QuoteStyle::Double;
 /// What the catalog says about a relation, as far as ordering and projecting
 /// need it.
 ///
-/// Read from the engine **only** when the requested shape depends on it — a
-/// plain preview pays no `PRAGMA table_info` for a clause it does not compose.
-/// An empty [`Self::columns`] therefore means « nothing was read », and it is
-/// only ever paired with a shape that asks for neither order nor projection.
+/// Read from the engine on **every** preview, since a preview with no sort
+/// asked for still comes in key order
+/// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)). The
+/// default value stands for a relation that could not be described and whose
+/// read will say why — a module that is not loaded, for one.
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     /// Column names, as the catalog spells them.
@@ -38,6 +39,10 @@ pub(crate) struct RelationFacts {
     /// ROWID` tables have none, and paging on a key that only sometimes exists
     /// is the silent failure this whole path avoids.
     key: Vec<String>,
+    /// Whether the key orders the preview when no sort is asked for. A virtual
+    /// table keeps its key for the sorts the user asks for, and is not
+    /// ordered otherwise: see [`Relation::previews_in_key_order`].
+    ordered_by_default: bool,
 }
 
 impl RelationFacts {
@@ -55,7 +60,29 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
+            ordered_by_default: relation.previews_in_key_order(),
         }
+    }
+}
+
+/// The attached database a preview path designates.
+///
+/// The current SQLite catalog exposes attached databases as namespaces. An
+/// explicit catalog is accepted too, but a conflicting level is never silently
+/// discarded. The same answer is used to compose the statement and to describe
+/// the relation it reads: [`crate::catalog::SqliteCatalog`] itself only looks
+/// at the namespace, so describing the path as given would look in `main`.
+///
+/// # Errors
+/// [`OxynError::CatalogUnavailable`] when the catalog and namespace levels name
+/// two different databases.
+pub(crate) fn database_of(path: &CatalogPath) -> Result<&str> {
+    match (path.catalog(), path.namespace()) {
+        (Some(catalog), Some(namespace)) if catalog != namespace => Err(
+            OxynError::CatalogUnavailable("SQLite preview has conflicting database levels".into()),
+        ),
+        (Some(database), _) | (None, Some(database)) => Ok(database),
+        (None, None) => Ok(crate::catalog::MAIN),
     }
 }
 
@@ -70,17 +97,7 @@ pub(crate) fn request(
             "preview limit must be in 1..=1000".into(),
         ));
     }
-    // The current SQLite catalog exposes attached databases as namespaces.
-    // Accept an explicit catalog too, but never silently discard a conflicting level.
-    let database = match (path.catalog(), path.namespace()) {
-        (Some(catalog), Some(namespace)) if catalog != namespace => {
-            return Err(OxynError::CatalogUnavailable(
-                "SQLite preview has conflicting database levels".into(),
-            ));
-        }
-        (Some(database), _) | (None, Some(database)) => database,
-        (None, None) => crate::catalog::MAIN,
-    };
+    let database = database_of(path)?;
     let relation = path
         .relation()
         .ok_or_else(|| OxynError::CatalogUnavailable("preview path must name a relation".into()))?;
@@ -158,7 +175,8 @@ fn unknown_projected(column: &str) -> OxynError {
 /// The order does **not** depend on the page: the unique key completes the
 /// requested sort even on the first page. Ordering page 0 by `name` alone and
 /// page 1 by `name, id` would show a tied row twice and hide another, exactly
-/// at the boundary nobody inspects.
+/// at the boundary nobody inspects. For the same reason a relation ordered by
+/// default is ordered on its key from the first page, sort or no sort.
 ///
 /// # Erreurs
 /// [`OxynError::Query`] when a sort names a column the relation does not
@@ -166,7 +184,7 @@ fn unknown_projected(column: &str) -> OxynError {
 /// caused it; retrying would not make the column appear — and [`OxynError::NotSupported`] when a page is asked
 /// for without any unique key to make the order total.
 fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String>> {
-    if shape.sort.is_empty() && shape.offset == 0 {
+    if !shape.needs_total_order() && !facts.ordered_by_default {
         return Ok(None);
     }
     let mut terms = Vec::with_capacity(shape.sort.len() + facts.key.len());
@@ -221,7 +239,11 @@ mod tests {
                 field
             })
             .collect::<Vec<_>>();
-        RelationFacts::of(&Relation::new("t", RelationKind::Table).with_fields(fields))
+        RelationFacts::of(
+            &Relation::new("t", RelationKind::Table)
+                .with_fields(fields)
+                .with_key_order_preview(),
+        )
     }
 
     fn path() -> CatalogPath {
@@ -233,11 +255,86 @@ mod tests {
     }
 
     #[test]
-    fn a_preview_without_request_composes_neither_where_nor_order_by() {
+    fn a_preview_without_request_composes_neither_where_nor_order_by_when_no_key_is_known() {
         let request =
             compose(&PreviewShape::unordered(), &RelationFacts::default()).expect("simple preview");
         assert_eq!(request.text, "SELECT * FROM \"main\".\"t\" LIMIT 200");
         assert!(request.params.is_empty());
+        // A relation described without a key — a view — is read as the engine
+        // returns it: no page could be offered over it either way.
+        let keyless = compose(&PreviewShape::unordered(), &facts(&[("name", false)]))
+            .expect("keyless preview");
+        assert_eq!(keyless.text, "SELECT * FROM \"main\".\"t\" LIMIT 200");
+    }
+
+    #[test]
+    fn a_preview_without_request_comes_in_key_order() {
+        let request = compose(
+            &PreviewShape::unordered(),
+            &facts(&[("id", true), ("name", false)]),
+        )
+        .expect("keyed preview");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"main\".\"t\" ORDER BY \"id\" ASC LIMIT 200"
+        );
+        // A filter changes the rows, not the order they come in.
+        let filtered = PreviewShape {
+            predicate: Some("name <> ''".into()),
+            ..PreviewShape::default()
+        };
+        let request = compose(&filtered, &facts(&[("id", true), ("name", false)]))
+            .expect("filtered keyed preview");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"main\".\"t\" WHERE (name <> ''\n) ORDER BY \"id\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_composite_key_orders_on_every_column_in_position_order() {
+        let request = compose(
+            &PreviewShape::unordered(),
+            &facts(&[("order", true), ("line", true), ("note", false)]),
+        )
+        .expect("composite key");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"main\".\"t\" ORDER BY \"order\" ASC, \"line\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_virtual_table_is_ordered_only_when_the_user_sorts_it() {
+        // Ordering a `vec0` table makes SQLite read every vector into a
+        // temporary b-tree before the first page: that cost is the user's to
+        // ask for, not the price of opening the table.
+        let fields = vec![
+            Field::new("chunk_id", 0, LogicalType::Text, "TEXT").primary_key(),
+            Field::new("embedding", 1, LogicalType::Text, "TEXT"),
+        ];
+        // What `describe_relation` returns for a virtual table: no flag.
+        let relation = Relation::new("t", RelationKind::Table).with_fields(fields);
+        let facts = RelationFacts::of(&relation);
+
+        let plain = compose(&PreviewShape::unordered(), &facts).expect("plain virtual preview");
+        assert_eq!(plain.text, "SELECT * FROM \"main\".\"t\" LIMIT 200");
+
+        let sorted = PreviewShape {
+            sort: vec![PreviewSort::ascending("chunk_id")],
+            ..PreviewShape::default()
+        };
+        let request = compose(&sorted, &facts).expect("sorted virtual preview");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"main\".\"t\" ORDER BY \"chunk_id\" ASC LIMIT 200"
+        );
+        // Its key still completes a sort, so a page over it stays honest.
+        let page = PreviewShape {
+            offset: 200,
+            ..sorted
+        };
+        assert!(compose(&page, &facts).is_ok());
     }
 
     #[test]

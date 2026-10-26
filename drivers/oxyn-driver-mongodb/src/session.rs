@@ -318,12 +318,17 @@ impl Session for MongoSession {
         shape: &PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        let relation = if shape.needs_total_order() || shape.columns.is_some() {
-            Some(self.catalog.describe_relation(path, cancel).await?)
+        // A plain preview still comes in `_id` order (ADR-0068), but needs only
+        // the collection's kind for it: its `listCollections` entry, not the
+        // sample of documents a description reads.
+        let (relation, ordered_by_id) = if shape.needs_total_order() || shape.columns.is_some() {
+            let relation = self.catalog.describe_relation(path, cancel).await?;
+            let ordered = relation.previews_in_key_order();
+            (Some(relation), ordered)
         } else {
-            None
+            (None, self.catalog.previews_in_id_order(path, cancel).await?)
         };
-        preview::request(path, limit, shape, relation.as_ref())
+        preview::request(path, limit, shape, relation.as_ref(), ordered_by_id)
     }
 
     async fn set_context(&self, context: &SessionContext, _cancel: &CancelToken) -> Result<()> {

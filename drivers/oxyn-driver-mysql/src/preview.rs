@@ -20,13 +20,17 @@ use crate::variant::LANGUAGE;
 const STYLE: QuoteStyle = QuoteStyle::Backtick;
 
 /// What the catalog says about a relation, as far as ordering and projecting
-/// need it. Read only when the shape needs it: an empty value means « nothing
-/// was read ».
+/// need it. Read on every preview, since one with no sort asked for still comes
+/// in key order ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)):
+/// the default value stands for a relation nothing is known of.
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     columns: Vec<String>,
-    /// The primary key's columns, empty when none is declared.
+    /// The primary key's columns in index order, empty when none is declared.
     key: Vec<String>,
+    /// Whether the key orders the preview when no sort is asked for: see
+    /// [`Relation::previews_in_key_order`].
+    ordered_by_default: bool,
 }
 
 impl RelationFacts {
@@ -42,6 +46,7 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
+            ordered_by_default: relation.previews_in_key_order(),
         }
     }
 }
@@ -122,9 +127,11 @@ fn projection(shape: &PreviewShape, facts: &RelationFacts) -> Result<String> {
 }
 
 /// The `ORDER BY` terms, completed by the primary key so that pages never
-/// repeat nor skip a row, or `None` when nothing needs ordering.
+/// repeat nor skip a row, or `None` when nothing needs ordering. A relation the
+/// driver vouches for is ordered on its key from the first page, sort or no
+/// sort.
 fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String>> {
-    if shape.sort.is_empty() && shape.offset == 0 {
+    if !shape.needs_total_order() && !facts.ordered_by_default {
         return Ok(None);
     }
     let mut terms = Vec::with_capacity(shape.sort.len() + facts.key.len());
@@ -175,7 +182,11 @@ mod tests {
                 if *key { field.primary_key() } else { field }
             })
             .collect::<Vec<_>>();
-        RelationFacts::of(&Relation::new("t", RelationKind::Table).with_fields(fields))
+        RelationFacts::of(
+            &Relation::new("t", RelationKind::Table)
+                .with_fields(fields)
+                .with_key_order_preview(),
+        )
     }
 
     fn path() -> CatalogPath {
@@ -195,6 +206,77 @@ mod tests {
         assert!(request.limits.read_only);
         assert_eq!(request.limits.max_rows, Some(200));
         assert_eq!(request.language, LANGUAGE);
+    }
+
+    #[test]
+    fn a_preview_without_request_comes_in_key_order() {
+        let keyed = request(
+            &path(),
+            200,
+            &PreviewShape::unordered(),
+            &facts(&[("id", true), ("name", false)]),
+        )
+        .expect("keyed preview");
+        assert_eq!(
+            keyed.text,
+            "SELECT * FROM `shop`.`t` ORDER BY `id` ASC LIMIT 200"
+        );
+        // A relation with no key — a view — is read as the engine returns it:
+        // no page could be offered over it either way.
+        let keyless = request(
+            &path(),
+            200,
+            &PreviewShape::unordered(),
+            &facts(&[("name", false)]),
+        )
+        .expect("keyless preview");
+        assert_eq!(keyless.text, "SELECT * FROM `shop`.`t` LIMIT 200");
+    }
+
+    #[test]
+    fn a_composite_key_orders_in_index_order_and_a_relation_not_vouched_for_stays_unordered() {
+        // The catalog hands the key over in index order, whatever the order of
+        // the columns in the table.
+        let fields = vec![
+            Field::new("a", 0, LogicalType::Text, "int").with_primary_key_rank(2),
+            Field::new("b", 1, LogicalType::Text, "int").with_primary_key_rank(1),
+        ];
+        let vouched = Relation::new("t", RelationKind::Table)
+            .with_fields(fields.clone())
+            .with_key_order_preview();
+        let composite = request(
+            &path(),
+            200,
+            &PreviewShape::unordered(),
+            &RelationFacts::of(&vouched),
+        )
+        .expect("composite key");
+        assert_eq!(
+            composite.text,
+            "SELECT * FROM `shop`.`t` ORDER BY `b` ASC, `a` ASC LIMIT 200"
+        );
+
+        // A table on an engine whose key is not a b-tree, say: the key still
+        // completes a sort, nothing more.
+        let unvouched = Relation::new("t", RelationKind::Table).with_fields(fields);
+        let plain = request(
+            &path(),
+            200,
+            &PreviewShape::unordered(),
+            &RelationFacts::of(&unvouched),
+        )
+        .expect("unvouched preview");
+        assert_eq!(plain.text, "SELECT * FROM `shop`.`t` LIMIT 200");
+        let sorted = PreviewShape {
+            sort: vec![PreviewSort::ascending("a")],
+            ..PreviewShape::default()
+        };
+        let completed =
+            request(&path(), 200, &sorted, &RelationFacts::of(&unvouched)).expect("sorted");
+        assert_eq!(
+            completed.text,
+            "SELECT * FROM `shop`.`t` ORDER BY `a` ASC, `b` ASC LIMIT 200"
+        );
     }
 
     #[test]
@@ -286,7 +368,11 @@ mod tests {
             &facts(&[("id", true), ("name", false)]),
         )
         .expect("projection");
-        assert_eq!(request.text, "SELECT `name`, `id` FROM `shop`.`t` LIMIT 10");
+        // The key orders the rows, whether or not the projection carries it.
+        assert_eq!(
+            request.text,
+            "SELECT `name`, `id` FROM `shop`.`t` ORDER BY `id` ASC LIMIT 10"
+        );
     }
 
     #[test]

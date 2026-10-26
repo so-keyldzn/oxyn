@@ -454,7 +454,17 @@ impl CatalogProvider for DuckDbCatalog {
             }
             fields.push(field);
         }
-        Ok(described.with_fields(fields))
+        let described = described.with_fields(fields);
+        // DuckDB has no ordered index scan: `ORDER BY key LIMIT n` is a top-N
+        // over the table, pruned by its zone maps. Measured 2026-10-26 on 10M
+        // rows (M1 Max): 2 ms in insertion order, 25 ms shuffled, 0.13–0.5 s at
+        // OFFSET 5M — bounded enough for a preview. A view declares no key, so
+        // the flag would order nothing there.
+        Ok(if described.kind == RelationKind::Table {
+            described.with_key_order_preview()
+        } else {
+            described
+        })
     }
 
     async fn list_indexes(

@@ -75,7 +75,8 @@ impl Backend {
     }
 
     /// Which page controls the rows on screen allow, for the shape they came
-    /// from ([ADR-0028](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)).
+    /// from ([ADR-0028](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md),
+    /// [ADR-0068](../../../../docs/adr/0068-a-preview-comes-in-key-order.md)).
     ///
     /// # Errors
     /// An invalid address, or a connection without a catalog cache.
@@ -87,9 +88,7 @@ impl Backend {
         rows: u64,
     ) -> Result<Pagination, IpcError> {
         let path = address.to_path()?;
-        let unique_key = self
-            .described_relation(connection, &path)
-            .map(|relation| !relation.primary_key().is_empty());
+        let relation = self.described_relation(connection, &path);
         // Only what decides the order is carried over: the columns of the
         // sort and the page. Validation belongs to the read, not to the
         // question « may I offer a page ».
@@ -106,7 +105,7 @@ impl Backend {
             offset: applied.offset,
             columns: None,
         };
-        Ok(pagination(&shape, unique_key, rows))
+        Ok(pagination(&shape, relation.as_ref(), rows))
     }
 
     /// Loads one level of the catalog, or the root.
@@ -1068,8 +1067,43 @@ mod tests {
             Pagination::Ready {
                 previous: true,
                 next: true,
-                first_row: 201
+                first_row: 201,
+                ordered_by: None,
             }
+        );
+        // Described, a b-tree table pages in its key order with nothing sorted
+        // (ADR-0068): the page the interface offers is the page a script may
+        // ask for, and the key it comes in is named.
+        let default_order = PreviewShapeDraft {
+            offset: 200,
+            ..PreviewShapeDraft::default()
+        };
+        assert_eq!(
+            backend
+                .preview_pagination(connection, &table.address, &default_order, 200)
+                .expect("pagination"),
+            Pagination::Ready {
+                previous: true,
+                next: true,
+                first_row: 201,
+                ordered_by: Some(vec!["id".to_owned()]),
+            }
+        );
+        let third = runtime
+            .block_on(backend.preview_relation(
+                CommandId::new(),
+                connection,
+                session,
+                table.address.clone(),
+                PreviewShapeDraft {
+                    offset: 400,
+                    ..PreviewShapeDraft::default()
+                },
+            ))
+            .expect("a page of the default order reads");
+        assert!(
+            matches!(third, CommandOutcome::Executed { rows: 50, .. }),
+            "450 rows in key order: the third page holds the last 50"
         );
         let second = runtime
             .block_on(backend.preview_relation(

@@ -75,7 +75,8 @@ impl PreviewShapeDraft {
     /// columns itself.
     ///
     /// A page other than the first is refused unless the order is total
-    /// ([ADR-0028](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)):
+    /// ([ADR-0028](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md),
+    /// [ADR-0068](../../../../docs/adr/0068-a-preview-comes-in-key-order.md)):
     /// the front never offers one, and a script that asks anyway gets the same
     /// answer the interface would have given.
     ///
@@ -129,20 +130,21 @@ impl PreviewShapeDraft {
             columns: None,
         };
         if shape.offset > 0 {
-            // Checked on the sort itself: `needs_total_order` is already true
-            // for any page, and a page of an order nobody asked for is exactly
-            // what ADR-0028 refuses.
-            if shape.sort.is_empty() {
-                return Err(IpcError::invalid(
-                    "A page other than the first needs a sort: an OFFSET over an \
-                     uncertain order shows a row twice and hides another",
-                ));
-            }
-            let unique_key = relation.map(|relation| !relation.primary_key().is_empty());
-            match pagination(&shape, unique_key, 0) {
+            // Asked of the pagination itself, so that what the interface is
+            // offered and what a script may ask for cannot drift apart: a page
+            // of an order nobody can name is what ADR-0028 refuses, and the
+            // order a relation comes in by default is the one ADR-0068 names.
+            match pagination(&shape, relation, 0) {
+                Pagination::Unknown => {
+                    return Err(IpcError::invalid(
+                        "A page other than the first needs the relation to be described: \
+                         its key is not known yet",
+                    ));
+                }
                 Pagination::NeedsOrder => {
                     return Err(IpcError::invalid(
-                        "A page other than the first needs a sort",
+                        "A page other than the first needs a sort: an OFFSET over an \
+                         uncertain order shows a row twice and hides another",
                     ));
                 }
                 Pagination::NoUniqueKey => {
@@ -164,13 +166,19 @@ impl PreviewShapeDraft {
 }
 
 /// What the page controls of a preview may offer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Pagination {
-    /// Nothing was ordered: a « next » page would be the second page of an
-    /// order the user never saw.
+    /// The relation has not been described, so its key is not known. Not the
+    /// same as having no key: nothing is said, and a page is not offered.
+    Unknown,
+    /// A key is known, but this relation does not come in key order by itself
+    /// — a virtual table, a warehouse table — and nothing was sorted: a « next »
+    /// page would be the second page of an order the user never saw. Sorting
+    /// is what makes pages possible, at the cost of reading it all.
     NeedsOrder,
-    /// A sort is asked for, but no unique key is known to make it total.
+    /// The relation is described and holds no unique key: no order can be made
+    /// total, and sorting would not change that.
     NoUniqueKey,
     /// Each direction is offered only when it leads somewhere.
     #[serde(rename_all = "camelCase")]
@@ -179,6 +187,9 @@ pub enum Pagination {
         next: bool,
         /// One-based position of the first row of this page in the order.
         first_row: u64,
+        /// The key columns, when the order in force is the one the relation
+        /// comes in by default; `None` when the user's sort is in force.
+        ordered_by: Option<Vec<String>>,
     },
 }
 
@@ -186,16 +197,27 @@ pub enum Pagination {
 ///
 /// Checked against the shape **the rows came from**, never the one being
 /// typed: two pages only fail to overlap when both were composed from the same
-/// total order. `unique_key` is `None` when the relation has not been
-/// described, which is not the same as having no key — and neither lets a page
-/// be offered.
+/// total order. `relation` is `None` when the relation has not been described,
+/// which is not the same as having no key — and neither lets a page be
+/// offered.
+///
+/// The order is total when a unique key is known and either the user sorted —
+/// the driver completes the sort with the key — or the relation comes in key
+/// order by itself ([`Relation::previews_in_key_order`], ADR-0068). A driver
+/// that does not vouch for its default order is not assumed to have applied
+/// one.
 #[must_use]
-pub fn pagination(applied: &PreviewShape, unique_key: Option<bool>, rows: u64) -> Pagination {
-    if !applied.needs_total_order() {
-        return Pagination::NeedsOrder;
-    }
-    if unique_key != Some(true) {
+pub fn pagination(applied: &PreviewShape, relation: Option<&Relation>, rows: u64) -> Pagination {
+    let Some(relation) = relation else {
+        return Pagination::Unknown;
+    };
+    let key = relation.primary_key();
+    if key.is_empty() {
         return Pagination::NoUniqueKey;
+    }
+    let by_default = applied.sort.is_empty();
+    if by_default && !relation.previews_in_key_order() {
+        return Pagination::NeedsOrder;
     }
     Pagination::Ready {
         previous: applied.offset > 0,
@@ -203,6 +225,7 @@ pub fn pagination(applied: &PreviewShape, unique_key: Option<bool>, rows: u64) -
         // show nothing.
         next: rows >= u64::from(PREVIEW_ROWS),
         first_row: applied.offset.saturating_add(1),
+        ordered_by: by_default.then(|| key.iter().map(|field| field.name.clone()).collect()),
     }
 }
 
@@ -663,54 +686,160 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_page_is_offered_without_a_total_order() {
-        let plain = PreviewShape::default();
-        assert_eq!(
-            pagination(&plain, Some(true), 200),
-            Pagination::NeedsOrder,
-            "the plain first preview has no order, so no page"
-        );
-        let sorted = PreviewShape {
-            sort: vec![PreviewSort::ascending("name")],
+    /// A keyed relation whose driver vouches for its default order: a b-tree
+    /// table. The same relation without the voucher stands for a virtual table
+    /// or a warehouse table.
+    fn ordered(columns: &[(&str, bool)]) -> Relation {
+        relation(columns).with_key_order_preview()
+    }
+
+    fn sorted_on(column: &str) -> PreviewShape {
+        PreviewShape {
+            sort: vec![PreviewSort::ascending(column)],
             ..PreviewShape::default()
-        };
-        assert_eq!(pagination(&sorted, None, 200), Pagination::NoUniqueKey);
+        }
+    }
+
+    #[test]
+    fn a_relation_that_comes_in_key_order_has_pages_from_the_first_read() {
+        let table = ordered(&[("id", true), ("name", false)]);
         assert_eq!(
-            pagination(&sorted, Some(false), 200),
-            Pagination::NoUniqueKey
-        );
-        assert_eq!(
-            pagination(&sorted, Some(true), 200),
+            pagination(&PreviewShape::default(), Some(&table), 200),
             Pagination::Ready {
                 previous: false,
                 next: true,
-                first_row: 1
-            }
+                first_row: 1,
+                ordered_by: Some(vec!["id".to_owned()]),
+            },
+            "no sort asked for: the key order is the one in force, and it is named"
         );
+        let composite = ordered(&[("order", true), ("line", true), ("note", false)]);
         assert_eq!(
-            pagination(&sorted, Some(true), 12),
+            pagination(&PreviewShape::default(), Some(&composite), 12),
             Pagination::Ready {
                 previous: false,
                 next: false,
-                first_row: 1
+                first_row: 1,
+                ordered_by: Some(vec!["order".to_owned(), "line".to_owned()]),
             },
-            "a short page is the last one"
+            "a short page is the last one, a composite key is named whole"
+        );
+        let second = PreviewShape {
+            offset: 200,
+            ..PreviewShape::default()
+        };
+        assert_eq!(
+            pagination(&second, Some(&table), 200),
+            Pagination::Ready {
+                previous: true,
+                next: true,
+                first_row: 201,
+                ordered_by: Some(vec!["id".to_owned()]),
+            }
+        );
+    }
+
+    #[test]
+    fn a_sort_replaces_the_default_order_and_keeps_the_pages() {
+        let table = ordered(&[("id", true), ("name", false)]);
+        assert_eq!(
+            pagination(&sorted_on("name"), Some(&table), 200),
+            Pagination::Ready {
+                previous: false,
+                next: true,
+                first_row: 1,
+                ordered_by: None,
+            },
+            "the user's order is in force, not the key's"
+        );
+        // A relation the driver does not order by default pages once sorted:
+        // the driver completes the sort with the key it declared.
+        let virtual_table = relation(&[("chunk_id", true), ("embedding", false)]);
+        assert_eq!(
+            pagination(&sorted_on("chunk_id"), Some(&virtual_table), 200),
+            Pagination::Ready {
+                previous: false,
+                next: true,
+                first_row: 1,
+                ordered_by: None,
+            }
+        );
+    }
+
+    #[test]
+    fn no_page_is_offered_without_a_total_order() {
+        let plain = PreviewShape::default();
+        let virtual_table = relation(&[("chunk_id", true), ("embedding", false)]);
+        assert_eq!(
+            pagination(&plain, Some(&virtual_table), 200),
+            Pagination::NeedsOrder,
+            "a key is known but the driver does not order this relation by itself"
+        );
+        let keyless = ordered(&[("name", false)]);
+        for shape in [&plain, &sorted_on("name")] {
+            assert_eq!(
+                pagination(shape, Some(&keyless), 200),
+                Pagination::NoUniqueKey,
+                "no key, and sorting would not give one"
+            );
+        }
+        assert_eq!(
+            pagination(&sorted_on("name"), None, 200),
+            Pagination::Unknown,
+            "an undescribed relation is not guessed to have a key, nor to lack one"
+        );
+        assert_eq!(
+            pagination(&plain, None, 200),
+            Pagination::Unknown,
+            "nothing is said before the description arrives"
+        );
+    }
+
+    #[test]
+    fn pagination_crosses_with_its_tag_and_a_nullable_order() {
+        let ready = Pagination::Ready {
+            previous: false,
+            next: true,
+            first_row: 1,
+            ordered_by: None,
+        };
+        let json = serde_json::to_value(&ready).expect("serializes");
+        assert_eq!(json["type"], "ready");
+        assert_eq!(json["firstRow"], 1);
+        assert!(
+            json["orderedBy"].is_null(),
+            "a Rust None is a null the schema reads, never a missing key"
+        );
+        assert_eq!(
+            serde_json::to_value(Pagination::Unknown).expect("serializes")["type"],
+            "unknown"
         );
     }
 
     #[test]
     fn a_page_without_a_total_order_is_refused_even_when_asked_for() {
-        let keyed = relation(&[("id", true), ("name", false)]);
-        assert!(draft(&[], 200).into_shape(Some(&keyed)).is_err());
-        let unkeyed = relation(&[("id", false), ("name", false)]);
+        let keyed = ordered(&[("id", true), ("name", false)]);
+        let shape = draft(&[], 200)
+            .into_shape(Some(&keyed))
+            .expect("a page of the default key order");
+        assert_eq!(shape.offset, 200);
+        assert!(shape.sort.is_empty(), "no sort is invented for it");
+
+        let virtual_table = relation(&[("id", true), ("name", false)]);
+        assert!(
+            draft(&[], 200).into_shape(Some(&virtual_table)).is_err(),
+            "the driver does not order this relation by itself: a page needs a sort"
+        );
+        let unkeyed = ordered(&[("id", false), ("name", false)]);
+        assert!(draft(&[], 200).into_shape(Some(&unkeyed)).is_err());
         assert!(draft(&["name"], 200).into_shape(Some(&unkeyed)).is_err());
         assert!(
             draft(&["name"], 200).into_shape(None).is_err(),
             "an undescribed relation is not guessed to have a key"
         );
+        assert!(draft(&[], 200).into_shape(None).is_err());
         let shape = draft(&["name"], 400)
-            .into_shape(Some(&keyed))
+            .into_shape(Some(&virtual_table))
             .expect("a sorted, keyed page");
         assert_eq!(shape.offset, 400);
         assert!(draft(&["name"], 199).into_shape(Some(&keyed)).is_err());

@@ -41,14 +41,27 @@ const SQL_CURRENT_DATABASE: &str = "SELECT DATABASE()";
 /// The relations of a database.
 const SQL_RELATIONS: &str = "SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT \
      FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME";
-/// One relation's kind, comment and row estimate.
-const SQL_RELATION: &str = "SELECT TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS \
+/// One relation's kind, comment, row estimate and storage engine.
+const SQL_RELATION: &str = "SELECT TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS, ENGINE \
      FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
-/// One relation's columns.
-const SQL_COLUMNS: &str = "SELECT COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, COLUMN_TYPE, \
-     IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT, COLUMN_KEY, NUMERIC_PRECISION, NUMERIC_SCALE \
-     FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
-     ORDER BY ORDINAL_POSITION";
+/// One relation's columns, each with its rank in the `PRIMARY` index and the
+/// length of the prefix indexed, when it is a key column.
+///
+/// Parameters, in order: the index name (`PRIMARY`, bound like every name here),
+/// the database, the relation. `COLUMN_KEY` alone says a column is in a key, not
+/// in which order the index holds it.
+const SQL_COLUMNS: &str = "SELECT c.COLUMN_NAME, c.ORDINAL_POSITION, c.DATA_TYPE, \
+     c.COLUMN_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, c.COLUMN_COMMENT, c.COLUMN_KEY, \
+     c.NUMERIC_PRECISION, c.NUMERIC_SCALE, s.SEQ_IN_INDEX, s.SUB_PART \
+     FROM information_schema.COLUMNS c \
+     LEFT JOIN information_schema.STATISTICS s ON s.TABLE_SCHEMA = c.TABLE_SCHEMA \
+       AND s.TABLE_NAME = c.TABLE_NAME AND s.COLUMN_NAME = c.COLUMN_NAME \
+       AND s.INDEX_NAME = ? \
+     WHERE c.TABLE_SCHEMA = ? AND c.TABLE_NAME = ? \
+     ORDER BY c.ORDINAL_POSITION";
+/// The storage engines whose primary key is a b-tree the preview's `ORDER BY`
+/// can walk. A `MEMORY` table hashes its key, a `FEDERATED` one lives elsewhere.
+const KEY_ORDERED_ENGINES: [&str; 3] = ["InnoDB", "MyISAM", "Aria"];
 /// One relation's indexes, one row per indexed column.
 const SQL_INDEXES: &str = "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE \
      FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
@@ -188,8 +201,10 @@ impl MysqlCatalog {
         })
     }
 
-    /// Composes a preview, reading the relation's description when the shape
-    /// needs it.
+    /// Composes a preview, reading the relation's description on every one: a
+    /// preview with no sort asked for still comes in key order
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)).
+    /// That is two metadata statements the plain preview did not run before.
     pub(crate) async fn preview_request(
         &self,
         path: &CatalogPath,
@@ -197,11 +212,7 @@ impl MysqlCatalog {
         shape: &PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        let facts = if shape.needs_total_order() || shape.columns.is_some() {
-            crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
-        } else {
-            crate::preview::RelationFacts::default()
-        };
+        let facts = crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?);
         crate::preview::request(path, limit, shape, &facts)
     }
 }
@@ -443,7 +454,7 @@ impl CatalogProvider for MysqlCatalog {
     ) -> Result<Relation> {
         let (database, name) = relation_of(relation)?;
         let key = vec![Value::from(database), Value::from(name)];
-        let header = self.rows(SQL_RELATION, key.clone(), cancel).await?;
+        let header = self.rows(SQL_RELATION, key, cancel).await?;
         let Some(first) = header.first() else {
             return Err(OxynError::Query(format!(
                 "relation `{name}` does not exist in database `{database}`, or this account \
@@ -451,6 +462,11 @@ impl CatalogProvider for MysqlCatalog {
             )));
         };
         let kind = relation_kind(&text(first, 0).unwrap_or_default());
+        let key_engine = text(first, 3).is_some_and(|engine| {
+            KEY_ORDERED_ENGINES
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&engine))
+        });
         let mut described = Relation::new(name, kind);
         if kind == RelationKind::Table {
             if let Some(comment) = text(first, 1).filter(|c| !c.is_empty()) {
@@ -462,7 +478,22 @@ impl CatalogProvider for MysqlCatalog {
             }
         }
 
-        let columns = self.rows(SQL_COLUMNS, key, cancel).await?;
+        let columns = self
+            .rows(
+                SQL_COLUMNS,
+                vec![
+                    Value::from("PRIMARY"),
+                    Value::from(database),
+                    Value::from(name),
+                ],
+                cancel,
+            )
+            .await?;
+        // A key the preview can be ordered on without reading the table: every
+        // key column is ranked in the `PRIMARY` index (a `UNIQUE NOT NULL` index
+        // that stands in for a missing primary key is reported as `PRI` but is
+        // not ranked here), and none is a prefix, which an index cannot sort by.
+        let mut key_is_ordered = key_engine;
         let mut fields = Vec::with_capacity(columns.len());
         for row in &columns {
             let column = required(row, 0)?;
@@ -483,11 +514,27 @@ impl CatalogProvider for MysqlCatalog {
                 field = field.with_comment(comment);
             }
             if text(row, 7).as_deref() == Some("PRI") {
-                field = field.primary_key();
+                match number(row, 10).and_then(|rank| u32::try_from(rank).ok()) {
+                    Some(rank) => field = field.with_primary_key_rank(rank),
+                    None => {
+                        field = field.primary_key();
+                        key_is_ordered = false;
+                    }
+                }
+                if number(row, 11).is_some() {
+                    key_is_ordered = false;
+                }
             }
             fields.push(field);
         }
-        Ok(described.with_fields(fields))
+        let described = described.with_fields(fields);
+        // Only a base table: a view has no key, whatever `COLUMN_KEY` says of
+        // the table underneath.
+        Ok(if kind == RelationKind::Table && key_is_ordered {
+            described.with_key_order_preview()
+        } else {
+            described
+        })
     }
 
     async fn list_indexes(

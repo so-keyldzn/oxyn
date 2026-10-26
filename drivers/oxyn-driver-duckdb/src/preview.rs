@@ -21,12 +21,18 @@ use oxyn_core::{
 const STYLE: QuoteStyle = QuoteStyle::Double;
 
 /// What the catalog says about a relation, as far as ordering and projecting
-/// need it; empty when the shape asked for neither.
+/// need it.
+///
+/// Read on every preview, since one with no sort asked for still comes in key
+/// order ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)).
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     columns: Vec<String>,
     /// The primary key's columns, empty when none is declared.
     key: Vec<String>,
+    /// Whether the key orders the preview when no sort is asked for: see
+    /// [`Relation::previews_in_key_order`], which the interface reads too.
+    ordered_by_default: bool,
 }
 
 impl RelationFacts {
@@ -42,6 +48,7 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
+            ordered_by_default: relation.previews_in_key_order(),
         }
     }
 }
@@ -121,8 +128,12 @@ fn projection(shape: &PreviewShape, facts: &RelationFacts) -> Result<String> {
 
 /// The `ORDER BY` terms, completed by the primary key from the first page on,
 /// or `None` when nothing needs ordering.
+///
+/// A relation ordered by default is ordered on its key from the first page,
+/// sort or no sort: page 0 unordered and page 1 by key would not be one
+/// sequence.
 fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String>> {
-    if shape.sort.is_empty() && shape.offset == 0 {
+    if !shape.needs_total_order() && !facts.ordered_by_default {
         return Ok(None);
     }
     let mut terms = Vec::with_capacity(shape.sort.len() + facts.key.len());
@@ -173,7 +184,11 @@ mod tests {
                 field
             })
             .collect::<Vec<_>>();
-        RelationFacts::of(&Relation::new("t", RelationKind::Table).with_fields(fields))
+        RelationFacts::of(
+            &Relation::new("t", RelationKind::Table)
+                .with_fields(fields)
+                .with_key_order_preview(),
+        )
     }
 
     fn path(name: &str) -> CatalogPath {
@@ -253,6 +268,74 @@ mod tests {
         assert!(
             matches!(refused, OxynError::NotSupported { .. }),
             "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_preview_without_request_comes_in_key_order() {
+        let request = request(
+            &path("t"),
+            200,
+            &PreviewShape::unordered(),
+            &facts(&[("id", true), ("name", false)]),
+        )
+        .expect("keyed preview");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"sales\".\"main\".\"t\" ORDER BY \"id\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_composite_key_orders_on_every_column_in_position_order() {
+        let request = request(
+            &path("t"),
+            200,
+            &PreviewShape::unordered(),
+            &facts(&[("order", true), ("line", true), ("note", false)]),
+        )
+        .expect("composite key");
+        assert_eq!(
+            request.text,
+            "SELECT * FROM \"sales\".\"main\".\"t\" ORDER BY \"order\" ASC, \"line\" ASC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn a_relation_without_key_or_without_the_flag_stays_unordered() {
+        // A view: DuckDB declares no key on it, so there is nothing to order on.
+        let keyless = request(
+            &path("v"),
+            200,
+            &PreviewShape::unordered(),
+            &facts(&[("name", false)]),
+        )
+        .expect("keyless preview");
+        assert_eq!(
+            keyless.text,
+            "SELECT * FROM \"sales\".\"main\".\"v\" LIMIT 200"
+        );
+        // A key the driver did not vouch for completes a sort, nothing more.
+        let fields = vec![
+            Field::new("id", 0, LogicalType::INT64, "BIGINT").primary_key(),
+            Field::new("name", 1, LogicalType::Text, "VARCHAR"),
+        ];
+        let unvouched =
+            RelationFacts::of(&Relation::new("t", RelationKind::Table).with_fields(fields));
+        let plain = request(&path("t"), 200, &PreviewShape::unordered(), &unvouched)
+            .expect("unvouched preview");
+        assert_eq!(
+            plain.text,
+            "SELECT * FROM \"sales\".\"main\".\"t\" LIMIT 200"
+        );
+        let sorted = PreviewShape {
+            sort: vec![PreviewSort::ascending("name")],
+            ..PreviewShape::default()
+        };
+        let sorted = request(&path("t"), 200, &sorted, &unvouched).expect("sorted");
+        assert_eq!(
+            sorted.text,
+            "SELECT * FROM \"sales\".\"main\".\"t\" ORDER BY \"name\" ASC, \"id\" ASC LIMIT 200"
         );
     }
 

@@ -6,11 +6,12 @@
 //! and projected fields are keys of documents the serializer escapes
 //! ([I-10](../../../CLAUDE.md#i-10)).
 //!
-//! The order policy is [ADR-0028](../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)'s:
-//! no order is imposed on a plain preview — the server returns its natural
-//! order — and a requested sort is completed by `_id`, unique and indexed in a
-//! collection, so pages never repeat nor skip a document. A view or a
-//! time-series collection has no such key: a page past the first is refused
+//! The order policy is [ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)'s:
+//! a plain preview of a collection comes in `_id` order — unique and indexed,
+//! so `sort: {_id: 1}` with a `limit` walks the index and stops — and a
+//! requested sort is completed by `_id`, so pages never repeat nor skip a
+//! document. A view or a time-series collection has no such key: it is read in
+//! the server's natural order, and a sort or a page past the first is refused
 //! there, like a table without a primary key.
 //!
 //! What a `find` cannot say is refused, never approximated:
@@ -33,7 +34,10 @@ use crate::session::LANGUAGE;
 /// The preview command.
 ///
 /// `relation` is the description, read only when the shape sorts, pages or
-/// projects.
+/// projects. `ordered_by_id` says whether a preview with no sort asked for
+/// comes in `_id` order: [`Relation::previews_in_key_order`] of the
+/// description when one was read, the collection's listing otherwise — the
+/// two read the same condition.
 ///
 /// # Errors
 /// [`OxynError::Config`] for a limit outside `1..=1000`,
@@ -46,6 +50,7 @@ pub(crate) fn request(
     limit: u32,
     shape: &PreviewShape,
     relation: Option<&Relation>,
+    ordered_by_id: bool,
 ) -> Result<ExecRequest> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
@@ -70,7 +75,7 @@ pub(crate) fn request(
         .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))?;
 
     let mut command = doc! { "find": collection, "$db": database };
-    if let Some(sort) = sort(shape, relation)? {
+    if let Some(sort) = sort(shape, relation, ordered_by_id)? {
         command.insert("sort", sort);
     }
     if let Some(projection) = projection(shape, relation)? {
@@ -113,11 +118,18 @@ fn checked<'a>(name: &'a str, relation: Option<&Relation>, what: &str) -> Result
     Ok(name)
 }
 
-/// The `sort` document, completed by `_id`, or `None` when nothing is sorted
-/// and only the first page is asked for.
-fn sort(shape: &PreviewShape, relation: Option<&Relation>) -> Result<Option<Document>> {
+/// The `sort` document, completed by `_id`; `{_id: 1}` alone for the first
+/// page of a collection when nothing is sorted, `None` for that of a view.
+///
+/// The first page of a collection is in `_id` order like the next ones: page 0
+/// in natural order and page 1 by `_id` would not be one sequence.
+fn sort(
+    shape: &PreviewShape,
+    relation: Option<&Relation>,
+    ordered_by_id: bool,
+) -> Result<Option<Document>> {
     if !shape.needs_total_order() {
-        return Ok(None);
+        return Ok(ordered_by_id.then(|| doc! { "_id": 1 }));
     }
     let keyed = relation.is_some_and(|relation| {
         relation

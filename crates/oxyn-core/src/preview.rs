@@ -68,7 +68,8 @@ pub struct PreviewShape {
     ///
     /// The driver **completes** it with a unique key to break ties: without a
     /// total order, two consecutive pages can show the same row twice and omit
-    /// another.
+    /// another. Empty, it falls back to the key order of a relation the driver
+    /// vouches for ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)).
     pub sort: Vec<PreviewSort>,
     /// The predicate written by the user, **without** the `WHERE` keyword.
     ///
@@ -127,9 +128,11 @@ impl PreviewShape {
     /// Does this request require a **total** order?
     ///
     /// True as soon as a sort is requested or a page other than the first is.
-    /// In both cases the driver must complete the order with a unique key,
-    /// which costs it a metadata read: that is the only reason a preview pays
-    /// for one, and a preview without a request pays for none.
+    /// In both cases the driver must complete the order with a unique key.
+    /// False does not mean the preview is unordered: a relation the driver
+    /// vouches for comes in key order even when nothing was asked
+    /// ([ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)),
+    /// which the driver learns from the description it reads on every preview.
     ///
     /// Sorting alone needs it as much as paging: ordering the first page by one
     /// column and the next by two would make a row reappear exactly at the
