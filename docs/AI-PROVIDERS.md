@@ -151,9 +151,22 @@ starting the agent can be enough for it to contact its service.
 > ([What the AI sees of the schema](#what-the-ai-sees-of-the-schema-and-when-it-is-read));
 > the executor returns the handle of the local catalog, and `oxyn-ai`
 > renders it through `ContextBuilder::build`, under the tier re-read at the call. The rendering only
-> knows the catalog's common model: a collection, a key pattern or
+> knows the catalog's common model: a collection, a Redis key or
 > a graph label is described there like a table, in the query language of
 > the connection ([ADR-0030 § 4 bis](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-the-database-structure-one-tool-for-every-destination)).
+>
+> **A Redis key goes out by its exact name.** The Redis catalog lists exact
+> keys — relations of kind `key_pattern`, "an exact key is the pattern that
+> matches only itself" — at most `TREE_KEYS` (1,000) per database, from a
+> bounded `SCAN` (`drivers/oxyn-driver-redis/src/catalog.rs`), and
+> `ContextBuilder::render_relation` writes each relation it keeps by its kind
+> and its name, with no filter on the kind. Under a tier that carries names
+> ([`Metadata` is not "nothing goes out"](#metadata-by-default-is-not-nothing-goes-out)),
+> the exact names of the keys selected for the question therefore reach the
+> prompt, and a key name can embed data itself. Whether to replace them with
+> patterns is **not decided**: see issue
+> [#339](https://github.com/so-keyldzn/oxyn/issues/339), opened on 2026-10-25,
+> and [ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
 
 > **What Oxyn cannot promise here**, and therefore does not promise: what
 > the agent does with what it receives. Billing, retention and data

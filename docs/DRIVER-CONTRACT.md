@@ -328,7 +328,7 @@ the database. The corruption is invisible and permanent.
 
 | Forbidden | Why |
 |---|---|
-| Depend on `oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` or another driver | inverts the direction of dependencies. `oxyn-core` **is**, on the contrary, the expected dependency: it is the shared vocabulary — `ExecRequest`, `OxynError`, `PreviewShape` —, and both shipped drivers depend on it ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
+| Depend on `oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` or another driver | inverts the direction of dependencies. `oxyn-core` **is**, on the contrary, the expected dependency: it is the shared vocabulary — `ExecRequest`, `OxynError`, `PreviewShape` —, and every driver depends on it ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
 | Exist twice for two products speaking the same protocol | [ADR-0003](adr/0003-driver-capabilities.md): Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. The difference is a capability, not a crate |
 | Write to a file, open a window, read an environment variable | a driver receives its configuration, it does not go and fetch it |
 | Log a parameter value or a connection identifier | [I-03](../CLAUDE.md#i-03) |

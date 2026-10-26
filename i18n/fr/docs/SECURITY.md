@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="4ce53eed5f84" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="938338bdea8f" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -663,9 +663,9 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
 ## Politique `unsafe`
 
 **`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
-`unsafe_code = "deny"`, et des seize crates — treize sous `crates/`,
-trois drivers sous `drivers/` — deux fonctions le réautorisent, chacune sous
-son propre ADR :
+`unsafe_code = "deny"`, et parmi les crates du workspace
+([leur liste](ARCHITECTURE.md#le-découpage)) deux fonctions le réautorisent,
+chacune sous son propre ADR :
 
 - `register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
   enregistre l'extension sqlite-vec embarquée sur une connexion — seulement

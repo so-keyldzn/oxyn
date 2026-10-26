@@ -55,7 +55,7 @@ most often, and most silently:
 
 | Forbidden | Why |
 |---|---|
-| Depending on `oxyn-desktop`, `oxyn-ai`, or another driver | reverses the direction of dependencies. **`oxyn-core`, on the contrary, is the expected dependency** — it is the shared vocabulary, and both shipped drivers depend on it ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
+| Depending on `oxyn-desktop`, `oxyn-ai`, or another driver | reverses the direction of dependencies. **`oxyn-core`, on the contrary, is the expected dependency** — it is the shared vocabulary, and every driver depends on it ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
 | Reading an environment variable, writing a file | a driver receives its configuration |
 | Retrying on its own | the retry policy belongs to the caller, the only one who knows whether the operation can be replayed |
 | Undeclared `SET`/`USE` | silently changes the meaning of the user's next queries |

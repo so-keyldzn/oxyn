@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="9ee07d080f90" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="9af5f6ff58bc" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -343,7 +343,7 @@ base. La corruption est invisible et permanente.
 
 | Interdit | Pourquoi |
 |---|---|
-| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et les deux drivers livrés en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
+| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et tous les drivers en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
 | Exister en double pour deux produits parlant le même protocole | [ADR-0003](adr/0003-driver-capabilities.md) : Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. La différence est une capacité, pas une crate |
 | Écrire dans un fichier, ouvrir une fenêtre, lire une variable d'environnement | un driver reçoit sa configuration, il ne va pas la chercher |
 | Journaliser une valeur de paramètre ou un identifiant de connexion | [I-03](../CLAUDE.md#i-03) |

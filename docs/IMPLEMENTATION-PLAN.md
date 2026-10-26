@@ -2218,8 +2218,8 @@ steps, as planned, each its own pull request, in this order:
    migration adding `ai_conversations.agent_id TEXT` (NULL reads as the SQL
    agent); `ai_list_agents { connectionId }` returning `AgentOption[]`; an
    optional `agentId` when a conversation starts; `agentId` and
-   `missingAgent` on summaries and transcripts; the agent selector in the
-   panel header ([UX-SPEC](UX-SPEC.md#the-agent-is-chosen-per-conversation)).
+   `missingAgent` on summaries and transcripts; the agent chip of the
+   composer ([UX-SPEC](UX-SPEC.md#the-agent-is-chosen-per-conversation)).
    **Exit gate**: choosing the Schema agent opens a new conversation and
    leaves the previous one unchanged; a conversation written before the
    migration reopens as the SQL agent; a conversation whose agent is gone
@@ -2304,9 +2304,12 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
   from the server's `COMMAND` table; replies streamed as Arrow in byte-bounded
   batches; blocked commands and scripts that have not written stopped on the
   server; databases and a bounded key sample in the tree; a read-only preview
-  per key type. To come: Cluster and Sentinel, `MULTI`/`EXEC`, Pub/Sub and
-  `MONITOR` as bounded captures, client certificates, module types, the
-  command vocabulary in the editor, and the Redis agent file.
+  per key type; Pub/Sub and `MONITOR` as bounded captures
+  (`drivers/oxyn-driver-redis/src/capture.rs`, decision 13); the Redis agent
+  file (`crates/oxyn-ai/agents/redis.md`,
+  [ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). To come:
+  Cluster and Sentinel, `MULTI`/`EXEC`, client certificates, module types, the
+  command vocabulary in the editor.
 
 **Why here, before plugins.** This is where the capability model
 ([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to

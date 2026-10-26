@@ -616,9 +616,9 @@ What enters Oxyn and is untrusted, in order of underestimation:
 ## `unsafe` policy
 
 **`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
-`unsafe_code = "deny"`, and of the sixteen crates — thirteen under `crates/`,
-three drivers under `drivers/` — two functions re-allow it, each under its own
-ADR:
+`unsafe_code = "deny"`, and of the crates of the workspace
+([their list](ARCHITECTURE.md#le-découpage)) two functions re-allow it, each
+under its own ADR:
 
 - `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
   registers the bundled sqlite-vec extension on a connection — only one where

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="686f8066e014" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="392dafc0a356" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -67,7 +67,10 @@ s'énonce désormais en [I-08](../CLAUDE.md#i-08) — aucune crate hors
 apps/desktop/                     # le front : pnpm, Vite, TanStack Start (SPA)
 ├── src/lib/ipc/                  # le SEUL module qui appelle `invoke` ; types miroirs d'ipc.rs
 ├── src/lib/actions/              # registre d'actions : manifeste, comportements, clavier (ADR-0041)
-├── src/components/ui/            # généré par `shadcn add` (Base UI), jamais retouché à la main
+├── src/components/ui/            # généré par `shadcn add` (Base UI), jamais retouché à la main ;
+│                                 #   dans `svgs/`, une marque qui s'ouvre sur un en-tête `// Source:`
+│                                 #   ne l'est pas : c'est le fichier même du projet amont, origine et
+│                                 #   date dans cet en-tête (DuckDB, Elasticsearch, OpenSearch entre autres)
 ├── src/components/oxyn/          # composants Oxyn : grille, arbre, éditeur, approbation…
 │                                 #   chacun avec ses stories, qui sont aussi ses tests
 ├── src/features/                 # écrans : connexion, workspace ; état de session
@@ -154,8 +157,9 @@ vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient
 
 ## 3. Le workspace Cargo
 
-16 crates, telles qu'elles existent, plus le front `apps/desktop`
-([§2 bis](#2-bis-linterface-tauri)) :
+21 crates, telles qu'elles existent — 13 sous `crates/`, 8 drivers sous
+`drivers/`, les membres du workspace étant `crates/*` et `drivers/*` — plus le
+front `apps/desktop` ([§2 bis](#2-bis-linterface-tauri)) :
 
 ```
 oxyn/
