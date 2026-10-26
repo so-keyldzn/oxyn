@@ -81,7 +81,12 @@ export function previewNotice({
   applied: PreviewShape
   /** The failed read asked for another shape than the one in force. */
   reshaped: boolean
-}): { text: string; warning: boolean } | null {
+}): {
+  text: string
+  warning: boolean
+  /** The notice ends on `Sort…`: sorting is what gives this preview pages. */
+  offersSort?: boolean
+} | null {
   switch (status) {
     case "failed":
       // A first read, or a refresh of the shape in force, had no previous
@@ -117,10 +122,15 @@ export function previewNotice({
   }
   if (status !== "loaded" || !pagination) return null
   switch (pagination.type) {
+    case "unknown":
+      // Not described yet: whether pages exist is not known, so nothing is
+      // claimed either way. The description, once read, answers.
+      return null
     case "needsOrder":
       return {
-        text: "Rows come in no guaranteed order. Sort the preview to browse it page by page: an OFFSET over an uncertain order shows a row twice and hides another, with nothing to say so.",
+        text: "Rows come in no guaranteed order, and putting this relation in order may mean reading all of it first. Sort the preview to browse it page by page.",
         warning: false,
+        offersSort: true,
       }
     case "noUniqueKey":
       return {
@@ -128,13 +138,46 @@ export function previewNotice({
         warning: false,
       }
     case "ready":
-      return pagination.previous
+      if (pagination.previous)
+        return {
+          text: `Rows ${pagination.firstRow.toLocaleString("en-US")}–${(applied.offset + PREVIEW_ROWS).toLocaleString("en-US")} of this order. Each page is a new read: the server may have changed between two of them.`,
+          warning: false,
+        }
+      // The order the user chose needs no explanation; the one Oxyn chose for
+      // them does, or the pager seems to page an arbitrary order.
+      return pagination.orderedBy
         ? {
-            text: `Rows ${pagination.firstRow.toLocaleString("en-US")}–${(applied.offset + PREVIEW_ROWS).toLocaleString("en-US")} of this order. Each page is a new read: the server may have changed between two of them.`,
+            text: `Rows come in the order of the primary key (${pagination.orderedBy.join(", ")}). Sort the preview to choose another order.`,
             warning: false,
           }
         : null
   }
+}
+
+const NOT_COUNTED = "total row count not requested"
+
+/**
+ * The footer's note under a preview: which rows of the order these are, once
+ * past the first page. Pure, so it is tested without a DOM.
+ */
+export function previewFooterNote(pagination: Pagination | null, rows: number) {
+  if (pagination?.type === "ready" && pagination.firstRow > 1 && rows > 0) {
+    const last = pagination.firstRow + rows - 1
+    return `Preview · rows ${pagination.firstRow.toLocaleString("en-US")}–${last.toLocaleString("en-US")} · ${NOT_COUNTED}`
+  }
+  return `Preview · ${NOT_COUNTED}`
+}
+
+/**
+ * The footer's way to the Sort menu, while the preview has no page because it
+ * has no order (ADR-0068): the footer is where someone looks for a pager.
+ */
+export function SortToBrowsePages({ onClick }: { onClick: () => void }) {
+  return (
+    <Button size="xs" variant="link" onClick={onClick}>
+      Sort to browse pages
+    </Button>
+  )
 }
 
 function SortComposer({
@@ -143,14 +186,17 @@ function SortComposer({
   loadingColumns,
   onLoadColumns,
   onApply,
+  open,
+  setOpen,
 }: {
   columns: Array<string> | null
   applied: Array<PreviewSortKey>
   loadingColumns: boolean
   onLoadColumns: () => void
   onApply: (sort: Array<PreviewSortKey>) => void
+  open: boolean
+  setOpen: (open: boolean) => void
 }) {
-  const [open, setOpen] = React.useState(false)
   const [draft, setDraft] = React.useState<Array<PreviewSortKey>>(applied)
   const keyList = React.useRef<HTMLOListElement>(null)
   // Moving a key to an end disables the button that was just pressed, and the
@@ -197,7 +243,7 @@ function SortComposer({
     })
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(next) => setOpen(next)}>
       <PopoverTrigger render={<Button size="sm" variant="outline" />}>
         <HugeiconsIcon
           icon={Sorting05Icon}
@@ -379,7 +425,8 @@ function SortComposer({
  * Absent — not disabled — when the session can neither filter nor sort a
  * preview (ADR-0003). The predicate is SQL the user writes; typing reads
  * nothing, Apply or Enter does. Pages exist only over rows that came from a
- * total order, and each page is a new read.
+ * total order — the user's sort, or the primary key's by default (ADR-0068) —
+ * and each page is a new read.
  */
 export function PreviewControls({
   canFilter,
@@ -396,6 +443,8 @@ export function PreviewControls({
   onCancel,
   onLoadColumns,
   filterRef,
+  sortOpen,
+  onSortOpenChange,
 }: {
   canFilter: boolean
   canSort: boolean
@@ -415,8 +464,17 @@ export function PreviewControls({
   onLoadColumns: () => void
   /** The WHERE field, which a header's `Filter…` focuses. */
   filterRef?: React.Ref<HTMLInputElement>
+  /**
+   * The Sort menu, held by the parent when something outside the bar opens
+   * it — the footer's `Sort to browse pages`. Absent, the bar holds it.
+   */
+  sortOpen?: boolean
+  onSortOpenChange?: (open: boolean) => void
 }) {
   const [draft, setDraft] = React.useState(applied.predicate ?? "")
+  const [ownSortOpen, setOwnSortOpen] = React.useState(false)
+  const sortIsOpen = sortOpen ?? ownSortOpen
+  const setSortOpen = onSortOpenChange ?? setOwnSortOpen
 
   if (!canFilter && !canSort) return null
 
@@ -483,6 +541,8 @@ export function PreviewControls({
             loadingColumns={loadingColumns}
             onLoadColumns={onLoadColumns}
             onApply={onApplySort}
+            open={sortIsOpen}
+            setOpen={setSortOpen}
           />
         ) : null}
       </div>
@@ -503,6 +563,17 @@ export function PreviewControls({
           ) : (
             <div className="flex-1" />
           )}
+          {notice?.offersSort && canSort ? (
+            // Outside the live region: the action is not part of what it says.
+            <Button
+              size="xs"
+              variant="outline"
+              className="shrink-0"
+              onClick={() => setSortOpen(true)}
+            >
+              Sort…
+            </Button>
+          ) : null}
           {pages ? (
             <div className="ms-auto flex shrink-0 items-center gap-1">
               <Button

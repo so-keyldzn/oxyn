@@ -315,6 +315,8 @@ describe("a restored object tab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Read it now" }))
     expect(previewVisible).toHaveBeenLastCalledWith(true)
+    // The description the pages depend on is read with the rows (ADR-0068).
+    expect(ensure).toHaveBeenCalledWith("detail")
     expect(onPlaceChange).toHaveBeenLastCalledWith("data")
     expect(screen.queryByText("Restored from your last session")).toBeNull()
   })
@@ -338,6 +340,10 @@ describe("a restored object tab", () => {
   it("an object opened by the user reads at once", () => {
     renderView({})
     expect(previewVisible).toHaveBeenCalledWith(true)
+    // Its key decides whether the rows have pages: described once, not per
+    // render.
+    expect(ensure).toHaveBeenCalledWith("detail")
+    expect(ensure.mock.calls.every(([facet]) => facet === "detail")).toBe(true)
     expect(screen.queryByText("Restored from your last session")).toBeNull()
   })
 })

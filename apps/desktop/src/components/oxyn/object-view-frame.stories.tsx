@@ -22,7 +22,11 @@ import {
   initialObjectTab,
 } from "./object-view-frame"
 import type { ObjectTab } from "./object-view-frame"
-import { PreviewControls } from "./preview-controls"
+import {
+  PreviewControls,
+  SortToBrowsePages,
+  previewFooterNote,
+} from "./preview-controls"
 import { RelationConstraints } from "./relation-constraints"
 import { RelationDefinition } from "./relation-definition"
 import { RelationIndexes } from "./relation-indexes"
@@ -32,6 +36,7 @@ import { ResultPanel } from "./result-panel"
 import type { ResultState } from "./result-panel"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
+import type { Pagination } from "@/lib/ipc/metadata"
 import type { ExportFormatChoice } from "@/lib/ipc/results"
 import { useActionSource } from "@/lib/actions/context"
 import type { WorkspaceActions } from "@/lib/actions/context"
@@ -76,6 +81,15 @@ const populated: ResultState = {
   elapsedMs: 42,
 }
 
+/** A table read in its primary key's order: pages from the first read. */
+const keyOrder: Pagination = {
+  type: "ready",
+  previous: false,
+  next: true,
+  firstRow: 1,
+  orderedBy: ["id"],
+}
+
 /** A whole object view, drawn from fixtures: no backend is reached. */
 function Harness({
   name = "invoices",
@@ -92,9 +106,11 @@ function Harness({
   onExport,
   onInspectRow,
   absentTabs,
+  pagination = keyOrder,
 }: {
   /** The layout of 1200 px and more: the definition sits beside the tabs. */
   wide?: boolean
+  pagination?: Pagination
   absentTabs?: ReadonlySet<ObjectTab>
   name?: string
   kind?: string
@@ -116,6 +132,7 @@ function Harness({
     "incoming"
   )
   const idle = { status: "idle" } as const
+  const [sortOpen, setSortOpen] = React.useState(false)
   // `⌘2` as the workspace publishes it to the registry for the object on
   // screen; the rest of the workspace does nothing in a story.
   const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
@@ -185,12 +202,14 @@ function Harness({
                 columns={invoicesDetail.fields.map((field) => field.name)}
                 applied={PLAIN_SHAPE}
                 status={running ? "loading" : "loaded"}
-                pagination={{ type: "needsOrder" }}
+                pagination={pagination}
                 onApplyPredicate={() => undefined}
                 onApplySort={() => undefined}
                 onPage={() => undefined}
                 onCancel={onCancel}
                 onLoadColumns={() => undefined}
+                sortOpen={sortOpen}
+                onSortOpenChange={setSortOpen}
               />
               <div className="min-h-0 flex-1">
                 <ResultPanel
@@ -199,16 +218,24 @@ function Harness({
                   onCancel={onCancel}
                   onRetry={onRefresh}
                   context={{ connectionName: "billing-prod", statement: null }}
-                  footerNote="Preview · total row count not requested"
+                  footerNote={previewFooterNote(
+                    pagination,
+                    state.status === "populated" ? state.rows : 0
+                  )}
                   footerActions={
-                    compact ? null : (
-                      <ExportMenuView
-                        {...exportChoice}
-                        state={idle}
-                        onExport={onExport}
-                        onCancel={onCancel}
-                      />
-                    )
+                    <>
+                      {pagination.type === "needsOrder" ? (
+                        <SortToBrowsePages onClick={() => setSortOpen(true)} />
+                      ) : null}
+                      {compact ? null : (
+                        <ExportMenuView
+                          {...exportChoice}
+                          state={idle}
+                          onExport={onExport}
+                          onCancel={onCancel}
+                        />
+                      )}
+                    </>
                   }
                   compactActions={
                     compact ? (
@@ -307,6 +334,53 @@ export const Preview: Story = {
     await expect(canvas.getByText("Read-only preview")).toBeVisible()
     // Refresh and Cancel are two buttons: the idle one is inert.
     await expect(canvas.getByRole("button", { name: /^Cancel/ })).toBeDisabled()
+    // The key order gives pages from the first read, with no sort (ADR-0068).
+    await expect(
+      canvas.getByRole("button", { name: /Next page/ })
+    ).toBeEnabled()
+    await expect(
+      canvas.getByText(/in the order of the primary key \(id\)/)
+    ).toBeVisible()
+  },
+}
+
+/** A later page of the key order: the footer says which rows these are. */
+export const PreviewSecondPage: Story = {
+  args: {
+    pagination: { ...keyOrder, previous: true, firstRow: 201 },
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("Preview · rows 201–400 · total row count not requested")
+    ).toBeVisible()
+  },
+}
+
+/**
+ * A relation with no default order: the footer, where a pager is looked for,
+ * says how to get one and opens the Sort menu.
+ */
+export const PreviewWithoutOrder: Story = {
+  args: { pagination: { type: "needsOrder" } },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByRole("button", { name: /Next page/ })).toBeNull()
+    await expect(
+      canvas.getByText("Preview · total row count not requested")
+    ).toBeVisible()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Sort to browse pages" })
+    )
+    const popover = within(document.body)
+    await expect(
+      await popover.findByRole("button", { name: "Add column" })
+    ).toBeVisible()
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(popover.queryByRole("button", { name: "Add column" })).toBeNull()
+    )
+    await waitFor(() =>
+      expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+    )
   },
 }
 

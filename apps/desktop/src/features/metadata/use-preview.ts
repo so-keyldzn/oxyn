@@ -70,11 +70,18 @@ export function usePreview({
   address,
   enabled,
   visible,
+  described,
 }: {
   open: OpenConnection
   address: CatalogAddress
   enabled: boolean
   visible: boolean
+  /**
+   * When the relation's description was last read, `null` before: the
+   * backend reads the key it pages by from that description (ADR-0068), so
+   * the pagination is asked again when it arrives.
+   */
+  described: string | null
 }) {
   const key = previewKey(open.connection, addressKey(address))
   const entry = useStore(previews.store, (all) => all[key])
@@ -148,6 +155,7 @@ export function usePreview({
       key,
       applied,
       rows,
+      described,
     ] as const,
     enabled: enabled && (status === "loaded" || status === "empty"),
     queryFn: () =>

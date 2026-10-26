@@ -111,11 +111,11 @@ describe("the first @", () => {
       wrapper: withClient(shared),
     })
 
-    const typed = performance.now()
     act(() => result.current.onQuery(""))
-    // Same render: no wait on the slow backend, no debounce.
+    // Same render: no wait on the slow backend, no debounce. That is the
+    // property; the 100 ms of docs/PERFORMANCE.md is measured in the app, since
+    // a wall clock on a shared CI runner is not the component's own time.
     expect(labels(result.current.results)).toEqual(["orders", "customers"])
-    expect(performance.now() - typed).toBeLessThan(100)
     // Nothing asked again: the sidebar owns this tree's freshness.
     expect(ipc.catalogTree).not.toHaveBeenCalled()
   })
