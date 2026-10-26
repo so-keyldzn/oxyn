@@ -82,12 +82,13 @@ gets missed: a `// SAFETY:` that paraphrases the code is worthless. It says
 The conventions live in [tests.md](tests.md): what gets tested, hostile inputs,
 the levels of interface tests, benches.
 
-The pointer is still needed, but not for the reason that used to be given here:
-the `paths:` of [tests.md](tests.md) now covers `**/*_tests.rs` and
-`**/tests.rs` in addition to directories. What it still does not cover is a
-`#[cfg(test)] mod tests` written **at the bottom of a source file** — and that
-is the prevailing form here. The conclusion held; the example that justified it
-had aged.
+Where they live: a module whose tests run past about 150 lines keeps them out of
+line, in `<module>/tests.rs` declared by `#[cfg(test)] mod tests;` (`tests.rs`
+next to `lib.rs` for a crate root). The `paths:` of [tests.md](tests.md) covers
+that file, so the rule loads when a test is read, and a source file carries only
+what ships. A shorter module may keep a `#[cfg(test)] mod tests { … }` at the
+bottom of its file — the one form `paths:` does not cover, which is why this
+pointer stays.
 
 ## Verify
 
