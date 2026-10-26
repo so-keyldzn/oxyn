@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="ef9168a4dfc6" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="7a93cda32e78" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -157,9 +157,22 @@ démarrer l'agent peut suffire à lui faire contacter son service.
 > ([Ce que l'IA voit du schéma](#ce-que-lia-voit-du-schéma-et-quand-cest-lu)) ;
 > l'exécuteur rend la poignée du catalogue local, et `oxyn-ai` la
 > rend par `ContextBuilder::build`, sous le niveau relu à l'appel. Le rendu ne
-> connaît que le modèle commun du catalogue : une collection, un motif de clés ou
+> connaît que le modèle commun du catalogue : une collection, une clé Redis ou
 > un label de graphe s'y décrivent comme une table, dans le langage de requête de
 > la connexion ([ADR-0030 § 4 bis](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-la-structure-de-la-base--un-outil-pour-toutes-les-destinations)).
+>
+> **Une clé Redis part sous son nom exact.** Le catalogue Redis liste des clés
+> exactes — des relations de genre `key_pattern`, « une clé exacte est le motif
+> qui ne correspond qu'à elle-même » — au plus `TREE_KEYS` (1 000) par base, à
+> partir d'un `SCAN` borné (`drivers/oxyn-driver-redis/src/catalog.rs`), et
+> `ContextBuilder::render_relation` écrit chaque relation qu'il retient par son
+> genre et son nom, sans filtre sur le genre. Sous un niveau qui porte les noms
+> ([`Metadata` n'est pas « rien ne sort »](#metadata-par-défaut-nest-pas--rien-ne-sort-)),
+> les noms exacts des clés retenues pour la question atteignent donc l'invite, et
+> un nom de clé peut embarquer lui-même une donnée. Remplacer ces noms par des
+> motifs n'est **pas décidé** : voir l'issue
+> [#339](https://github.com/so-keyldzn/oxyn/issues/339), ouverte le 2026-10-25, et
+> l'[ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
 
 > **Ce qu'Oxyn ne peut pas promettre ici**, et qu'il ne promet donc pas : ce que
 > l'agent fait de ce qu'il reçoit. La facturation, la rétention et le traitement

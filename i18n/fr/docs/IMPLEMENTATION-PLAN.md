@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="cb898081832b" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="a233eb09ff6d" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2229,8 +2229,8 @@ Les étapes, telles que prévues, chacune sa pull request, dans cet ordre :
    additive qui ajoute `ai_conversations.agent_id TEXT` (NULL se lit comme
    l'agent SQL) ; `ai_list_agents { connectionId }` qui renvoie
    `AgentOption[]` ; un `agentId` optionnel au démarrage d'une conversation ;
-   `agentId` et `missingAgent` sur les résumés et les transcriptions ; le
-   sélecteur d'agent dans l'en-tête du panneau
+   `agentId` et `missingAgent` sur les résumés et les transcriptions ; la
+   puce d'agent du composeur
    ([UX-SPEC](UX-SPEC.md#lagent-se-choisit-par-conversation)).
    **Porte de sortie** : choisir l'agent Schema ouvre une nouvelle
    conversation et laisse la précédente inchangée ; une conversation écrite
@@ -2325,10 +2325,12 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
   d'après la table `COMMAND` du serveur ; réponses diffusées en Arrow, en lots
   bornés en octets ; commandes bloquées et scripts qui n'ont pas écrit arrêtés
   sur le serveur ; bases et échantillon borné de clés dans l'arbre ; un aperçu
-  en lecture seule par type de clé. Restent : Cluster et Sentinel,
-  `MULTI`/`EXEC`, Pub/Sub et `MONITOR` en captures bornées, certificats
-  clients, types de modules, le vocabulaire des commandes dans l'éditeur, et
-  le fichier d'agent Redis.
+  en lecture seule par type de clé ; Pub/Sub et `MONITOR` en captures bornées
+  (`drivers/oxyn-driver-redis/src/capture.rs`, décision 13) ; le fichier
+  d'agent Redis (`crates/oxyn-ai/agents/redis.md`,
+  [ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). Restent :
+  Cluster et Sentinel, `MULTI`/`EXEC`, certificats clients, types de modules,
+  le vocabulaire des commandes dans l'éditeur.
 
 **Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
 ([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à

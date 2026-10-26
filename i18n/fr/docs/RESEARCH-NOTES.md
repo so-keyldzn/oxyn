@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="4709668c6e15" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="81f81f056049" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -485,8 +485,17 @@ passer par [`/adr`](../claude/commands/adr.md) si elle engage l'architecture.
 > seulement** — voir la section « Bancs d'essai » ci-dessous. Elle reste dans
 > ce tableau pour être couverte par le vérificateur automatique.
 
-> `duckdb` versionne en suivant la version amont de DuckDB (`1.10505.0`), pas en
-> semver Rust classique. Ne pas déduire une rupture d'API d'un saut de majeure.
+> `duckdb` et `mongodb` sont adoptées, non candidates : le workspace épingle
+> `duckdb` `=1.10506.1` et `mongodb` `=3.9.1`, et leurs sections
+> ([DuckDB](#moteur-duckdb-et-bibliothèque-cliente--vérifié-le-2026-10-23),
+> [MongoDB](#bibliothèque-cliente-et-serveur-mongodb--vérifié-le-2026-10-23))
+> consignent les versions épinglées et remplacent les lignes ci-dessus, lues le
+> 2026-09-05. Les lignes restent ici pour être couvertes par le vérificateur
+> automatique.
+
+> `duckdb` versionne en suivant la version amont de DuckDB (`1.10506.1`, la
+> version épinglée), pas en semver Rust classique. Ne pas déduire une rupture
+> d'API d'un saut de majeure.
 
 ## Codex — contexte étendu
 
@@ -3132,7 +3141,7 @@ Pour [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
 | Les tags les plus récents de Docker Hub sont `elasticsearch:9.5.5` (mis à jour le 2026-10-23), l'image que lance le job CI `serveurs`, et `opensearchproject/opensearch:3.9.0` (mis à jour le 2026-09-29), qui remplace 3.0.0 ci-dessus pour la vérification avant release. Les deux ont passé au vert les 11 tests d'intégration du pilote le 2026-10-24. | [Docker Hub elasticsearch](https://hub.docker.com/_/elasticsearch/tags), [Docker Hub opensearch](https://hub.docker.com/r/opensearchproject/opensearch/tags), `cargo nextest run -p oxyn-driver-elasticsearch --run-ignored all` | 2026-10-24 |
 | Un point dans le temps s'ouvre par `POST /<index>/_pit` et son identifiant se lit dans `id` sur Elasticsearch, par `POST /<index>/_search/point_in_time` et `pit_id` sur OpenSearch, qui n'a pas de route `_pit` ; les deux continuent avec `search_after` et `pit.id` dans le corps. | test d'intégration `a_point_in_time_stream_that_would_not_fit_stays_under_a_memory_bound` contre les deux images ci-dessus | 2026-10-24 |
 | Le pilote lit les hits par la fonctionnalité `raw_value` de `serde_json` (`RawValue`), si bien qu'un nombre garde son texte exact : un `unsigned_long` au-delà de 2^53 ne passe pas par `f64`. La fonctionnalité n'ajoute aucune dépendance. | [Fonctionnalités de serde_json](https://docs.rs/crate/serde_json/latest/features), `Cargo.lock` | 2026-10-24 |
-| Le registre shadcn `@svgl` (670 entrées) n'a aucune marque Elasticsearch, Elastic ou OpenSearch : la tuile de connexion porte l'icône générique de base de données. | [api.svgl.app](https://api.svgl.app), l'index que sert le registre | 2026-10-24 |
+| Le registre shadcn `@svgl` (670 entrées) n'a aucune marque Elasticsearch, Elastic ou OpenSearch. À cette date, la tuile de connexion portait l'icône générique de base de données ; ce n'est plus le cas : les marques viennent des projets amont, voir [Marques récupérées en amont](#marques-récupérées-en-amont--relevé-le-2026-10-26). | [api.svgl.app](https://api.svgl.app), l'index que sert le registre | 2026-10-24 |
 | Un nom d'index « ne peut pas commencer par `-`, `_` ou `+` » et « ne peut pas être `.` ou `..` » ; il ne peut contenir ni `\` ni `/`. Le classifieur repose sur la première règle : le premier segment du chemin qui commence par `_` est l'API. `_all` est la seule cible qui commence par `_`. | [API de création d'index d'Elasticsearch](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-create) | 2026-10-24 |
 | Une recherche renvoie **10** hits quand elle ne nomme pas de `size` : une page de point dans le temps plus courte que sa `size`, ou que 10, est la dernière. | [API de recherche d'Elasticsearch](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-search) | 2026-10-24 |
 | Elasticsearch cherche les champs `dense_vector` par kNN approché depuis la **8.0**, le plancher du pilote : toute session Elasticsearch déclare `VECTOR_SEARCH`. OpenSearch le fait par son plugin `opensearch-knn`, livré dans la distribution complète et absent de la minimale ; le pilote lit `GET /_cat/plugins`, qui le liste sur l'image 3.9.0. | [Recherche kNN d'Elasticsearch 8.0](https://www.elastic.co/guide/en/elasticsearch/reference/8.0/knn-search.html), [Plugins d'OpenSearch](https://docs.opensearch.org/latest/install-and-configure/plugins/), `GET /_cat/plugins` sur `opensearchproject/opensearch:3.9.0` | 2026-10-24 |
@@ -3165,7 +3174,7 @@ ci-dessus, lue le 2026-09-05.
 | Points de panique des entrées que le driver appelle : `RawStatement::column_logical_type` panique quand DuckDB ne rend aucun type pour un indice (`raw_statement.rs`) ; `RawStatement::schema` suppose une instruction exécutée ; `LogicalTypeHandle::child` et `child_name` paniquent hors limites ou sur un type sans enfants ; `LogicalTypeHandle::get_alias` déballe l'alias en UTF-8 (`core/logical_type.rs`) ; l'itérateur d'`ArrowBatch` panique sur une erreur de lecture (`arrow_batch.rs`) | sources de `duckdb` 1.10506.1 | 2026-10-23 |
 | `SET enable_external_access = true` sur une base en marche lève « Cannot enable external access while database is running » ; `allowed_directories` lève une erreur une fois l'accès externe coupé ; charger une extension lève « Loading external extensions is disabled through configuration » tant qu'il l'est, quoi que dise `autoload_known_extensions` | `custom_settings.cpp` (`EnableExternalAccessSetting::OnSet`, `AllowedDirectoriesSetting::SetGlobal`), `extension_load.cpp` (`TryInitialLoad`) de v1.5.6 | 2026-10-23 |
 | Par défaut (`arrow_lossless_conversion` coupé), DuckDB exporte `HUGEINT` et `UHUGEINT` en `Decimal128(38, 0)`, `TIMESTAMP WITH TIME ZONE` en `Timestamp(µs, <fuseau de la session>)`, `TIME WITH TIME ZONE` en `Time64(µs)` sans le décalage, `BIT` en binaire, `UUID` en texte, et `JSON` en texte simple sans son alias | `SetArrowFormat`, `src/common/arrow/arrow_converter.cpp` de v1.5.6 | 2026-10-23 |
-| `svgl` n'a pas de logo DuckDB : une recherche sur `duck` ne rend que DuckDuckGo | `https://api.svgl.app?search=duck` | 2026-10-23 |
+| `svgl` n'a pas de logo DuckDB : une recherche sur `duck` ne rend que DuckDuckGo. La marque que l'application dessine désormais pour DuckDB vient du projet amont, voir [Marques récupérées en amont](#marques-récupérées-en-amont--relevé-le-2026-10-26) | `https://api.svgl.app?search=duck` | 2026-10-23 |
 
 **Coût de compilation, mesuré le 2026-10-23** sur la machine du mainteneur
 (Apple silicon, dix cœurs partagés avec trois autres compilations Rust — les
@@ -3177,11 +3186,77 @@ durées murales sont un majorant, les temps CPU sont le chiffre comparable) :
 | `cargo test -p oxyn-driver-duckdb --no-run`, moteur à neuf, `debug = false` pour `libduckdb-sys` | 35 min 52 s | 1 922 s | 73 Mo | 186 Mo |
 
 La seconde ligne a aussi recompilé tout le graphe de dépendances du profil de
-test, pas seulement le moteur. La taille du binaire livré n'a **pas** été
-mesurée : aucune compilation release n'a été lancée. L'archive de la seconde
-ligne, du code objet en `opt-level` 2 sans informations de débogage, majore ce
-que le moteur ajoute avant que l'éditeur de liens n'écarte ce qui n'est pas
-appelé.
+test, pas seulement le moteur. Aucune compilation release n'avait été lancée le
+2026-10-23 : la taille de ce qui est livré n'était donc pas encore mesurée ; la
+première livraison qui porte le moteur, `v0.0.14` (le `Cargo.toml` de `v0.0.13`
+n'a pas de `duckdb`), est mesurée ci-dessous. L'archive de la seconde ligne, du
+code objet en `opt-level` 2 sans informations de débogage, majore ce que le
+moteur ajoute avant que l'éditeur de liens n'écarte ce qui n'est pas appelé.
+
+**Compilation release avec le moteur, mesurée le 2026-10-25** par la livraison
+de `v0.0.14` (run du workflow `livraison` [40211362379](https://github.com/so-keyldzn/oxyn/actions/runs/40211362379),
+commit `3e4b873`, conclusion `success`) : les jobs `paquets` lancent
+`make desktop PROFIL=release` — `lto = "thin"`, `codegen-units = 1`,
+`panic = "abort"`, `strip = true`, DuckDB `bundled` — sur les runners hébergés
+par GitHub ci-dessous. La durée est celle du job entier, telle que GitHub la
+rapporte du début à la fin (récupération du dépôt, dépendances, front, build
+Rust, empaquetage, dépôt des artefacts), face au `timeout-minutes: 75` du job :
+
+| Runner | Durée murale du job |
+|---|---|
+| `ubuntu-24.04` (x86_64) | 21 min 11 s |
+| `ubuntu-24.04-arm` (aarch64) | 26 min 27 s |
+| `macos-latest` (aarch64) | 34 min 22 s |
+
+Les tailles des paquets que porte la release `v0.0.14`, publiée le
+2026-10-25T17:10:31Z (`Mio` = 2^20 octets, arrondi à une décimale ; les octets
+sont donnés parce qu'un arrondi n'est pas une mesure) :
+
+| Fichier | Octets | Mio |
+|---|---|---|
+| `Oxyn_0.0.14_aarch64.dmg` | 30 403 344 | 29,0 |
+| `Oxyn_0.0.14_aarch64.app.tar.gz` | 30 273 470 | 28,9 |
+| `Oxyn_0.0.14_amd64.AppImage` | 112 458 232 | 107,2 |
+| `Oxyn_0.0.14_aarch64.AppImage` | 107 842 056 | 102,8 |
+| `Oxyn_0.0.14_amd64.deb` | 37 913 820 | 36,2 |
+| `Oxyn_0.0.14_arm64.deb` | 35 327 948 | 33,7 |
+| `Oxyn-0.0.14-1.x86_64.rpm` | 37 917 171 | 36,2 |
+| `Oxyn-0.0.14-1.aarch64.rpm` | 35 329 359 | 33,7 |
+
+Ce sont des tailles de paquets, pas celle du binaire `oxyn-desktop`, et elles
+n'isolent pas ce qu'ajoute DuckDB : aucune compilation sans le moteur n'a été
+faite pour comparer. Elles décrivent une exécution par runner et ne fixent
+aucun budget : les budgets chiffrés vivent dans [PERFORMANCE](PERFORMANCE.md).
+Source : `gh run view 40211362379` (heures de début et de fin des jobs) et
+`gh release view v0.0.14` (tailles des fichiers), lus le 2026-10-26 ;
+`Cargo.toml` (`[profile.release]`) et `.github/workflows/livraison.yml`
+(`timeout-minutes`, runners).
+
+## Marques récupérées en amont — relevé le 2026-10-26
+
+Les deux lignes `svgl` ci-dessus n'ont trouvé aucune marque pour DuckDB,
+Elasticsearch et OpenSearch, et la première laissait la tuile de connexion sur
+l'icône générique de base de données. Ce n'est plus le cas :
+`apps/desktop/src/components/oxyn/driver-logo.tsx` dessine une marque pour
+chacun. Elles ne sont pas ajoutées par `shadcn add` : les fichiers de
+`apps/desktop/src/components/ui/svgs/` qui s'ouvrent sur un en-tête
+`// Source:` sont les fichiers mêmes des projets amont, et l'en-tête dit d'où
+vient chacun et quand il a été récupéré (le dossier `ui/` contient pour le
+reste ce que `shadcn add` a généré,
+[ARCHITECTURE](ARCHITECTURE.md#2-bis-linterface-tauri)). D'autres marques de ce
+dossier portent le même genre d'en-tête ; le tableau consigne les trois dont
+parlent les lignes ci-dessus.
+
+| Marque | Fichier amont, tel que l'en-tête du fichier d'Oxyn le donne | Récupéré | Source |
+|---|---|---|---|
+| DuckDB, clair et sombre | `logo/DuckDB_Logo-stacked.svg` de `duckdb/duckdb` au commit `3a1a9689217b0e335dd4310d766f8b16ed043c80` ; `logo/DuckDB_Logo-stacked-dark-mode.svg` au commit `9f03cc7576b4bf09d2ad927a5c0039b41c75f872`. Tracés inchangés, la classe `.st0` mise en attribut de remplissage | 2026-10-24 | en-têtes de `svgs/duckdb.tsx` et `svgs/duckdbDarkMode.tsx` |
+| Elasticsearch | `packages/eui/src/components/icon/svgs/logo_elasticsearch.svg` de `elastic/eui` (le système de design d'Elastic) au commit `5c4031565d1f0fef7e08e2377ea5b29bf8963b54`. Tracés inchangés ; la barre du milieu n'a pas de remplissage propre (l'en-tête note qu'EUI la peint) | 2026-10-24 | en-tête de `svgs/elasticsearch.tsx` |
+| OpenSearch, mode par défaut et mode sombre | `opensearch_mark_default_mode.svg` et `opensearch_mark_dark_mode.svg`, tous deux dans `src/core/server/core_app/assets/default_branding/` de `opensearch-project/OpenSearch-Dashboards`, au commit `9037b61e9d4da3c44f0ba0fab8f803db5873ef89`. Tracés inchangés ; l'en-tête dit que le commentaire de licence du fichier et son `xmlns` ont été retirés | 2026-10-24 | en-têtes de `svgs/opensearch.tsx` et `svgs/opensearchDarkMode.tsx` |
+
+**Le régime sous lequel Oxyn peut utiliser ces marques n'est pas encore
+décidé.** Le mainteneur n'a pas tranché le régime d'usage de ces marques ; cette
+section consigne d'où elles viennent et n'évalue ni une licence ni une politique
+de marque.
 
 ## Protocole ClickHouse et bibliothèques clientes — vérifié le 2026-10-23
 

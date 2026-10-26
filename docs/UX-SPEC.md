@@ -315,10 +315,14 @@ area. An 88 px page header is not added to this structure.
 
 An object shows only the sub-tabs its session can fill: `Indexes` needs
 `INDEXES`, `Constraints` needs `CONSTRAINTS`, `Relations` needs
-`FOREIGN_KEYS` or `INCOMING_FOREIGN_KEYS`. A key-value or document session therefore shows `Data`,
-`Structure` and `DDL`, not three tabs that each say "not supported". The kind
-beside the object's name is written for reading (`key pattern`, not
-`key_pattern`).
+`FOREIGN_KEYS` or `INCOMING_FOREIGN_KEYS`. `Data`, `Structure` and `DDL` are
+always drawn; `DDL` says by itself why a session has no definition to show. A
+session that declares none of those capabilities — Redis and Elasticsearch,
+as their drivers declare them — therefore shows `Data`, `Structure` and `DDL`,
+not three tabs that each say "not supported"; one that declares some shows
+those tabs too, and a MongoDB session, which declares `INDEXES`, adds
+`Indexes`. The kind beside the object's name is written for reading
+(`key pattern`, not `key_pattern`).
 
 The sidebar stays **inset with collapse to an icon rail** on every screen, as
 in the Figma page `01 · Sidebar`. Open at 280 px or collapsed at 64 px, it keeps
@@ -922,6 +926,36 @@ Stop outside of one. A single button whose meaning toggles would be one missed
 click away from restarting what the user wanted to stop. Stop reaches the real
 cancellation, all the way to the server.
 
+### Run in another language
+
+A console speaks the language its session declares: SQL, or, when the session
+declares no SQL and one other language, that one. A session that declares
+several besides SQL, or none, has no console language: Run refuses, and says
+that Oxyn cannot tell which one to send. `⌘Enter` keeps its meaning — the
+explicit selection when there is one, otherwise the **request under the
+cursor** — but where a request ends is a property of the language, so each one
+has its own cut:
+
+* **Redis commands**: one command per line. A line break inside a quoted
+  argument belongs to the argument; a quote left open makes the boundary
+  unknown, and the console asks for a selection rather than send half of a
+  value as a command of its own
+  ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md), decision 5).
+* **MongoDB**: one database command per top-level JSON object, in Extended
+  JSON. The object whose braces hold the cursor runs; between two objects the
+  cursor runs nothing — never the neighbour, which may be a write
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+* **Elasticsearch and OpenSearch**: requests as Kibana's console writes them. A
+  line that starts with an HTTP method and a path opens a request, and the lines
+  up to the next such line are its body; the blank and comment lines after a
+  request are not sent; the cursor before the first request names none
+  ([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
+
+A selection, like Run on the whole text, goes out as **one** request in any
+language: the driver reads it, and refuses what it cannot run as one. Where the
+console cannot cut a language at all, it says so and asks for a selection; it
+never cuts it as if it were SQL.
+
 ## Explain
 
 Explain describes the current statement; it never runs it. The prefix is put on
@@ -939,6 +973,21 @@ its data, and that the statement itself was not run. Someone who launches
 Explain, steps away and comes back reads the grid, not the button they pressed;
 without the mention, they would read a plan as data. The mention disappears at
 the next launch that is not an Explain.
+
+**Explain follows what the session declares**, not the language. Where the
+session declares `EXPLAIN`, the control is available; elsewhere it is greyed,
+with "This connection does not describe a statement's plan" — Redis and
+Elasticsearch declare none. MongoDB declares it: the typed command is wrapped
+whole in an `explain` command that asks for the `queryPlanner` verbosity, the
+one that selects a plan without running it. The two others, `executionStats`
+and `allPlansExecution`, run the winning plan, so they are never asked, as
+`ANALYZE` is never added. A command that is already an `explain` is refused
+("run it as it is"). One difference from SQL: the command Explain wraps is
+classified like the command it explains, so the plan of a write goes through the
+review of that write
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md),
+"Explain: the planner only"). The `Execution plan` mention above applies the
+same way.
 
 ## Session context of a console
 
@@ -997,6 +1046,13 @@ They go into the execution request, **never** into the SQL text: nothing is
 concatenated or substituted, and the SQL written by the user stays intact
 ([I-10](../CLAUDE.md#i-10)). Each console has its own; opening a neighboring
 console does not inherit them.
+
+**Only a SQL console binds values.** On a session whose language is another —
+Redis commands, MongoDB commands, the Elasticsearch Query DSL — a command
+carries its own values in its text, and its driver refuses bound parameters.
+The `Parameters` control is then **absent**, not dimmed, and its panel cannot
+open: a greyed control would suggest a feature that language does not have. A
+console with no session yet reads as SQL, like its editor.
 
 Each value declares its type. A new row is `NULL` and its input is closed until
 a type is chosen. A value that its type cannot convert stops the submission
@@ -1161,10 +1217,13 @@ it cannot be known where it sends
 ([AI-PROVIDERS](AI-PROVIDERS.md#an-external-agent-the-reach-is-not-unknown-it-is-unknowable)).
 Making the entry disappear would read as a defect, and ADR-0006 requires that
 an unavailable feature explain itself. The same goes for a session whose
-language no agent writes: the entry names the language ("No agent writes
-Redis commands yet, and the assistant only writes what an agent knows."),
-and opens as soon as an agent — shipped or the user's — is written for it
-([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). While the
+language no agent writes — neither one Oxyn ships nor one of the user's: the
+entry names the language ("No agent writes Cypher yet, and the assistant only
+writes what an agent knows."), and opens as soon as an agent — shipped or the
+user's — is written for it
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). Redis commands,
+MongoDB queries and the Elasticsearch Query DSL each have an agent Oxyn ships:
+a session in one of them does not wait for the user to write one. While the
 agents of such a session are being listed, the entry stays disabled and
 says it is looking for one; a SQL session never waits for that list. A
 session that declares no single query language keeps the entry disabled
@@ -1172,19 +1231,68 @@ too, with the reason the console gives.
 
 ### Who answers is chosen in the panel
 
-The panel header carries a selector, "Who answers", which arranges the
-destinations in two groups: the providers, then the external agents. A
-destination that the connection's tier refuses stays there, disabled, with its
-reason. Without a choice from the user, the question goes to the **first usable
+The panel's header **informs**, the composer **chooses**. The header changes
+nothing. Its first line names the connection, with its environment, and offers
+`Conversations` and `New conversation`. Its second line says, together, what
+may leave and who receives it: the connection's privacy tier and where the
+question goes (`Metadata · Cloud`, `Local · This machine`,
+`Metadata · Unresolved` when Oxyn could not resolve the endpoint,
+`Metadata · Agent-managed` for an external agent, whose destination Oxyn
+cannot know), the tier's sentence being that badge's description; then who
+answers — its mark, its name and, after a dot, the model of a provider or the
+version an agent reported — and, once a question has been asked, what that
+question sent (`N relations in context · … · ≈ T tokens`). With no destination
+to choose, it says "Nobody is chosen to answer.". The tier is read before
+speaking; the choice is made where the question is typed.
+
+The controls that choose are **chips** in the bottom bar of the composer,
+left of Send, each a flat control that carries its own accessible name:
+
+* **Who answers** arranges the destinations in two groups, "Providers" then
+  "External agents", each with its mark and its name, a provider also with
+  where it sends (`This machine`, `Cloud`, `Unresolved`). A destination that
+  the connection's tier refuses stays there, disabled, with its reason under
+  its name: a greyed name alone reads as a defect. On a provider, the chip
+  reads as its mark alone, the **Model** chip beside it; on an agent, as its
+  mark and its name; with nothing chosen, "Choose who answers".
+* **Model** exists for a provider only: the model the next question goes
+  with, among those the provider lists. The list is read from the provider as
+  soon as it is the destination that answers and its tier admits it, not when
+  the chip opens — "Listing models…" while it waits, "Models could not be
+  listed:" and the endpoint's own message on failure, above the field —, and
+  the declared model stays usable meanwhile.
+* **Reasoning effort** exists for a provider whose selected model declares
+  levels, offers those and no other, in the provider's order, and reads
+  `Default` while nothing is chosen: the provider decides, and Oxyn does not
+  claim which level that is. A model that declares none gets no chip: a
+  greyed one would suggest a setting.
+* **An agent's own settings** replace the two chips above when an external
+  agent is chosen: its model, its reasoning level, its mode and whatever else
+  it declares, as it last reported them, and none at all when it declares
+  none. The reasoning level and the mode fold into a "More agent settings"
+  menu when the composer narrows. Nothing is optimistic: a change keeps
+  showing the agent's last value, with a spinner, until the agent answers; one
+  change waits at a time; a refused change leaves the value as it was and
+  says why ("Model was not changed: …").
+
+Without a choice from the user, the question goes to the **first usable
 provider** in declaration order, and to an agent only if there is none: a
 provider is the only destination whose scope Oxyn can check (ADR-0026). The
 choice holds as long as the destination stays offered; once removed, the
 question falls back on this default.
 
-The selector is inert while an answer is being written. Changing destination
-between two questions does not transmit the previous exchanges: the panel says
-so with a line (`destinationChanged`), since the earlier answers were not those
-of the new recipient.
+**While an answer is being written**, or while a question is being handed to
+the backend, **Who answers**, **Model**, **Reasoning effort** and the agent's
+settings are inert. The last two say why, to the pointer and to a screen reader
+("The reasoning effort can be changed once the answer is done.", "Settings can
+be changed once the answer is done."), and the field keeps taking questions,
+which queue ("Working · ↵ queues · Esc stops"). The **agent** chip is inert in
+the same cases and in a few more: [its own
+rule](#the-agent-is-chosen-per-conversation) is below.
+
+Changing destination between two questions does not transmit the previous
+exchanges: the panel says so with a line (`destinationChanged`), since the
+earlier answers were not those of the new recipient.
 
 A provider's follow-up sends the remembered session again, whole, with the
 definitions of the tools it offers. It is bounded: past **half the context
@@ -1203,55 +1311,79 @@ another provider refuses in its own words — keeps the session, and its failure
 says so and that a new conversation fixes an overflow. In every case the
 transcript keeps every exchange; only what is sent again changes.
 
-A chosen agent comes with two permanent mentions: "Oxyn cannot see where it
-sends the question", and, for an agent that Oxyn does not confine, that it
-**cannot prevent it from launching commands or modifying files on the machine
-on its own** ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). For
-a confined agent, the agent's mode selector does not exist: Oxyn keeps it in
-its strictest mode, and a dangerous mode must not be selectable on screen. A
-non-confined agent keeps the modes and options it declares.
+A chosen agent comes with two permanent mentions, in the header: "Oxyn cannot
+see where it sends your question", and, for an agent that Oxyn does not
+confine, that it **cannot prevent it from launching commands or modifying files
+on the machine on its own**
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). For a confined
+agent, the `Mode` setting does not exist: Oxyn keeps the agent in its strictest
+mode, and a dangerous mode must not be selectable on screen. A non-confined
+agent keeps the modes and options it declares.
 
 An endpoint that Oxyn could not resolve counts as remote. The configuration
 shows it as "unresolved", not as "local": doubt does not benefit sending.
 
 ### The agent is chosen per conversation
 
-The panel header carries a second selector, the **agent** — SQL, Schema,
-and the agents the user added
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted). It
-lists only the agents offered for the connection's language — and, for SQL,
-its dialect — and the chosen destination (`ai_list_agents`). A new
-conversation starts with the SQL agent on a SQL connection. On a connection
-that speaks another language — Redis commands, MongoDB queries, the
-Elasticsearch Query DSL — the SQL agent is not listed, and a new
-conversation starts with the agent Oxyn ships for that language, or, when
-it ships none, the first agent the user wrote for it, by name
-([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)); the selector
-shows that agent selected.
+The composer carries a second chip, the **agent** — SQL, Schema, and the
+agents the user added
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted) —, first
+of the chips, announced as "Agent role" and reading as its sparkle mark and
+the chosen agent's name. It lists only the agents offered for the connection's
+language — and, for SQL, its dialect — and the chosen destination
+(`ai_list_agents`), the shipped ones first, then the user's, each by name. A
+new conversation starts with the SQL agent on a SQL connection. On a
+connection that speaks another language — Redis commands, MongoDB queries, the
+Elasticsearch Query DSL — the SQL agent is not listed, and a new conversation
+starts with the agent Oxyn ships for that language, or, when it ships none, the
+first agent the user wrote for it, by name
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)); the chip shows
+that agent selected.
 
 * **Choosing another agent opens a new conversation.** The current one
   stays in the "Conversations" list, unchanged, with its agent: an agent's
-  prompt never changes under a written history. The selector is inert while
-  an answer is being written.
-* **A user agent is marked as such** in the selector, next to its name
-  ("user agent"), and its description says it comes from the user's
-  `agents/` folder. A shipped agent carries no mark.
-* **An invalid user agent is listed, not hidden**: greyed out, not
-  selectable, with the error the backend returns — file name and line,
-  never the file's content. One invalid file does not remove the others
-  from the list.
+  prompt never changes under a written history. The chip is inert while an
+  answer is being written, while a conversation is being taken back, while a
+  question is being handed to the backend, and while its list is loading or
+  empty.
+* **A user agent is marked as such**: a `User` badge next to its name, in the
+  list and in the chip — where it gives way when the composer is too narrow for
+  it. A shipped agent carries no mark. Each agent shows its description under
+  its name in the list.
+* **An invalid user agent is listed, not hidden**: under its file name, greyed
+  out, not selectable, with the error the backend returns in place of a
+  description — file name and line (`analytics.md:7: unknown variable`), never
+  the file's content. One invalid file does not remove the others from the
+  list.
+* **The user's files are read again on demand**: a `Reload agents` button at the
+  chip's edge, inert while the read runs ("Reloading agents…"). A question
+  already running keeps the agent it started with; a conversation's next
+  question reads the new files. A failed reload says why ("Agents could not be
+  reloaded:" and the reason) and keeps the list shown before it.
+* **The chip says what it cannot say in one word**, above the field: "Loading
+  agents…", "No agents are available for this connection.", and, when the list
+  could not be read, "Agents could not be listed. You can start a new
+  conversation with SQL." — only SQL is then offered. Otherwise its tooltip
+  and its description for a screen reader say "Choosing another agent starts a
+  new conversation."
 * **A resumed conversation runs with its recorded agent.** When that agent
   no longer exists — its file deleted or now invalid —, the conversation
-  reopens with the SQL agent, and a line above the next question says so,
-  naming the missing agent ("The agent “Name” no longer exists; this
-  conversation continues with the SQL agent."). The panel never lets a
-  conversation run under another prompt without saying it.
-* Changing **destination** in "Who answers" keeps the conversation and its
+  reopens with the SQL agent, the chip shows the SQL agent, and a notice above
+  the field says so: "The agent this conversation used is no longer available —
+  it continues with the SQL agent." It does not name the missing agent: the
+  store keeps the agent's id, not its name, and a file that is gone can no
+  longer say what it was called
+  ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), § 10, amended on
+  2026-10-06). The panel never lets a conversation run under another prompt
+  without saying it.
+* Changing **destination** with "Who answers" keeps the conversation and its
   agent; what changes is the part of the prompt written for the recipient,
   and the `destinationChanged` line already says the new recipient starts
   without the previous exchanges. A destination the conversation's agent is
   not offered for (its `recipients` excludes it) stays in "Who answers",
-  disabled, with its reason, like a destination the tier refuses.
+  disabled, with its reason (`The <agent name> agent is not written for it.
+  Start a new conversation with another agent to use it.`), like a destination
+  the tier refuses.
 
 ### The panel shows what is happening, including when nothing arrives
 

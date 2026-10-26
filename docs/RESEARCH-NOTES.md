@@ -474,8 +474,15 @@ going through [`/adr`](../.claude/commands/adr.md) if it commits the architectur
 > only** — see the "Benchmarks" section below. It stays in this table to be
 > covered by the automatic checker.
 
-> `duckdb` versions follow DuckDB's upstream version (`1.10505.0`), not
-> classic Rust semver. Do not infer an API break from a major jump.
+> `duckdb` and `mongodb` are adopted, not candidates: the workspace pins
+> `duckdb` `=1.10506.1` and `mongodb` `=3.9.1`, and their sections
+> ([DuckDB](#duckdb-engine-and-client-library--checked-on-2026-10-23),
+> [MongoDB](#mongodb-client-library-and-server--checked-on-2026-10-23)) record
+> the pinned versions and supersede the rows above, read on 2026-09-05. The
+> rows stay here to be covered by the automatic checker.
+
+> `duckdb` versions follow DuckDB's upstream version (`1.10506.1`, the pin),
+> not classic Rust semver. Do not infer an API break from a major jump.
 
 ## Codex — extended context
 
@@ -3082,7 +3089,7 @@ For [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
 | Docker Hub's most recent tags are `elasticsearch:9.5.5` (updated 2026-10-23), the image the CI `serveurs` job runs, and `opensearchproject/opensearch:3.9.0` (updated 2026-09-29), supersedes 3.0.0 above as the release check. Both ran the 11 integration tests of the driver green on 2026-10-24. | [Docker Hub elasticsearch](https://hub.docker.com/_/elasticsearch/tags), [Docker Hub opensearch](https://hub.docker.com/r/opensearchproject/opensearch/tags), `cargo nextest run -p oxyn-driver-elasticsearch --run-ignored all` | 2026-10-24 |
 | A point in time is opened by `POST /<index>/_pit` and its identifier read from `id` on Elasticsearch, by `POST /<index>/_search/point_in_time` and `pit_id` on OpenSearch, which has no `_pit` route; both continue with `search_after` and `pit.id` in the body. | integration test `a_point_in_time_stream_that_would_not_fit_stays_under_a_memory_bound` against both images above | 2026-10-24 |
 | The driver reads hits through `serde_json`'s `raw_value` feature (`RawValue`), so a number keeps its exact text: an `unsigned_long` beyond 2^53 does not pass through `f64`. The feature adds no dependency. | [serde_json features](https://docs.rs/crate/serde_json/latest/features), `Cargo.lock` | 2026-10-24 |
-| The shadcn `@svgl` registry (670 entries) has no Elasticsearch, Elastic or OpenSearch mark: the connection tile wears the generic database icon. | [api.svgl.app](https://api.svgl.app), the index the registry serves | 2026-10-24 |
+| The shadcn `@svgl` registry (670 entries) has no Elasticsearch, Elastic or OpenSearch mark. On that date the connection tile wore the generic database icon; it no longer does: the marks come from the upstream projects, see [Brand marks fetched from upstream](#brand-marks-fetched-from-upstream--read-on-2026-10-26). | [api.svgl.app](https://api.svgl.app), the index the registry serves | 2026-10-24 |
 | An index name "cannot start with `-`, `_`, or `+`" and "cannot be `.` or `..`"; it cannot hold `\` or `/`. The classifier rests on the first rule: the first path segment starting with `_` is the API. `_all` is the one target that starts with `_`. | [Elasticsearch create index API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-create) | 2026-10-24 |
 | A search returns **10** hits when it names no `size`: a point-in-time page shorter than its `size`, or than 10, is the last one. | [Elasticsearch search API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-search) | 2026-10-24 |
 | Elasticsearch has searched `dense_vector` fields by approximate kNN since **8.0**, the driver's floor: every Elasticsearch session declares `VECTOR_SEARCH`. OpenSearch does so through its `opensearch-knn` plugin, bundled in the full distribution and absent from the minimal one; the driver reads `GET /_cat/plugins`, which lists it on the 3.9.0 image. | [Elasticsearch 8.0 kNN search](https://www.elastic.co/guide/en/elasticsearch/reference/8.0/knn-search.html), [OpenSearch plugins](https://docs.opensearch.org/latest/install-and-configure/plugins/), `GET /_cat/plugins` on `opensearchproject/opensearch:3.9.0` | 2026-10-24 |
@@ -3115,7 +3122,7 @@ read on 2026-09-05.
 | Panic sites of the entry points the driver calls: `RawStatement::column_logical_type` panics when DuckDB returns no type for an index (`raw_statement.rs`); `RawStatement::schema` expects an executed statement; `LogicalTypeHandle::child` and `child_name` panic out of range or on a type without children; `LogicalTypeHandle::get_alias` unwraps the alias as UTF-8 (`core/logical_type.rs`); `ArrowBatch`'s iterator panics on a fetch error (`arrow_batch.rs`) | source of `duckdb` 1.10506.1 | 2026-10-23 |
 | `SET enable_external_access = true` on a running database throws "Cannot enable external access while database is running"; `allowed_directories` throws once external access is off; loading an extension throws "Loading external extensions is disabled through configuration" while it is off, whatever `autoload_known_extensions` says | `custom_settings.cpp` (`EnableExternalAccessSetting::OnSet`, `AllowedDirectoriesSetting::SetGlobal`), `extension_load.cpp` (`TryInitialLoad`) of v1.5.6 | 2026-10-23 |
 | By default (`arrow_lossless_conversion` off) DuckDB exports `HUGEINT` and `UHUGEINT` as `Decimal128(38, 0)`, `TIMESTAMP WITH TIME ZONE` as `Timestamp(µs, <session zone>)`, `TIME WITH TIME ZONE` as `Time64(µs)` without the offset, `BIT` as binary, `UUID` as text, and `JSON` as plain text without its alias | `SetArrowFormat`, `src/common/arrow/arrow_converter.cpp` of v1.5.6 | 2026-10-23 |
-| `svgl` has no DuckDB mark: a search for `duck` returns DuckDuckGo only | `https://api.svgl.app?search=duck` | 2026-10-23 |
+| `svgl` has no DuckDB mark: a search for `duck` returns DuckDuckGo only. The mark the application now draws for DuckDB comes from the upstream project, see [Brand marks fetched from upstream](#brand-marks-fetched-from-upstream--read-on-2026-10-26) | `https://api.svgl.app?search=duck` | 2026-10-23 |
 
 **Build cost, measured on 2026-10-23** on the maintainer's machine (Apple
 silicon, ten cores shared with three other Rust builds — the wall times are an
@@ -3127,10 +3134,75 @@ upper bound, the CPU times are the comparable figure):
 | `cargo test -p oxyn-driver-duckdb --no-run`, clean engine, `debug = false` for `libduckdb-sys` | 35 min 52 s | 1,922 s | 73 MB | 186 MB |
 
 The second line rebuilt the test profile's whole dependency graph as well, not
-only the engine. The size of the shipped binary was **not** measured: no
-release build was run. The archive of the second line, object code at
-`opt-level` 2 without debug info, is an upper bound of what the engine adds
-before the linker drops what is not called.
+only the engine. No release build had been run on 2026-10-23, so the size of
+what ships was not yet measured; the first delivery carrying the engine,
+`v0.0.14` (the `Cargo.toml` of `v0.0.13` has no `duckdb`), is measured below.
+The archive of the second line, object code at `opt-level` 2 without debug
+info, is an upper bound of what the engine adds before the linker drops what is
+not called.
+
+**Release build with the engine, measured on 2026-10-25** by the delivery of
+`v0.0.14` (workflow run `livraison` [40211362379](https://github.com/so-keyldzn/oxyn/actions/runs/40211362379),
+commit `3e4b873`, conclusion `success`): the `paquets` jobs run
+`make desktop PROFIL=release` — `lto = "thin"`, `codegen-units = 1`,
+`panic = "abort"`, `strip = true`, DuckDB `bundled` — on the GitHub-hosted
+runners below. The time is the whole job, as GitHub reports it from start to
+completion (checkout, dependencies, front end, Rust build, bundling, upload),
+against the job's `timeout-minutes: 75`:
+
+| Runner | Job wall time |
+|---|---|
+| `ubuntu-24.04` (x86_64) | 21 min 11 s |
+| `ubuntu-24.04-arm` (aarch64) | 26 min 27 s |
+| `macos-latest` (aarch64) | 34 min 22 s |
+
+The sizes of the packages the release `v0.0.14` carries, published
+2026-10-25T17:10:31Z (`MiB` = 2^20 bytes, rounded to one decimal; the bytes
+are given because a rounding is not a measurement):
+
+| Asset | Bytes | MiB |
+|---|---|---|
+| `Oxyn_0.0.14_aarch64.dmg` | 30,403,344 | 29.0 |
+| `Oxyn_0.0.14_aarch64.app.tar.gz` | 30,273,470 | 28.9 |
+| `Oxyn_0.0.14_amd64.AppImage` | 112,458,232 | 107.2 |
+| `Oxyn_0.0.14_aarch64.AppImage` | 107,842,056 | 102.8 |
+| `Oxyn_0.0.14_amd64.deb` | 37,913,820 | 36.2 |
+| `Oxyn_0.0.14_arm64.deb` | 35,327,948 | 33.7 |
+| `Oxyn-0.0.14-1.x86_64.rpm` | 37,917,171 | 36.2 |
+| `Oxyn-0.0.14-1.aarch64.rpm` | 35,329,359 | 33.7 |
+
+These are the sizes of packages, not of the `oxyn-desktop` binary, and they do
+not isolate what DuckDB adds: no build without the engine was made to compare.
+They describe one run per runner and set no budget: the numeric budgets live in
+[PERFORMANCE](PERFORMANCE.md). Source: `gh run view 40211362379` (job start and
+completion times) and `gh release view v0.0.14` (asset sizes), read on
+2026-10-26; `Cargo.toml` (`[profile.release]`) and
+`.github/workflows/livraison.yml` (`timeout-minutes`, runners).
+
+## Brand marks fetched from upstream — read on 2026-10-26
+
+The two `svgl` rows above found no mark for DuckDB, Elasticsearch and
+OpenSearch, and the first one left the connection tile on the generic database
+icon. That is no longer the case:
+`apps/desktop/src/components/oxyn/driver-logo.tsx` draws a mark for each. They
+are not added by `shadcn add`: the files under
+`apps/desktop/src/components/ui/svgs/` that open with a `// Source:` header are
+the upstream projects' own files, and the header says where each comes from
+and when it was fetched (the `ui/` folder otherwise holds what `shadcn add`
+generated, [ARCHITECTURE](ARCHITECTURE.md#2-bis-the-tauri-interface)). Other
+marks of that folder carry the same kind of header; the table records the
+three that the rows above are about.
+
+| Mark | Upstream file, as the Oxyn file's header gives it | Fetched | Source |
+|---|---|---|---|
+| DuckDB, light and dark | `logo/DuckDB_Logo-stacked.svg` of `duckdb/duckdb` at commit `3a1a9689217b0e335dd4310d766f8b16ed043c80`; `logo/DuckDB_Logo-stacked-dark-mode.svg` at `9f03cc7576b4bf09d2ad927a5c0039b41c75f872`. Paths unmodified, the `.st0` class inlined as a fill attribute | 2026-10-24 | headers of `svgs/duckdb.tsx` and `svgs/duckdbDarkMode.tsx` |
+| Elasticsearch | `packages/eui/src/components/icon/svgs/logo_elasticsearch.svg` of `elastic/eui` (Elastic's design system) at commit `5c4031565d1f0fef7e08e2377ea5b29bf8963b54`. Paths unmodified; the middle bar carries no fill of its own (the header notes that EUI paints it) | 2026-10-24 | header of `svgs/elasticsearch.tsx` |
+| OpenSearch, default and dark mode | `opensearch_mark_default_mode.svg` and `opensearch_mark_dark_mode.svg`, both in `src/core/server/core_app/assets/default_branding/` of `opensearch-project/OpenSearch-Dashboards`, at commit `9037b61e9d4da3c44f0ba0fab8f803db5873ef89`. Paths unmodified; the header says the file's license comment and `xmlns` were dropped | 2026-10-24 | headers of `svgs/opensearch.tsx` and `svgs/opensearchDarkMode.tsx` |
+
+**The terms under which Oxyn may use these marks are not decided yet.** The
+maintainer has not settled the regime of use of these marks; this section
+records where they come from and assesses neither a license nor a trademark
+policy.
 
 ## ClickHouse protocol and client libraries — checked on 2026-10-23
 

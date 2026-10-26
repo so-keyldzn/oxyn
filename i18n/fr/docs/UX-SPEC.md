@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="fb5bc2f9b7d6" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a9e34835e686" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -336,10 +336,15 @@ latéral peut compléter cette zone. Un en-tête de page de 88 px ne se rajoute 
 
 Un objet ne montre que les sous-onglets que sa session sait remplir : `Indexes`
 exige `INDEXES`, `Constraints` exige `CONSTRAINTS`, `Relations` exige
-`FOREIGN_KEYS` ou `INCOMING_FOREIGN_KEYS`. Une session clé-valeur ou document montre donc `Data`,
-`Structure` et `DDL`, et non trois onglets qui disent chacun « non pris en
-charge ». La sorte affichée à côté du nom de l'objet s'écrit pour être lue
-(`key pattern`, pas `key_pattern`).
+`FOREIGN_KEYS` ou `INCOMING_FOREIGN_KEYS`. `Data`, `Structure` et `DDL` sont
+toujours dessinés ; `DDL` dit de lui-même pourquoi une session n'a aucune
+définition à montrer. Une session qui ne déclare aucune de ces capacités —
+Redis et Elasticsearch, tels que leurs drivers les déclarent — montre donc
+`Data`, `Structure` et `DDL`, et non trois onglets qui disent chacun « non pris
+en charge » ; celle qui en déclare certaines montre aussi ces onglets, et une
+session MongoDB, qui déclare `INDEXES`, ajoute `Indexes`. La sorte affichée à
+côté du nom de l'objet s'écrit pour être lue (`key pattern`, pas
+`key_pattern`).
 
 La sidebar reste **inset avec repli en rail d'icônes** sur tous les écrans,
 comme dans la page Figma `01 · Sidebar`. Ouverte à 280 px ou repliée à 64 px,
@@ -976,6 +981,39 @@ une exécution, Stop en dehors. Un seul bouton dont le sens bascule serait à un
 clic manqué de relancer ce qu'on voulait arrêter. Stop atteint l'annulation
 réelle, jusqu'au serveur.
 
+### Run dans un autre langage
+
+Une console parle le langage que sa session déclare : le SQL, ou, quand la
+session ne déclare pas de SQL et un seul autre langage, celui-là. Une session
+qui en déclare plusieurs en dehors du SQL, ou aucun, n'a pas de langage de
+console : Run refuse, et dit qu'Oxyn ne peut pas savoir lequel envoyer.
+`⌘Entrée` garde son sens — la sélection explicite quand il y en a une, sinon la
+**requête sous le curseur** — mais l'endroit où une requête finit est une
+propriété du langage, donc chacun a sa propre coupe :
+
+* **Commandes Redis** : une commande par ligne. Un saut de ligne à l'intérieur
+  d'un argument entre guillemets appartient à l'argument ; un guillemet resté
+  ouvert rend la frontière inconnue, et la console demande une sélection plutôt
+  que d'envoyer la moitié d'une valeur comme une commande à part
+  ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md), décision 5).
+* **MongoDB** : une commande de base de données par objet JSON de premier
+  niveau, en Extended JSON. L'objet dont les accolades contiennent le curseur
+  s'exécute ; entre deux objets, le curseur n'exécute rien — jamais le voisin,
+  qui peut être une écriture
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+* **Elasticsearch et OpenSearch** : des requêtes comme les écrit la console de
+  Kibana. Une ligne qui commence par une méthode HTTP et un chemin ouvre une
+  requête, et les lignes jusqu'à la prochaine ligne de ce genre en sont le
+  corps ; les lignes vides et de commentaire après une requête ne sont pas
+  envoyées ; le curseur avant la première requête n'en désigne aucune
+  ([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
+
+Une sélection, comme Run sur le texte entier, part comme **une seule** requête
+dans n'importe quel langage : le driver la lit, et refuse ce qu'il ne peut pas
+exécuter comme telle. Là où la console ne sait pas du tout couper un langage,
+elle le dit et demande une sélection ; elle ne le coupe jamais comme si c'était
+du SQL.
+
 ## Explain
 
 Explain décrit l'instruction courante ; il ne l'exécute jamais. Le préfixe est
@@ -993,6 +1031,22 @@ l'instruction, et non ses données, et que l'instruction elle-même n'a pas ét�
 exécutée. Quelqu'un qui lance Explain, s'absente et revient lit la grille, pas
 le bouton qu'il a pressé ; sans la mention, il lirait un plan comme des
 données. La mention disparaît au lancement suivant qui n'est pas un Explain.
+
+**Explain suit ce que la session déclare**, pas le langage. Là où la session
+déclare `EXPLAIN`, le contrôle est disponible ; ailleurs il est grisé, avec
+« This connection does not describe a statement's plan » — Redis et
+Elasticsearch n'en déclarent aucun. MongoDB le déclare : la commande saisie est
+enveloppée entière dans une commande `explain` qui demande la verbosité
+`queryPlanner`, celle qui choisit un plan sans l'exécuter. Les deux autres,
+`executionStats` et `allPlansExecution`, exécutent le plan retenu : elles ne
+sont donc jamais demandées, comme `ANALYZE` n'est jamais ajouté. Une commande
+qui est déjà un `explain` est refusée (« run it as it is »). Une différence avec
+le SQL : la commande qu'Explain enveloppe est classée comme la commande qu'il
+explique, si bien que le plan d'une écriture passe par la revue de cette
+écriture
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md),
+« Explain: the planner only »). La mention `Execution plan` ci-dessus
+s'applique de la même façon.
 
 ## Contexte de session d'une console
 
@@ -1051,6 +1105,14 @@ Elles partent dans la requête d'exécution, **jamais** dans le texte SQL : rien
 n'est concaténé ni substitué, et le SQL écrit par l'utilisateur reste intact
 ([I-10](../CLAUDE.md#i-10)). Chaque console a les siennes ; ouvrir une console
 voisine n'en hérite pas.
+
+**Seule une console SQL lie des valeurs.** Sur une session dont le langage est
+un autre — commandes Redis, commandes MongoDB, Query DSL d'Elasticsearch —, une
+commande porte ses propres valeurs dans son texte, et son driver refuse les
+paramètres liés. Le contrôle `Parameters` est alors **absent**, pas estompé, et
+son panneau ne peut pas s'ouvrir : un contrôle grisé laisserait croire à une
+fonction que ce langage n'a pas. Une console sans session se lit comme du SQL,
+comme son éditeur.
 
 Chaque valeur déclare son type. Une ligne neuve vaut `NULL` et sa saisie est
 close tant qu'un type n'est pas choisi. Une valeur que son type ne sait pas
@@ -1219,30 +1281,88 @@ servir non plus, faute de savoir où il envoie
 ([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
 Faire disparaître l'entrée se lirait comme un défaut, et ADR-0006 demande
 qu'une fonctionnalité indisponible s'explique. Il en va de même sur une session
-dont aucun agent n'écrit le langage : l'entrée nomme le langage (« No agent
-writes Redis commands yet, and the assistant only writes what an agent
-knows. »), et s'ouvre dès qu'un agent — livré ou écrit par l'utilisateur — est
-écrit pour lui ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)).
-Pendant que les agents d'une telle session sont listés, l'entrée reste
+dont aucun agent n'écrit le langage — ni un qu'Oxyn livre, ni un de
+l'utilisateur : l'entrée nomme le langage (« No agent writes Cypher yet, and
+the assistant only writes what an agent knows. »), et s'ouvre dès qu'un agent
+— livré ou écrit par l'utilisateur — est écrit pour lui
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). Les commandes
+Redis, les requêtes MongoDB et le Query DSL d'Elasticsearch ont chacun un agent
+qu'Oxyn livre : une session dans l'un d'eux n'attend pas que l'utilisateur en
+écrive un. Pendant que les agents d'une telle session sont listés, l'entrée reste
 désactivée et dit qu'elle en cherche un ; une session SQL n'attend jamais
 cette liste. Une session qui ne déclare aucun langage de requête unique garde
 aussi l'entrée désactivée, avec la raison que donne la console.
 
 ### Qui répond se choisit dans le panneau
 
-L'en-tête du panneau porte un sélecteur, « Who answers », qui range les
-destinations en deux groupes : les fournisseurs, puis les agents externes. Une
-destination que le niveau de la connexion refuse y reste, désactivée, avec sa
-raison. Sans choix de l'utilisateur, la question part au **premier fournisseur
+L'en-tête du panneau **informe**, le composeur **choisit**. L'en-tête ne change
+rien. Sa première ligne nomme la connexion, avec son environnement, et offre
+`Conversations` et `New conversation`. Sa seconde ligne dit, ensemble, ce qui
+peut sortir et qui le reçoit : le niveau de confidentialité de la connexion et
+l'endroit où part la question (`Metadata · Cloud`, `Local · This machine`,
+`Metadata · Unresolved` quand Oxyn n'a pas su résoudre le point d'accès,
+`Metadata · Agent-managed` pour un agent externe, dont Oxyn ne peut pas
+connaître la destination), la phrase du niveau étant la description de ce
+badge ; puis qui répond — sa marque, son nom et, après un point médian, le
+modèle d'un fournisseur ou la version qu'un agent a rapportée — et, une fois
+une question posée, ce que cette question a envoyé
+(`N relations in context · … · ≈ T tokens`). Sans destination à choisir, elle
+dit « Nobody is chosen to answer. ». Le niveau se lit avant de parler ; le choix
+se fait là où la question se tape.
+
+Les contrôles qui choisissent sont des **puces** dans la barre du bas du
+composeur, à gauche de Send, chacune un contrôle plat qui porte son propre nom
+accessible :
+
+* **Who answers** range les destinations en deux groupes, « Providers » puis
+  « External agents », chacune avec sa marque et son nom, un fournisseur aussi
+  avec l'endroit où il envoie (`This machine`, `Cloud`, `Unresolved`). Une
+  destination que le niveau de la connexion refuse y reste, désactivée, avec sa
+  raison sous son nom : un nom grisé seul se lit comme un défaut. Sur un
+  fournisseur, la puce se lit comme sa seule marque, la puce **Model** à côté ;
+  sur un agent, comme sa marque et son nom ; sans rien de choisi, « Choose who
+  answers ».
+* **Model** n'existe que pour un fournisseur : le modèle avec lequel part la
+  prochaine question, parmi ceux que le fournisseur liste. La liste est lue
+  chez le fournisseur dès qu'il est la destination qui répond et que son niveau
+  l'admet, pas à l'ouverture de la puce — « Listing models… » pendant
+  l'attente, « Models could not be listed: » et le message propre du point
+  d'accès en cas d'échec, au-dessus du champ —, et le modèle déclaré reste
+  utilisable entre-temps.
+* **Reasoning effort** existe pour un fournisseur dont le modèle sélectionné
+  déclare des niveaux, offre ceux-là et aucun autre, dans l'ordre du
+  fournisseur, et se lit `Default` tant que rien n'est choisi : le fournisseur
+  décide, et Oxyn ne prétend pas savoir quel niveau c'est. Un modèle qui n'en
+  déclare aucun n'a pas de puce : une puce grisée laisserait croire à un
+  réglage.
+* **Les réglages propres d'un agent** remplacent les deux puces ci-dessus
+  quand un agent externe est choisi : son modèle, son niveau de raisonnement,
+  son mode et tout ce qu'il déclare d'autre, tels qu'il les a rapportés en
+  dernier, et aucun s'il n'en déclare aucun. Le niveau de raisonnement et le
+  mode se replient dans un menu « More agent settings » quand le composeur se
+  rétrécit. Rien n'est optimiste : un changement continue d'afficher la
+  dernière valeur de l'agent, avec un spinner, jusqu'à la réponse de l'agent ;
+  un seul changement attend à la fois ; un changement refusé laisse la valeur
+  comme elle était et dit pourquoi (« Model was not changed: … »).
+
+Sans choix de l'utilisateur, la question part au **premier fournisseur
 utilisable** dans l'ordre de déclaration, et à un agent seulement s'il n'y en a
 aucun : un fournisseur est la seule destination dont Oxyn sait vérifier la
 portée (ADR-0026). Le choix tient tant que la destination reste offerte ;
 retirée, la question retombe sur ce défaut.
 
-Le sélecteur est inerte pendant qu'une réponse s'écrit. Changer de destination
-entre deux questions ne transmet pas les échanges précédents : le panneau le dit
-par une ligne (`destinationChanged`), puisque les réponses antérieures n'étaient
-pas celles du nouveau destinataire.
+**Pendant qu'une réponse s'écrit**, ou qu'une question est remise au backend,
+**Who answers**, **Model**, **Reasoning effort** et les réglages de l'agent sont
+inertes. Les deux derniers disent pourquoi, au pointeur comme à un lecteur
+d'écran (« The reasoning effort can be changed once the answer is done. »,
+« Settings can be changed once the answer is done. »), et le champ continue de
+prendre des questions, qui se mettent en file (« Working · ↵ queues · Esc
+stops »). La puce **agent** est inerte dans les mêmes cas, et dans quelques
+autres : [sa propre règle](#lagent-se-choisit-par-conversation) est plus bas.
+
+Changer de destination entre deux questions ne transmet pas les échanges
+précédents : le panneau le dit par une ligne (`destinationChanged`), puisque les
+réponses antérieures n'étaient pas celles du nouveau destinataire.
 
 Une question de suite adressée à un fournisseur renvoie la session mémorisée,
 entière, avec les définitions des outils qu'elle offre. Elle est bornée :
@@ -1263,14 +1383,14 @@ qu'un autre fournisseur refuse dans ses propres mots — garde la session, et so
 tous les cas, la transcription garde tous les échanges ; seul ce qui est renvoyé
 change.
 
-Un agent choisi est accompagné de deux mentions permanentes : « Oxyn ne voit pas
-où il envoie la question », et, pour un agent qu'Oxyn ne confine pas, qu'il
-**ne peut pas l'empêcher de lancer des commandes ni de modifier des fichiers de
-la machine de lui-même**
+Un agent choisi est accompagné de deux mentions permanentes, dans l'en-tête :
+« Oxyn cannot see where it sends your question », et, pour un agent qu'Oxyn ne
+confine pas, qu'il **ne peut pas l'empêcher de lancer des commandes ni de
+modifier des fichiers de la machine de lui-même**
 ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Pour un agent
-confiné, le sélecteur de mode de l'agent n'existe pas : Oxyn le maintient dans
-son mode le plus strict, et un mode dangereux ne doit pas pouvoir se choisir à
-l'écran. Un agent non confiné garde les modes et options qu'il déclare.
+confiné, le réglage `Mode` n'existe pas : Oxyn maintient l'agent dans son mode
+le plus strict, et un mode dangereux ne doit pas pouvoir se choisir à l'écran.
+Un agent non confiné garde les modes et options qu'il déclare.
 
 Un point d'accès qu'Oxyn n'a pas su résoudre compte comme distant. La
 configuration l'affiche comme « non résolu », pas comme « local » : le doute ne
@@ -1278,44 +1398,67 @@ profite pas à l'envoi.
 
 ### L'agent se choisit par conversation
 
-L'en-tête du panneau porte un second sélecteur, l'**agent** — SQL, Schema,
-et les agents que l'utilisateur a ajoutés
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée). Il ne
-liste que les agents proposés pour le langage de la connexion — et, pour SQL,
-son dialecte — et la destination choisie (`ai_list_agents`). Une nouvelle
-conversation commence avec l'agent SQL sur une connexion SQL. Sur une
-connexion qui parle un autre langage — commandes Redis, requêtes MongoDB,
-Query DSL d'Elasticsearch —, l'agent SQL n'est pas listé, et une nouvelle
-conversation commence avec l'agent qu'Oxyn livre pour ce langage, ou, s'il
-n'en livre aucun, le premier agent que l'utilisateur a écrit pour lui, par nom
-([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) ; le sélecteur
-montre cet agent sélectionné.
+Le composeur porte une seconde puce, l'**agent** — SQL, Schema, et les agents
+que l'utilisateur a ajoutés
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée) —,
+première des puces, annoncée « Agent role » et qui se lit comme sa marque
+étincelle et le nom de l'agent choisi. Elle ne liste que les agents proposés
+pour le langage de la connexion — et, pour SQL, son dialecte — et la
+destination choisie (`ai_list_agents`), les livrés d'abord, puis ceux de
+l'utilisateur, chacun par nom. Une nouvelle conversation commence avec l'agent
+SQL sur une connexion SQL. Sur une connexion qui parle un autre langage —
+commandes Redis, requêtes MongoDB, Query DSL d'Elasticsearch —, l'agent SQL
+n'est pas listé, et une nouvelle conversation commence avec l'agent qu'Oxyn
+livre pour ce langage, ou, s'il n'en livre aucun, le premier agent que
+l'utilisateur a écrit pour lui, par nom
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) ; la puce montre
+cet agent sélectionné.
 
 * **Choisir un autre agent ouvre une nouvelle conversation.** La
   conversation en cours reste dans la liste « Conversations », inchangée,
   avec son agent : le prompt d'un agent ne change jamais sous un historique
-  écrit. Le sélecteur est inerte pendant qu'une réponse s'écrit.
-* **Un agent utilisateur est signalé comme tel** dans le sélecteur, à côté
-  de son nom (« agent utilisateur »), et sa description dit qu'il vient du
-  dossier `agents/` de l'utilisateur. Un agent livré ne porte aucune marque.
-* **Un agent utilisateur invalide est listé, pas caché** : grisé, non
-  sélectionnable, avec l'erreur que renvoie le backend — nom du fichier et
-  ligne, jamais le contenu du fichier. Un fichier invalide ne retire pas les
-  autres de la liste.
+  écrit. La puce est inerte pendant qu'une réponse s'écrit, pendant qu'une
+  conversation est reprise, pendant qu'une question est remise au backend, et
+  tant que sa liste charge ou est vide.
+* **Un agent utilisateur est signalé comme tel** : un badge `User` à côté de
+  son nom, dans la liste et dans la puce — où il s'efface quand le composeur
+  est trop étroit pour lui. Un agent livré ne porte aucune marque. Chaque agent
+  montre sa description sous son nom dans la liste.
+* **Un agent utilisateur invalide est listé, pas caché** : sous le nom de son
+  fichier, grisé, non sélectionnable, avec l'erreur que renvoie le backend à
+  la place d'une description — nom du fichier et ligne
+  (`analytics.md:7: unknown variable`), jamais le contenu du fichier. Un
+  fichier invalide ne retire pas les autres de la liste.
+* **Les fichiers de l'utilisateur se relisent à la demande** : un bouton
+  `Reload agents` au bord de la puce, inerte pendant que la lecture tourne
+  (« Reloading agents… »). Une question déjà en cours garde l'agent avec lequel
+  elle a démarré ; la prochaine question d'une conversation lit les nouveaux
+  fichiers. Un rechargement qui échoue dit pourquoi (« Agents could not be
+  reloaded: » et la raison) et garde la liste affichée avant lui.
+* **La puce dit ce qu'elle ne peut pas dire en un mot**, au-dessus du champ :
+  « Loading agents… », « No agents are available for this connection. », et,
+  quand la liste n'a pas pu être lue, « Agents could not be listed. You can
+  start a new conversation with SQL. » — seul SQL est alors proposé. Sinon,
+  son infobulle et sa description pour un lecteur d'écran disent « Choosing
+  another agent starts a new conversation. ».
 * **Une conversation reprise tourne avec son agent enregistré.** Quand cet
   agent n'existe plus — son fichier supprimé ou devenu invalide —, la
-  conversation se rouvre avec l'agent SQL, et une ligne au-dessus de la
-  prochaine question le dit, en nommant l'agent manquant (« L'agent « Nom »
-  n'existe plus ; cette conversation continue avec l'agent SQL. »). Le
-  panneau ne laisse jamais une conversation tourner sous un autre prompt sans
-  le dire.
-* Changer de **destination** dans « Qui répond » garde la conversation et
+  conversation se rouvre avec l'agent SQL, la puce montre l'agent SQL, et un
+  avis au-dessus du champ le dit : « The agent this conversation used is no
+  longer available — it continues with the SQL agent. » Il ne nomme pas
+  l'agent manquant : le store garde l'identifiant de l'agent, pas son nom, et un
+  fichier disparu ne peut plus dire comment il s'appelait
+  ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), § 10, amendé le
+  2026-10-06). Le panneau ne laisse jamais une conversation tourner sous un
+  autre prompt sans le dire.
+* Changer de **destination** avec « Who answers » garde la conversation et
   son agent ; ce qui change, c'est la partie du prompt écrite pour le
   destinataire, et la ligne `destinationChanged` dit déjà que le nouveau
   destinataire part sans les échanges précédents. Une destination pour
   laquelle l'agent de la conversation n'est pas proposé (son `recipients`
-  l'exclut) reste dans « Qui répond », désactivée, avec sa raison, comme une
-  destination que le niveau refuse.
+  l'exclut) reste dans « Who answers », désactivée, avec sa raison (`The <agent
+  name> agent is not written for it. Start a new conversation with another agent
+  to use it.`), comme une destination que le niveau refuse.
 
 ### Le panneau montre ce qui se passe, y compris quand rien n'arrive
 

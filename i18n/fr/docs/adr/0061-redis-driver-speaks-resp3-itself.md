@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="aea4cf623623" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="cc09ef0dd3cb" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -285,6 +285,15 @@ que fait un arrêt. Vérifié le 2026-10-22
 * **−** Une capture est une fenêtre, pas un abonnement qui dure : un message
   publié après sa fermeture n'est pas vu. `MONITOR` ralentit un serveur chargé
   tant que la fenêtre dure.
+* **−** **Limite connue, décision ouverte.** Le catalogue de la décision 11
+  liste des clés *exactes*, et le contexte de l'IA écrit chaque relation qu'il
+  retient par son nom, quel que soit son genre ([AI-PROVIDERS](../AI-PROVIDERS.md)) :
+  sous un niveau qui porte les noms, les noms exacts des clés retenues pour une
+  question atteignent l'invite, et un nom de clé peut embarquer lui-même une
+  donnée. Cet ADR ne décide pas s'il faut continuer de les envoyer ou envoyer
+  des motifs de clés à la place : ce choix est celui du mainteneur, et l'issue
+  [#339](https://github.com/so-keyldzn/oxyn/issues/339) (ouverte le 2026-10-25)
+  le pose. Tant qu'il n'est pas pris, AI-PROVIDERS dit ce qui part.
 
 **Coût de sortie :** modéré. Remplacer la couche RESP écrite à la main par une
 bibliothèque réécrit `resp.rs`, `connection.rs` et la boucle de lecture du
