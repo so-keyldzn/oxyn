@@ -253,6 +253,16 @@ criterion     = "0.8.2"
 insta         = "1.48.0"
 rstest        = "0.26.1"
 
+# A declaration above whose point is a crate's default features *minus* a few,
+# rather than a minimal set: `version` is the release whose `default` array was
+# read, `dropped` what is left out on purpose. `make versions` refuses a row
+# whose version is no longer the one `Cargo.lock` resolves — the moment the
+# array must be read again, since a feature added upstream would otherwise stay
+# off in silence. Cargo ignores this table. See the "Wasmtime without its
+# compilation cache" section of RESEARCH-NOTES.
+[workspace.metadata.oxyn.feature-contracts]
+wasmtime = { version = "48.0.7", dropped = ["cache"] }
+
 [workspace.lints.rust]
 unsafe_code               = "deny"
 missing_debug_implementations = "warn"
