@@ -3250,3 +3250,25 @@ driver may vouch for it? The answers ground
 | PostgreSQL 17.11: with `PRIMARY KEY (b, a)` over a table declared `(a, b)`, `ORDER BY a, b LIMIT 200` runs as a Seq Scan and a Sort of the whole table, `ORDER BY b, a` uses the index. A table that inherits from a parent has neither the parent's primary key index nor its uniqueness | `EXPLAIN` against a local PostgreSQL 17.11; the preview's agreement is held by `a_plain_preview_is_ordered_exactly_when_the_description_says_so` (`drivers/oxyn-driver-postgres/src/integration.rs`) | 2026-10-26 |
 | SQLite: ordering a composite key in the rank order of `PRAGMA table_info`'s `pk` column leaves no `USE TEMP B-TREE FOR ORDER BY` in `EXPLAIN QUERY PLAN` | `a_composite_key_is_ordered_as_its_index_not_as_its_table` (`drivers/oxyn-driver-sqlite/src/lib.rs`), bundled SQLite 3.50.2 | 2026-10-26 |
 | MySQL/MariaDB: a plain preview now runs 2 metadata statements (header, then columns, each a prepare/execute/close) where it ran 0 | counted in the driver code; **not measured** on a live server, none was available | 2026-10-26 |
+
+## Wasmtime without its compilation cache — checked on 2026-10-29
+
+`cargo deny --all-features check` failed on `main` with fourteen advisories on
+the `zstd` family, reached by one path only: `oxyn-plugin` → `wasmtime` →
+`wasmtime-internal-cache` → `zstd` → `zstd-safe` → `zstd-sys`. That path exists
+because `wasmtime`'s `cache` feature is on by default, and Oxyn never turns the
+compilation cache on — `WasmHost::new` builds a bare `Config::new()`. The
+workspace therefore declares `wasmtime` with its default features minus `cache`;
+no advisory is ignored in `deny.toml`. The 2026-10-20 section above stays true on
+its date: `wasmtime = "48.0.5"` is still the declared floor, and `Cargo.lock`
+still resolves 48.0.7.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| On `main` (`1a0d737`), `cargo deny --all-features check advisories` failed on RUSTSEC-2026-0391, -0395 to -0406 and -0410: fourteen reports, vulnerabilities and unsoundness, on `zstd` 0.13.3, `zstd-safe` 7.3.0 and `zstd-sys` 2.1.0, every one of them under `wasmtime-internal-cache` 48.0.7 | cargo-deny 0.19.0, advisory database read on 2026-10-29 | 2026-10-29 |
+| The remediation each advisory gives for the crate it names is `zstd-safe` >= 8.2.0 and `zstd-sys` >= 2.1.2 | [RUSTSEC-2026-0406](https://rustsec.org/advisories/RUSTSEC-2026-0406), [RUSTSEC-2026-0410](https://rustsec.org/advisories/RUSTSEC-2026-0410) | 2026-10-29 |
+| No semver-compatible update reaches those versions: `zstd` 0.13.3 requires `zstd-safe` `^7.1.0`, and every published `wasmtime-internal-cache`, from 48.0.0 to 50.0.0 included, requires `zstd` `^0.13.0` as a non-optional dependency | crate source `zstd-0.13.3/Cargo.toml`, [crates.io sparse index](https://index.crates.io/wa/sm/wasmtime-internal-cache) | 2026-10-29 |
+| `cache` is the only door to that subtree: wasmtime 48.0.7 declares `cache = ["dep:wasmtime-cache", "std"]`, and `wasmtime-cache` is its rename of the optional `wasmtime-internal-cache` | crate source `wasmtime-48.0.7/Cargo.toml`, lines 55 and 377 | 2026-10-29 |
+| The `default` array of wasmtime 48.0.7 holds 26 features; the manifest declares the 25 others, verbatim. A later wasmtime that adds a default feature would leave it off and nothing would fail: the array is re-read at each bump | crate source `wasmtime-48.0.7/Cargo.toml` | 2026-10-29 |
+| With the feature off (`1630c58`), `cargo deny --all-features check` prints `advisories ok, bans ok, licenses ok, sources ok`; its only warning, `NCSA` allowed but not encountered, is the one `main` already prints. `Cargo.lock` loses six packages — `wasmtime-internal-cache` 48.0.7, `zstd` 0.13.3, `zstd-safe` 7.3.0, `directories-next` 2.0.0, `dirs-sys-next` 0.1.2, `redox_users` 0.4.6 — and gains none | run in a throwaway worktree, cargo-deny 0.19.0 | 2026-10-29 |
+| `zstd-sys` 2.1.0, the crate RUSTSEC-2026-0410 names, stays in `Cargo.lock` under `zip` 0.6.6, itself under `torch-sys` and `tch`, the Torch backend of `burn`. It is not audited there: `cargo deny --all-features list` holds neither `tch`, nor `torch-sys`, nor `zip` 0.6.6, nor any `zstd` crate, because `--all-features` enables the features of the workspace members, not the optional backends of a dependency. Enabling that backend would bring the advisory back | `Cargo.lock` and `cargo deny --all-features list` at `1630c58` | 2026-10-29 |

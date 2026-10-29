@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="9b1ba9956aab" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="61dc31c5a897" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3304,3 +3304,25 @@ sorte qu'un driver puisse s'en porter garant ? Les réponses fondent
 | PostgreSQL 17.11 : avec `PRIMARY KEY (b, a)` sur une table déclarée `(a, b)`, `ORDER BY a, b LIMIT 200` s'exécute en Seq Scan suivi d'un Sort de toute la table, `ORDER BY b, a` utilise l'index. Une table qui hérite d'un parent n'a ni l'index de clé primaire du parent ni son unicité | `EXPLAIN` sur un PostgreSQL 17.11 local ; l'accord de l'aperçu est tenu par `a_plain_preview_is_ordered_exactly_when_the_description_says_so` (`drivers/oxyn-driver-postgres/src/integration.rs`) | 2026-10-26 |
 | SQLite : ordonner une clé composite dans l'ordre de rang de la colonne `pk` de `PRAGMA table_info` ne laisse aucun `USE TEMP B-TREE FOR ORDER BY` dans `EXPLAIN QUERY PLAN` | `a_composite_key_is_ordered_as_its_index_not_as_its_table` (`drivers/oxyn-driver-sqlite/src/lib.rs`), SQLite 3.50.2 embarqué | 2026-10-26 |
 | MySQL/MariaDB : un aperçu simple exécute désormais 2 instructions de métadonnées (l'en-tête, puis les colonnes, chacune en prepare/execute/close) là où il n'en exécutait aucune | compté dans le code du driver ; **non mesuré** sur un serveur réel, aucun n'était disponible | 2026-10-26 |
+
+## Wasmtime sans son cache de compilation — vérifié le 2026-10-29
+
+`cargo deny --all-features check` échouait sur `main` avec quatorze avis sur la
+famille `zstd`, atteinte par un seul chemin : `oxyn-plugin` → `wasmtime` →
+`wasmtime-internal-cache` → `zstd` → `zstd-safe` → `zstd-sys`. Ce chemin existe
+parce que le feature `cache` de `wasmtime` est actif par défaut, et Oxyn n'active
+jamais le cache de compilation — `WasmHost::new` construit un `Config::new()`
+nu. L'espace de travail déclare donc `wasmtime` avec ses features par défaut
+moins `cache` ; aucun avis n'est ignoré dans `deny.toml`. La section du
+2026-10-20 ci-dessus reste vraie à sa date : `wasmtime = "48.0.5"` demeure le
+plancher déclaré, et `Cargo.lock` résout toujours 48.0.7.
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Sur `main` (`1a0d737`), `cargo deny --all-features check advisories` a échoué sur RUSTSEC-2026-0391, -0395 à -0406 et -0410 : quatorze signalements, vulnérabilités et manques de sûreté, sur `zstd` 0.13.3, `zstd-safe` 7.3.0 et `zstd-sys` 2.1.0, tous sous `wasmtime-internal-cache` 48.0.7 | cargo-deny 0.19.0, base d'avis relevée le 2026-10-29 | 2026-10-29 |
+| Le correctif que chaque avis indique pour la crate qu'il nomme est `zstd-safe` >= 8.2.0 et `zstd-sys` >= 2.1.2 | [RUSTSEC-2026-0406](https://rustsec.org/advisories/RUSTSEC-2026-0406), [RUSTSEC-2026-0410](https://rustsec.org/advisories/RUSTSEC-2026-0410) | 2026-10-29 |
+| Aucune mise à jour compatible semver n'atteint ces versions : `zstd` 0.13.3 exige `zstd-safe` `^7.1.0`, et tout `wasmtime-internal-cache` publié, de 48.0.0 à 50.0.0 incluses, exige `zstd` `^0.13.0` en dépendance non optionnelle | source de la crate `zstd-0.13.3/Cargo.toml`, [index creux crates.io](https://index.crates.io/wa/sm/wasmtime-internal-cache) | 2026-10-29 |
+| `cache` est la seule porte vers ce sous-arbre : wasmtime 48.0.7 déclare `cache = ["dep:wasmtime-cache", "std"]`, et `wasmtime-cache` est son renommage du `wasmtime-internal-cache` optionnel | source de la crate `wasmtime-48.0.7/Cargo.toml`, l. 55 et 377 | 2026-10-29 |
+| Le tableau `default` de wasmtime 48.0.7 compte 26 features ; le manifeste déclare les 25 autres, à l'identique. Un wasmtime ultérieur qui ajoute un feature par défaut le laisserait éteint sans que rien n'échoue : le tableau est relu à chaque montée | source de la crate `wasmtime-48.0.7/Cargo.toml` | 2026-10-29 |
+| Le feature éteint (`1630c58`), `cargo deny --all-features check` affiche `advisories ok, bans ok, licenses ok, sources ok` ; son seul avertissement, `NCSA` autorisé mais non rencontré, est celui que `main` affiche déjà. `Cargo.lock` perd six paquets — `wasmtime-internal-cache` 48.0.7, `zstd` 0.13.3, `zstd-safe` 7.3.0, `directories-next` 2.0.0, `dirs-sys-next` 0.1.2, `redox_users` 0.4.6 — et n'en gagne aucun | exécuté dans un worktree jetable, cargo-deny 0.19.0 | 2026-10-29 |
+| `zstd-sys` 2.1.0, la crate que nomme RUSTSEC-2026-0410, reste dans `Cargo.lock` sous `zip` 0.6.6, lui-même sous `torch-sys` et `tch`, le backend Torch de `burn`. Elle n'y est pas auditée : `cargo deny --all-features list` ne contient ni `tch`, ni `torch-sys`, ni `zip` 0.6.6, ni aucune crate `zstd`, parce que `--all-features` active les features des membres de l'espace de travail, pas les backends optionnels d'une dépendance. Activer ce backend ramènerait l'avis | `Cargo.lock` et `cargo deny --all-features list` à `1630c58` | 2026-10-29 |
