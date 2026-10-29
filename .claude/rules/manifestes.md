@@ -30,6 +30,29 @@ The chosen value is recorded in
 Dependabot's included, carries its dated row in the same commit.
 `renovate.json5` is a dormant configuration that enforces nothing.
 
+## A declaration that tracks the defaults carries its version
+
+`default-features = false` with an explicit list usually means a minimal set: a
+feature the crate adds upstream is meant to stay off, and nothing has to follow
+it. The opposite case exists — the point of the declaration is the crate's
+defaults **minus** a few, `wasmtime` without `cache` — and there an added
+default feature stays off silently, against the intent. That intent is written
+where the declaration is, in the root `Cargo.toml`:
+
+```toml
+[workspace.metadata.oxyn.feature-contracts]
+wasmtime = { version = "48.0.7", dropped = ["cache"] }
+```
+
+`version` is the release whose `default` array was read, `dropped` the features
+left out on purpose, and the array itself is recorded in
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) with its date. `make versions`
+then refuses a row whose `version` is not what `Cargo.lock` resolves: a bump is
+the moment to read the array again, and
+[`/versions`](../commands/versions.md) compares the declared list with the
+registry and names what is missing from it. A declaration with no row is
+checked by nobody — the row is the only place that intent is written.
+
 ## The workspace centralizes
 
 Shared dependencies go in `[workspace.dependencies]`, crates refer to them with
@@ -81,7 +104,7 @@ directory is classified in `script/zones-ci` — otherwise it triggers everythin
 | [clippy.toml](../../clippy.toml) | forbidden call paths — `disallowed-methods`, with the reason and the replacement |
 | [.cargo/config.toml](../../.cargo/config.toml) | nothing; it imposes the flags that must hold for everyone, including the macOS target |
 | [.config/nextest.toml](../../.config/nextest.toml) | a hanging test, and two tests sharing a server |
-| [verifier_versions.py](../hooks/verifier_versions.py), through `make versions` | a version pinned in `Cargo.toml` or `apps/desktop/package.json` that [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) does not record, or records differently — offline, [I-12](../../CLAUDE.md#i-12) |
+| [verifier_versions.py](../hooks/verifier_versions.py), through `make versions` | a version pinned in `Cargo.toml` or `apps/desktop/package.json` that [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) does not record, or records differently, and a feature contract whose `version` is no longer the one `Cargo.lock` resolves — offline, [I-12](../../CLAUDE.md#i-12) |
 
 An invariant that boils down to a call path belongs in `clippy.toml`, not in a
 review. `clippy.toml` holds for the **whole** workspace: a prohibition that must

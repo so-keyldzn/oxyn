@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="3bb741f9b9dd" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="83b8a241cc26" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -33,6 +33,30 @@ La valeur retenue est reportée dans
 `apps/desktop/package.json` que les notes n'enregistrent pas : une pull request de
 montée de version, celle de Dependabot comprise, porte donc sa ligne datée dans le
 même commit. `renovate.json5` est une configuration dormante qui n'impose rien.
+
+## Une déclaration qui suit les features par défaut porte sa version
+
+`default-features = false` avec une liste explicite veut dire, le plus souvent,
+un ensemble minimal : un feature que la crate ajoute en amont est censé rester
+éteint, et rien n'a à le suivre. Le cas inverse existe — tout l'intérêt de la
+déclaration est d'être les features par défaut de la crate **moins** quelques-uns,
+`wasmtime` sans `cache` — et là, un feature ajouté par défaut reste éteint en
+silence, contre l'intention. Cette intention s'écrit là où est la déclaration,
+dans le `Cargo.toml` racine :
+
+```toml
+[workspace.metadata.oxyn.feature-contracts]
+wasmtime = { version = "48.0.7", dropped = ["cache"] }
+```
+
+`version` est la version dont le tableau `default` a été lu, `dropped` les
+features laissés de côté à dessein, et le tableau lui-même est consigné dans
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) avec sa date. `make versions`
+refuse alors une ligne dont la `version` n'est plus celle que résout
+`Cargo.lock` : une montée de version est le moment de relire le tableau, et
+[`/versions`](../commands/versions.md) compare la liste déclarée au registre et
+nomme ce qui lui manque. Une déclaration sans ligne n'est vérifiée par personne
+— la ligne est le seul endroit où cette intention s'écrit.
 
 ## Le workspace centralise
 
@@ -88,7 +112,7 @@ premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
 | [clippy.toml](../../../../clippy.toml) | les chemins d'appel interdits — `disallowed-methods`, avec la raison et le remplacement |
 | [.cargo/config.toml](../../../../.cargo/config.toml) | rien ; il impose les drapeaux qui doivent valoir pour tout le monde, dont la cible macOS |
 | [.config/nextest.toml](../../../../.config/nextest.toml) | un test qui pend, et deux tests qui se partagent un serveur |
-| [verifier_versions.py](../../../../.claude/hooks/verifier_versions.py), via `make versions` | une version épinglée dans `Cargo.toml` ou `apps/desktop/package.json` que [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) n'enregistre pas, ou enregistre autrement — hors ligne, [I-12](../../CLAUDE.md#i-12) |
+| [verifier_versions.py](../../../../.claude/hooks/verifier_versions.py), via `make versions` | une version épinglée dans `Cargo.toml` ou `apps/desktop/package.json` que [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) n'enregistre pas, ou enregistre autrement, et un contrat de features dont la `version` n'est plus celle que résout `Cargo.lock` — hors ligne, [I-12](../../CLAUDE.md#i-12) |
 
 Un invariant qui se ramène à un chemin d'appel appartient à `clippy.toml`, pas à
 une relecture. `clippy.toml` vaut pour **tout** le workspace : un interdit qui ne

@@ -43,6 +43,23 @@ version there and nowhere else.
 The unit of matching is the line. A row that lists several packages cannot say
 which version belongs to which name; the `Pinned manifest versions` table of the
 notes therefore holds one package per row, and the rows elsewhere count too.
+
+A second contract, on features, and it is opt-in. A `[workspace.dependencies]`
+entry declared `default-features = false` usually means the opposite of a
+contract: a minimal set, where a feature the crate adds upstream is meant to
+stay off. The exception is a declaration whose whole point is the crate's
+defaults minus a few — `wasmtime` without `cache` — where an added default
+feature stays off silently, against the intent. Such an entry carries a row in
+`[workspace.metadata.oxyn.feature-contracts]` of the root `Cargo.toml`:
+`version`, the release whose `default` array was read, and `dropped`, the
+features left out on purpose. `--manifests` refuses a row without its
+declaration, a row missing either field, and a row whose `version` is not what
+`Cargo.lock` resolves — that last one is the moment the array must be read
+again. The registry mode compares the declared list with the `default` array of
+that version and names what is missing from it.
+
+The limit is worth stating: a declaration that tracks the defaults without a row
+is checked by nobody. The row is the only place that intent is written.
 """
 
 from __future__ import annotations
@@ -59,7 +76,10 @@ from typing import NamedTuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTES = REPO_ROOT / "docs" / "RESEARCH-NOTES.md"
 CARGO_TOML = REPO_ROOT / "Cargo.toml"
+CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 PACKAGE_JSON = REPO_ROOT / "apps" / "desktop" / "package.json"
+# The sparse index, which carries the `default` array of a published version.
+INDEX = "https://index.crates.io"
 AGENT = "oxyn-verification-versions"
 STABLE_CHANNEL = "https://static.rust-lang.org/dist/channel-rust-stable.toml"
 
@@ -114,9 +134,13 @@ def cited_versions() -> dict[str, str]:
     return cited_items
 
 
-def cargo_pins() -> list[Pin]:
+def _root_manifest() -> dict:
     with CARGO_TOML.open("rb") as handle:
-        dependencies = tomllib.load(handle).get("workspace", {}).get("dependencies", {})
+        return tomllib.load(handle)
+
+
+def cargo_pins() -> list[Pin]:
+    dependencies = _root_manifest().get("workspace", {}).get("dependencies", {})
     pins = []
     for dependency, spec in dependencies.items():
         if isinstance(spec, dict):
@@ -142,6 +166,140 @@ def npm_pins() -> list[Pin]:
     return pins
 
 
+def feature_declarations() -> dict[str, tuple[str, ...]]:
+    """The `[workspace.dependencies]` entries that replace a crate's defaults."""
+    dependencies = _root_manifest().get("workspace", {}).get("dependencies", {})
+    return {
+        name: tuple(spec["features"])
+        for name, spec in dependencies.items()
+        if isinstance(spec, dict) and spec.get("default-features") is False and spec.get("features")
+    }
+
+
+def feature_contracts() -> dict[str, dict]:
+    """The `[workspace.metadata.oxyn.feature-contracts]` rows of `Cargo.toml`."""
+    metadata = _root_manifest().get("workspace", {}).get("metadata", {})
+    rows = metadata.get("oxyn", {}).get("feature-contracts", {})
+    return {name: row for name, row in rows.items() if isinstance(row, dict)}
+
+
+def locked_versions(name: str) -> list[str]:
+    """Every version of `name` that `Cargo.lock` resolves."""
+    with CARGO_LOCK.open("rb") as handle:
+        packages = tomllib.load(handle).get("package", [])
+    return sorted(
+        package["version"]
+        for package in packages
+        if package.get("name") == name and "version" in package
+    )
+
+
+def contract_gaps() -> list[str]:
+    """Why the feature contracts do not hold, read without the network."""
+    declared = feature_declarations()
+    gaps = []
+    for name, contract in sorted(feature_contracts().items()):
+        if name not in declared:
+            gaps.append(
+                f"{name}: a feature contract without a `default-features = false` "
+                "declaration in [workspace.dependencies]. Remove the row: it "
+                "guards nothing.",
+            )
+            continue
+        version = contract.get("version")
+        if not isinstance(version, str) or not isinstance(contract.get("dropped"), list):
+            gaps.append(
+                f"{name}: the contract must carry `version`, the release whose "
+                "`default` array was read, and `dropped`, the list of default "
+                "features left out.",
+            )
+            continue
+        resolved = locked_versions(name)
+        if resolved != [version]:
+            found = ", ".join(resolved) or "nothing"
+            gaps.append(
+                f"{name}: the array was read on {version}, Cargo.lock resolves "
+                f"{found}. Read the `default` array of that version again — a "
+                "feature added upstream stays off until the manifest lists it — "
+                "then move the contract and its RESEARCH-NOTES row forward.",
+            )
+    return gaps
+
+
+def contract_gap(declared: tuple[str, ...], default: tuple[str, ...], dropped: list[str]) -> str | None:
+    """`None` when the declaration is the `default` array minus `dropped`.
+
+    A declared feature that is not a default is not a gap: enabling one is a
+    choice, and a name that does not exist fails the build.
+    """
+    missing = [name for name in default if name not in set(declared) | set(dropped)]
+    kept = [name for name in dropped if name in set(declared)]
+    reasons = []
+    if missing:
+        reasons.append("missing from the manifest: " + ", ".join(missing))
+    if kept:
+        reasons.append("dropped on purpose but declared: " + ", ".join(kept))
+    return "; ".join(reasons) or None
+
+
+def index_url(name: str) -> str:
+    """The sparse-index path of a crate: `1`, `2`, `3/f`, then `ab/cd`."""
+    lowered = name.lower()
+    if len(lowered) <= 2:
+        return f"{INDEX}/{len(lowered)}/{lowered}"
+    if len(lowered) == 3:
+        return f"{INDEX}/3/{lowered[0]}/{lowered}"
+    return f"{INDEX}/{lowered[:2]}/{lowered[2:4]}/{lowered}"
+
+
+def default_features(name: str, version: str) -> tuple[str, ...] | None:
+    """The `default` array of a published version, read from the sparse index."""
+    raw = _http(index_url(name))
+    if not raw:
+        return None
+    for line in raw.splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("vers") != version:
+            continue
+        # The index splits the feature map in two: `features2` holds the entries
+        # whose values use the `dep:` or `crate?/feature` syntax, and `default`
+        # lands there as soon as one of its members is one of those.
+        features = {**(entry.get("features") or {}), **(entry.get("features2") or {})}
+        return tuple(features.get("default", ()))
+    return None
+
+
+def report_contracts() -> int:
+    """Compare each feature contract with the registry. Reports, never fails."""
+    contracts = feature_contracts()
+    declared = feature_declarations()
+    if not contracts:
+        return 0
+    print(f"\n{'feature contract':<16} {'read on':<10} status")
+    print("-" * 56)
+    gaps = 0
+    for name, contract in sorted(contracts.items()):
+        version = contract.get("version", "?")
+        upstream = default_features(name, version) if isinstance(version, str) else None
+        if upstream is None:
+            print(f"{name:<16} {version:<10} registry unreachable, or no such version")
+            continue
+        gap = contract_gap(declared.get(name, ()), upstream, contract.get("dropped", []))
+        if gap:
+            gaps += 1
+        print(f"{name:<16} {version:<10} {gap or 'up to date'}")
+    if gaps:
+        print(
+            f"\n{gaps} feature contract(s) no longer match the registry. A "
+            "feature the crate added to its `default` array stays off until the "
+            "manifest lists it: add it, then date the row in RESEARCH-NOTES.",
+        )
+    return gaps
+
+
 def gap_status(pin: Pin, notes: list[str]) -> str | None:
     """`None` when the notes record the pin, otherwise why they do not."""
     if not pin.version:
@@ -163,14 +321,24 @@ def check_manifests() -> int:
     try:
         notes = NOTES.read_text(encoding="utf-8").splitlines()
         pins = cargo_pins() + npm_pins()
+        contracts = feature_contracts()
+        broken = contract_gaps()
     except (OSError, ValueError) as error:
-        print(f"Cannot read the manifests or the notes: {error}", file=sys.stderr)
+        print(f"Cannot read the manifests, the lockfile or the notes: {error}", file=sys.stderr)
         return 1
 
     gaps = [(pin, status) for pin in pins if (status := gap_status(pin, notes))]
-    if not gaps:
-        print(f"{len(pins)} pinned versions are recorded in docs/RESEARCH-NOTES.md.")
+    if not gaps and not broken:
+        held = f" {len(contracts)} feature contract(s) hold." if contracts else ""
+        print(f"{len(pins)} pinned versions are recorded in docs/RESEARCH-NOTES.md.{held}")
         return 0
+
+    for reason in broken:
+        print(f"feature contract — {reason}")
+    if not gaps:
+        return 1
+    if broken:
+        print()
 
     name_width = max(len(pin.name) for pin, _ in gaps)
     version_width = max(len(pin.version) for pin, _ in gaps)
@@ -217,6 +385,8 @@ def main() -> int:
             "may be deliberately frozen. Update docs/RESEARCH-NOTES.md with "
             "today's date, or justify the mismatch in place.",
         )
+
+    report_contracts()
     return 0
 
 
