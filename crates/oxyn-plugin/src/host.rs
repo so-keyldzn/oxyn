@@ -191,9 +191,15 @@ impl HostState {
 
 /// Oxyn's wasmtime engine, and its limits.
 ///
-/// A single engine for all plugins: it carries the compilation cache and is not
-/// an execution context. Isolation happens per store — one [`Store`] per call,
-/// with its own fuel and its own deadline.
+/// A single engine for all plugins: it holds the code compiled for them and is
+/// not an execution context. Isolation happens per store — one [`Store`] per
+/// call, with its own fuel and its own deadline.
+///
+/// Nothing is cached on disk: the workspace declares `wasmtime` without its
+/// `cache` feature, the only door to the `zstd` crates and the RustSec
+/// advisories they carry
+/// ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)). Turning the compilation
+/// cache back on means taking that subtree back.
 pub struct WasmHost {
     engine: Engine,
     limits: HostLimits,

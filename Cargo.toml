@@ -205,7 +205,21 @@ sha2          = "0.11.0"
 memmap2       = "0.9.11"
 
 # --- plugins (optional, `wasm-host` feature) ---------------------------------
-wasmtime      = "48.0.5"
+# wasmtime's default features minus `cache`, the only one that pulls
+# `wasmtime-internal-cache` and with it `zstd` 0.13 / `zstd-safe` 7.3, which
+# carry a batch of RUSTSEC advisories (0391, 0395 to 0406, 0410; checked on
+# 2026-10-26), fixed only in `zstd` 0.14, which no `wasmtime` release accepts
+# yet (`wasmtime-internal-cache` requires `zstd ^0.13` up to 50.0.0). Oxyn never
+# turns the compilation cache on (`WasmHost::new` builds a bare `Config::new()`),
+# so nothing is lost. The list is the `default` array of wasmtime 48.0.7; re-read
+# it at each wasmtime bump, a feature added upstream would otherwise stay off.
+wasmtime      = { version = "48.0.5", default-features = false, features = [
+    "addr2line", "anyhow", "async", "backtrace", "compile-time-builtins",
+    "component-model", "component-model-async", "coredump", "cranelift", "debug",
+    "debug-builtins", "demangle", "gc", "gc-copying", "gc-drc", "gc-null",
+    "parallel-compilation", "pooling-allocator", "profiling", "runtime", "stack-switching",
+    "std", "threads", "wat", "wit-parser",
+] }
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
@@ -238,6 +252,16 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 criterion     = "0.8.2"
 insta         = "1.48.0"
 rstest        = "0.26.1"
+
+# A declaration above whose point is a crate's default features *minus* a few,
+# rather than a minimal set: `version` is the release whose `default` array was
+# read, `dropped` what is left out on purpose. `make versions` refuses a row
+# whose version is no longer the one `Cargo.lock` resolves — the moment the
+# array must be read again, since a feature added upstream would otherwise stay
+# off in silence. Cargo ignores this table. See the "Wasmtime without its
+# compilation cache" section of RESEARCH-NOTES.
+[workspace.metadata.oxyn.feature-contracts]
+wasmtime = { version = "48.0.7", dropped = ["cache"] }
 
 [workspace.lints.rust]
 unsafe_code               = "deny"
