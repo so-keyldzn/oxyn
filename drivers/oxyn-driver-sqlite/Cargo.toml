@@ -20,7 +20,7 @@ arrow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 sqlite-vec.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }

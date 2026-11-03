@@ -28,17 +28,20 @@
 //!
 //! The early interruption is caught by a flag specific to the task,
 //! [`Interrupter::checkpoint`], which the stream consults just before launching
-//! each statement. A window of a few machine instructions remains, between this
-//! check and the reset done by `sqlite3_step`: an interruption landing there lets
-//! the statement run to its end, and the result goes to a caller that no longer
-//! listens. It never hits the next task.
+//! each statement. Between that check and the reset done by `sqlite3_step` the
+//! engine's flag can still be lost: [`Interrupter::watch`] closes that window
+//! with a progress handler that reads the task's flag **while** the statement
+//! runs, so an endless statement is stopped whatever the order of events. A
+//! statement shorter than one handler period may still end on its own, and it
+//! never hits the next task.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use oxyn_core::Result;
 use parking_lot::Mutex;
-use rusqlite::InterruptHandle;
+use rusqlite::{Connection, InterruptHandle};
 
 use crate::error::{self, Bound, Effect};
 
@@ -61,10 +64,16 @@ pub(crate) struct Interrupter {
     engine: InterruptHandle,
     turn: Mutex<Turn>,
     /// Set by an interruption targeting the current task; reset when a task
-    /// starts. Survives the reset done by the engine.
-    tripped: AtomicBool,
+    /// starts. Survives the reset done by the engine. Shared with the progress
+    /// handler [`watch`](Self::watch) installs.
+    tripped: Arc<AtomicBool>,
     next: AtomicU64,
 }
+
+/// Virtual machine instructions between two looks of the progress handler at
+/// the interruption flag: a stop is observed within microseconds, and the look
+/// itself is one atomic load.
+const WATCH_EVERY_OPS: std::ffi::c_int = 1_000;
 
 impl Interrupter {
     /// The interrupter of the connection whose handle is `engine`.
@@ -72,9 +81,25 @@ impl Interrupter {
         Self {
             engine,
             turn: Mutex::new(Turn::default()),
-            tripped: AtomicBool::new(false),
+            tripped: Arc::new(AtomicBool::new(false)),
             next: AtomicU64::new(0),
         }
+    }
+
+    /// Makes `connection` stop a statement whose task was interrupted, even when
+    /// the engine's own flag was lost.
+    ///
+    /// `sqlite3_step` clears that flag as a statement starts, so an interruption
+    /// landing between [`checkpoint`](Self::checkpoint) and the first step would
+    /// vanish and an endless statement would run for nobody. The progress
+    /// handler runs **during** the step and reads the task's `tripped` flag, which only
+    /// `begin` resets: the interruption is observed whatever the order.
+    pub(crate) fn watch(&self, connection: &Connection) {
+        let tripped = Arc::clone(&self.tripped);
+        connection.progress_handler(
+            WATCH_EVERY_OPS,
+            Some(move || tripped.load(Ordering::SeqCst)),
+        );
     }
 
     /// Reserves a task's identity **before** it goes into the queue.

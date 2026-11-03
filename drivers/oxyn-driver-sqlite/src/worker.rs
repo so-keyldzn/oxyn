@@ -332,6 +332,7 @@ pub(crate) async fn spawn(
                 }
             };
             let interrupter = Arc::new(Interrupter::new(connection.get_interrupt_handle()));
+            interrupter.watch(&connection);
             if ready.send(Ok(Arc::clone(&interrupter))).is_err() {
                 // The caller gave up during the opening.
                 let _ = connection.close();
