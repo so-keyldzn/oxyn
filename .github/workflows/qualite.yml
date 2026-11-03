@@ -367,7 +367,12 @@ jobs:
     # server behavior that an ignored test cannot exercise elsewhere.
     needs: zones
     if: needs.zones.outputs.rust == 'true' && needs.zones.outputs.serveurs == 'true'
-    runs-on: ubuntu-24.04
+    # ubuntu-22.04, not 24.04, on purpose: since image 20261025 the 24.04 runner
+    # ships a 7.0 kernel, and every mongod 8.x refuses to start on Linux >= 6.19
+    # (SERVER-121912) — "Failed to initialize container mongo". The 22.04 image
+    # is on 6.8. Return to ubuntu-24.04 once a mongod 8.0 release fixes it;
+    # the 22.04 images are unsupported from 2027-04-17 (RESEARCH-NOTES).
+    runs-on: ubuntu-22.04
     timeout-minutes: 75
     services:
       postgres:
@@ -456,6 +461,13 @@ jobs:
       - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python 3.12
+        # ubuntu-22.04 ships Python 3.10, and `script/licences-tierces` needs
+        # `tomllib` (3.11+). actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
 
       - name: Install Tauri's system libraries
         # The desktop cancellation suite compiles the Tauri backend.
