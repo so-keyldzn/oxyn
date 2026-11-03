@@ -1,5 +1,6 @@
 import { CompletionContext } from "@codemirror/autocomplete"
 import { MySQL, PostgreSQL, SQLite, sql } from "@codemirror/lang-sql"
+import { ensureSyntaxTree } from "@codemirror/language"
 import { EditorState } from "@codemirror/state"
 import { describe, expect, it } from "vitest"
 
@@ -105,6 +106,18 @@ const SHOP = snapshot([
 
 type Dialect = typeof PostgreSQL
 
+/**
+ * A state whose parse is complete. `EditorState.create` parses under a 20 ms
+ * wall-clock budget and keeps whatever it reached, so on a loaded machine the
+ * tree is cut short; forcing the parse with no deadline makes what the source
+ * then reads independent of the machine's load.
+ */
+function parsed(doc: string, dialect: Dialect): EditorState {
+  const state = EditorState.create({ doc, extensions: [sql({ dialect })] })
+  ensureSyntaxTree(state, doc.length, 1e9)
+  return state
+}
+
 /** Completes at the `|` of `text`, as the editor asks on a keystroke. */
 function complete(
   text: string,
@@ -114,7 +127,7 @@ function complete(
 ) {
   const pos = text.indexOf("|")
   const doc = text.replace("|", "")
-  const state = EditorState.create({ doc, extensions: [sql({ dialect })] })
+  const state = parsed(doc, dialect)
   const source = sqlCompletionSource(() => catalog)
   const result = source(new CompletionContext(state, pos, explicit))
   if (result instanceof Promise) throw new Error("the source is synchronous")
@@ -472,7 +485,7 @@ describe("what the snapshot flags", () => {
 function wanted(text: string, dialect: Dialect = PostgreSQL) {
   const pos = text.indexOf("|")
   const doc = text.replace("|", "")
-  const state = EditorState.create({ doc, extensions: [sql({ dialect })] })
+  const state = parsed(doc, dialect)
   return wantedNames(state, pos)
 }
 
@@ -741,5 +754,23 @@ describe("a common table expression", () => {
         "WITH a AS (SELECT 1), users AS (SELECT 2) SELECT u.| FROM users u"
       )
     ).toBeNull()
+  })
+})
+
+describe("a document longer than the parser's first slice", () => {
+  // 50,000 characters of earlier statements: the initial 20 ms parse of
+  // `EditorState.create` cannot be relied on to reach the last one.
+  const earlier = "SELECT id, name FROM users WHERE id > 1;\n".repeat(1_250)
+
+  it("completes the columns of the relation the last statement names", () => {
+    const text = `${earlier}SELECT na| FROM users`
+    expect(text.length).toBeGreaterThan(50_000)
+    expect(columnsAt(text, SHOP)).toEqual(["id", "name", "Full Name"])
+  })
+
+  it("asks for the relations of the last statement, not the first", () => {
+    expect(wanted(`${earlier}SELECT | FROM orders o`)).toEqual([
+      [bare("orders")],
+    ])
   })
 })
