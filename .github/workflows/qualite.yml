@@ -367,7 +367,12 @@ jobs:
     # server behavior that an ignored test cannot exercise elsewhere.
     needs: zones
     if: needs.zones.outputs.rust == 'true' && needs.zones.outputs.serveurs == 'true'
-    runs-on: ubuntu-24.04
+    # ubuntu-22.04, not 24.04, on purpose: since image 20261025 the 24.04 runner
+    # ships a 7.0 kernel, and every mongod 8.x refuses to start on Linux >= 6.19
+    # (SERVER-121912) — "Failed to initialize container mongo". The 22.04 image
+    # is on 6.8. Return to ubuntu-24.04 once a mongod 8.0 release fixes it;
+    # the 22.04 images are unsupported from 2027-04-17 (RESEARCH-NOTES).
+    runs-on: ubuntu-22.04
     timeout-minutes: 75
     services:
       postgres:
