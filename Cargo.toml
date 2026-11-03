@@ -211,7 +211,7 @@ memmap2       = "0.9.11"
 # 2026-10-26), fixed only in `zstd` 0.14, which no `wasmtime` release accepts
 # yet (`wasmtime-internal-cache` requires `zstd ^0.13` up to 50.0.0). Oxyn never
 # turns the compilation cache on (`WasmHost::new` builds a bare `Config::new()`),
-# so nothing is lost. The list is the `default` array of wasmtime 48.0.7; re-read
+# so nothing is lost. The list is the `default` array of wasmtime 48.0.8; re-read
 # it at each wasmtime bump, a feature added upstream would otherwise stay off.
 wasmtime      = { version = "48.0.5", default-features = false, features = [
     "addr2line", "anyhow", "async", "backtrace", "compile-time-builtins",
