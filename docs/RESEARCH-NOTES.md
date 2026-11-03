@@ -3273,3 +3273,20 @@ still resolves 48.0.7.
 | The `default` array of wasmtime 48.0.7 holds 26 features; the manifest declares the 25 others, verbatim. A later wasmtime that adds a default feature would leave it off and nothing would fail: the array is re-read at each bump | crate source `wasmtime-48.0.7/Cargo.toml` | 2026-10-29 |
 | With the feature off (`1630c58`), `cargo deny --all-features check` prints `advisories ok, bans ok, licenses ok, sources ok`; its only warning, `NCSA` allowed but not encountered, is the one `main` already prints. `Cargo.lock` loses six packages — `wasmtime-internal-cache` 48.0.7, `zstd` 0.13.3, `zstd-safe` 7.3.0, `directories-next` 2.0.0, `dirs-sys-next` 0.1.2, `redox_users` 0.4.6 — and gains none | run in a throwaway worktree, cargo-deny 0.19.0 | 2026-10-29 |
 | `zstd-sys` 2.1.0, the crate RUSTSEC-2026-0410 names, stays in `Cargo.lock` under `zip` 0.6.6, itself under `torch-sys` and `tch`, the Torch backend of `burn`. It is not audited there: `cargo deny --all-features list` holds neither `tch`, nor `torch-sys`, nor `zip` 0.6.6, nor any `zstd` crate, because `--all-features` enables the features of the workspace members, not the optional backends of a dependency. Enabling that backend would bring the advisory back | `Cargo.lock` and `cargo deny --all-features list` at `1630c58` | 2026-10-29 |
+
+## Wasmtime 48.0.8 and a Python for the servers job — checked on 2026-11-03
+
+Three advisories were published on `wasmtime` 48.0.7 after the section above
+(RUSTSEC-2026-0422, -0423, -0424), and `async-executor` 1.14.0 was yanked: on
+that date `cargo deny --all-features check` failed again, on `main` and on every
+open PR. The `wasmtime` floor stays `48.0.5`; only `Cargo.lock` moves, to 48.0.8
+with the crates that move together, and `async-executor` to 1.14.1. Moving the
+`servers` job to `ubuntu-22.04` (see the MongoDB row above) put it on Python 3.10,
+which has no `tomllib`: the job now sets up Python 3.12.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| RUSTSEC-2026-0422, -0423 and -0424 are fixed from `wasmtime` 48.0.8 (also 49.0.5 and 50.0.1; -0424 also 36.0.20) | `cargo deny --all-features check` at `Cargo.lock` 48.0.7, then 48.0.8 | 2026-11-03 |
+| The `default` array of `wasmtime` 48.0.8 is the one of 48.0.7: 26 features, `cache` among them; the manifest still declares the 25 others | sparse index `index.crates.io/wa/sm/wasmtime`, `features` and `features2`, both versions compared | 2026-11-03 |
+| With `Cargo.lock` on `wasmtime` 48.0.8 and `async-executor` 1.14.1, `cargo deny --all-features check` prints `advisories ok, bans ok, licenses ok, sources ok` (cargo-deny 0.20.2, rustc 1.98.1) | local run | 2026-11-03 |
+| `ubuntu-22.04` ships Python 3.10; `script/licences-tierces` imports `tomllib`, added in Python 3.11 (`ModuleNotFoundError` in the `serveurs` job) | failed run `41650766073` | 2026-11-03 |

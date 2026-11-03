@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="bd55abb4bcaf" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="7a4cfbacb777" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3327,3 +3327,21 @@ plancher déclaré, et `Cargo.lock` résout toujours 48.0.7.
 | Le tableau `default` de wasmtime 48.0.7 compte 26 features ; le manifeste déclare les 25 autres, à l'identique. Un wasmtime ultérieur qui ajoute un feature par défaut le laisserait éteint sans que rien n'échoue : le tableau est relu à chaque montée | source de la crate `wasmtime-48.0.7/Cargo.toml` | 2026-10-29 |
 | Le feature éteint (`1630c58`), `cargo deny --all-features check` affiche `advisories ok, bans ok, licenses ok, sources ok` ; son seul avertissement, `NCSA` autorisé mais non rencontré, est celui que `main` affiche déjà. `Cargo.lock` perd six paquets — `wasmtime-internal-cache` 48.0.7, `zstd` 0.13.3, `zstd-safe` 7.3.0, `directories-next` 2.0.0, `dirs-sys-next` 0.1.2, `redox_users` 0.4.6 — et n'en gagne aucun | exécuté dans un worktree jetable, cargo-deny 0.19.0 | 2026-10-29 |
 | `zstd-sys` 2.1.0, la crate que nomme RUSTSEC-2026-0410, reste dans `Cargo.lock` sous `zip` 0.6.6, lui-même sous `torch-sys` et `tch`, le backend Torch de `burn`. Elle n'y est pas auditée : `cargo deny --all-features list` ne contient ni `tch`, ni `torch-sys`, ni `zip` 0.6.6, ni aucune crate `zstd`, parce que `--all-features` active les features des membres de l'espace de travail, pas les backends optionnels d'une dépendance. Activer ce backend ramènerait l'avis | `Cargo.lock` et `cargo deny --all-features list` à `1630c58` | 2026-10-29 |
+
+## Wasmtime 48.0.8 et un Python pour le job des serveurs — vérifié le 2026-11-03
+
+Trois avis ont été publiés sur `wasmtime` 48.0.7 après la section ci-dessus
+(RUSTSEC-2026-0422, -0423, -0424), et `async-executor` 1.14.0 a été retiré
+(yanked) : à cette date `cargo deny --all-features check` échouait de nouveau,
+sur `main` et sur chaque PR ouverte. Le plancher de `wasmtime` reste `48.0.5` ;
+seul `Cargo.lock` bouge, vers 48.0.8 avec les crates qui évoluent ensemble, et
+`async-executor` vers 1.14.1. Passer le job `serveurs` sur `ubuntu-22.04` (voir la
+ligne MongoDB ci-dessus) l'a mis sur Python 3.10, qui n'a pas `tomllib` : le job
+installe maintenant Python 3.12.
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| RUSTSEC-2026-0422, -0423 et -0424 sont corrigés à partir de `wasmtime` 48.0.8 (aussi 49.0.5 et 50.0.1 ; -0424 aussi 36.0.20) | `cargo deny --all-features check` sur `Cargo.lock` 48.0.7, puis 48.0.8 | 2026-11-03 |
+| Le tableau `default` de `wasmtime` 48.0.8 est celui de 48.0.7 : 26 features, dont `cache` ; le manifeste déclare toujours les 25 autres | index sparse `index.crates.io/wa/sm/wasmtime`, `features` et `features2`, les deux versions comparées | 2026-11-03 |
+| Avec `Cargo.lock` sur `wasmtime` 48.0.8 et `async-executor` 1.14.1, `cargo deny --all-features check` affiche `advisories ok, bans ok, licenses ok, sources ok` (cargo-deny 0.20.2, rustc 1.98.1) | exécution locale | 2026-11-03 |
+| `ubuntu-22.04` fournit Python 3.10 ; `script/licences-tierces` importe `tomllib`, ajouté en Python 3.11 (`ModuleNotFoundError` dans le job `serveurs`) | exécution en échec `41650766073` | 2026-11-03 |
