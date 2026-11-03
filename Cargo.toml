@@ -261,7 +261,7 @@ rstest        = "0.26.1"
 # off in silence. Cargo ignores this table. See the "Wasmtime without its
 # compilation cache" section of RESEARCH-NOTES.
 [workspace.metadata.oxyn.feature-contracts]
-wasmtime = { version = "48.0.7", dropped = ["cache"] }
+wasmtime = { version = "48.0.8", dropped = ["cache"] }
 
 [workspace.lints.rust]
 unsafe_code               = "deny"
