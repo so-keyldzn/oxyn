@@ -47,8 +47,9 @@ wasmtime = { version = "48.0.7", dropped = ["cache"] }
 `version` is the release whose `default` array was read, `dropped` the features
 left out on purpose, and the array itself is recorded in
 [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) with its date. `make versions`
-then refuses a row whose `version` is not what `Cargo.lock` resolves: a bump is
-the moment to read the array again, and
+then refuses a row that is not a table (`wasmtime = "48.0.7"` guards nothing,
+and is never skipped silently) and a row whose `version` is not what
+`Cargo.lock` resolves: a bump is the moment to read the array again, and
 [`/versions`](../commands/versions.md) compares the declared list with the
 registry and names what is missing from it. A declaration with no row is
 checked by nobody — the row is the only place that intent is written.

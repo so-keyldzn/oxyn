@@ -53,10 +53,11 @@ feature stays off silently, against the intent. Such an entry carries a row in
 `[workspace.metadata.oxyn.feature-contracts]` of the root `Cargo.toml`:
 `version`, the release whose `default` array was read, and `dropped`, the
 features left out on purpose. `--manifests` refuses a row without its
-declaration, a row missing either field, and a row whose `version` is not what
-`Cargo.lock` resolves — that last one is the moment the array must be read
-again. The registry mode compares the declared list with the `default` array of
-that version and names what is missing from it.
+declaration, a row that is not a table (`wasmtime = "48.0.7"` would otherwise
+switch the guard off silently), a row missing either field, and a row whose
+`version` is not what `Cargo.lock` resolves — that last one is the moment the
+array must be read again. The registry mode compares the declared list with
+the `default` array of that version and names what is missing from it.
 
 The limit is worth stating: a declaration that tracks the defaults without a row
 is checked by nobody. The row is the only place that intent is written.
@@ -176,11 +177,14 @@ def feature_declarations() -> dict[str, tuple[str, ...]]:
     }
 
 
-def feature_contracts() -> dict[str, dict]:
-    """The `[workspace.metadata.oxyn.feature-contracts]` rows of `Cargo.toml`."""
+def feature_contracts() -> dict[str, object]:
+    """The `[workspace.metadata.oxyn.feature-contracts]` rows of `Cargo.toml`.
+
+    Rows are returned as written, a scalar or an array included: dropping one
+    would switch its guard off without a word. `contract_gaps()` refuses it.
+    """
     metadata = _root_manifest().get("workspace", {}).get("metadata", {})
-    rows = metadata.get("oxyn", {}).get("feature-contracts", {})
-    return {name: row for name, row in rows.items() if isinstance(row, dict)}
+    return dict(metadata.get("oxyn", {}).get("feature-contracts", {}))
 
 
 def locked_versions(name: str) -> list[str]:
@@ -204,6 +208,14 @@ def contract_gaps() -> list[str]:
                 f"{name}: a feature contract without a `default-features = false` "
                 "declaration in [workspace.dependencies]. Remove the row: it "
                 "guards nothing.",
+            )
+            continue
+        if not isinstance(contract, dict):
+            gaps.append(
+                f"{name}: the contract must be a table "
+                '`{ version = "...", dropped = [...] }`, found '
+                f"{type(contract).__name__}. A row that is not a table guards "
+                "nothing.",
             )
             continue
         version = contract.get("version")
@@ -282,6 +294,9 @@ def report_contracts() -> int:
     print("-" * 56)
     gaps = 0
     for name, contract in sorted(contracts.items()):
+        if not isinstance(contract, dict):
+            print(f"{name:<16} {'?':<10} not a table: see `--manifests`")
+            continue
         version = contract.get("version", "?")
         upstream = default_features(name, version) if isinstance(version, str) else None
         if upstream is None:

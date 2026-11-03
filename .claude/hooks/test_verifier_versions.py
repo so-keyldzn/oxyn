@@ -307,6 +307,44 @@ class FeatureContracts(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("must carry", out)
 
+    def test_a_scalar_row_fails_and_names_the_crate_and_the_type(self):
+        cargo = CARGO_CONTRACT.replace(
+            '{ version = "48.0.7", dropped = ["cache"] }', '"48.0.7"',
+        )
+        code, out = self.check(cargo=cargo)
+        self.assertEqual(code, 1)
+        self.assertIn("wasmtime", out)
+        self.assertIn("must be a table", out)
+        self.assertIn("found str", out)
+
+    def test_an_array_row_fails_and_names_the_crate_and_the_type(self):
+        cargo = CARGO_CONTRACT.replace(
+            '{ version = "48.0.7", dropped = ["cache"] }', '["48.0.7", "cache"]',
+        )
+        code, out = self.check(cargo=cargo)
+        self.assertEqual(code, 1)
+        self.assertIn("wasmtime", out)
+        self.assertIn("found list", out)
+
+    def test_a_scalar_row_cannot_hide_a_lock_that_moved(self):
+        """The finding: `wasmtime = "48.0.7"` with a lock on 48.0.8 must fail."""
+        cargo = CARGO_CONTRACT.replace(
+            '{ version = "48.0.7", dropped = ["cache"] }', '"48.0.7"',
+        )
+        code, out = self.check(cargo=cargo, lock=LOCK.replace("48.0.7", "48.0.8"))
+        self.assertEqual(code, 1)
+        self.assertIn("wasmtime", out)
+
+    def test_the_registry_report_survives_a_row_that_is_not_a_table(self):
+        cargo = CARGO_CONTRACT.replace(
+            '{ version = "48.0.7", dropped = ["cache"] }', '"48.0.7"',
+        )
+        self.paths["CARGO_TOML"].write_text(cargo, encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(versions.report_contracts(), 0)
+        self.assertIn("not a table", out.getvalue())
+
     def test_no_feature_list_is_no_contract(self):
         cargo = (
             "[workspace.dependencies]\n"

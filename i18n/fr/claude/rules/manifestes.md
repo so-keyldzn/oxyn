@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="83b8a241cc26" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="34b45e8b62ab" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -52,8 +52,9 @@ wasmtime = { version = "48.0.7", dropped = ["cache"] }
 `version` est la version dont le tableau `default` a été lu, `dropped` les
 features laissés de côté à dessein, et le tableau lui-même est consigné dans
 [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) avec sa date. `make versions`
-refuse alors une ligne dont la `version` n'est plus celle que résout
-`Cargo.lock` : une montée de version est le moment de relire le tableau, et
+refuse alors une ligne qui n'est pas une table (`wasmtime = "48.0.7"` ne garde
+rien, et n'est jamais ignorée en silence) et une ligne dont la `version` n'est
+plus celle que résout `Cargo.lock` : une montée de version est le moment de relire le tableau, et
 [`/versions`](../commands/versions.md) compare la liste déclarée au registre et
 nomme ce qui lui manque. Une déclaration sans ligne n'est vérifiée par personne
 — la ligne est le seul endroit où cette intention s'écrit.
