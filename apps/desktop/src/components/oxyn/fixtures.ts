@@ -213,6 +213,35 @@ export const clickhouseDriver: DriverChoice = {
   ],
 }
 
+/** As `oxyn_driver_turso::turso_metadata` declares it. */
+export const tursoDriver: DriverChoice = {
+  id: "turso",
+  aliases: ["libSQL"],
+  displayName: "Turso Cloud",
+  family: "relational",
+  defaultPort: null,
+  fields: [
+    {
+      key: "url",
+      label: "Database URL",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: null,
+      help: "As `turso db show <db> --url` prints it: libsql://<db>-<org>.turso.io (https:// is accepted too).",
+    },
+    {
+      key: "token",
+      label: "Database token",
+      kind: { type: "password" },
+      required: true,
+      secret: true,
+      default: null,
+      help: "From `turso db tokens create <db>` — not the Platform API token. Stored in the system keyring.",
+    },
+  ],
+}
+
 /** As `mongodb_metadata()` of `drivers/oxyn-driver-mongodb/src/driver.rs`. */
 export const mongodbDriver: DriverChoice = {
   id: "mongodb",

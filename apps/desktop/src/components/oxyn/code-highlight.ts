@@ -58,6 +58,8 @@ const ALIASES: Record<string, Grammar> = {
   psql: "sql",
   mysql: "sql",
   sqlite: "sql",
+  turso: "sql",
+  libsql: "sql",
   duckdb: "sql",
   plsql: "sql",
   tsql: "sql",

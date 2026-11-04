@@ -41,7 +41,10 @@ function dialectFor(driver: string) {
       return PostgreSQL
     case "mysql":
       return SQLDialect.define({ ...MySQL.spec, backslashEscapes: true })
+    // Turso Cloud is libSQL, a fork of SQLite: the same lexical rules
+    // (ADR-0069).
     case "sqlite":
+    case "turso":
       return SQLite
     // DuckDB's lexical rules are PostgreSQL's: double-quoted identifiers,
     // `$$` and `E''` strings, nested block comments.

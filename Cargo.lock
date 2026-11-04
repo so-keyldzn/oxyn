@@ -8014,6 +8014,7 @@ dependencies = [
  "oxyn-driver-postgres",
  "oxyn-driver-redis",
  "oxyn-driver-sqlite",
+ "oxyn-driver-turso",
  "oxyn-embed",
  "oxyn-exec",
  "oxyn-llm",
