@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="edbd3e23108b" -->
+<!-- oxyn-translation source="docs/README.md" sha256="2d70376af963" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -104,6 +104,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | Une session dit le risque d'une requête non SQL qu'elle a classée comme écriture : `Session::classify_risk`, consultée seulement après un `classify_intent` mutant, ne peut que relever le risque, `None` par défaut (précise 0064) | accepté |
 | [0067](adr/0067-ci-tests-the-packages-a-pull-request-changes.md) | Sur une pull request, la CI ne vérifie que les paquets Rust qu'elle modifie et ceux qui en dépendent (`OXYN_PACKAGES`) ; ce qu'elle ne sait pas attribuer à un seul paquet vérifie tout l'espace de travail, et `main` le fait toujours (précise 0045) | accepté |
 | [0068](adr/0068-a-preview-comes-in-key-order.md) | Un aperçu arrive dans l'ordre de la clé, et offre des pages, partout où le driver se porte garant que cet ordre est une lecture bornée (`Relation::key_order_preview`) ; tables virtuelles, Redshift et relations sans clé restent sans ordre (remplace les points 1 et 2 de 0028, précise 0063) | accepté |
+| [0069](adr/0069-turso-driver-hrana-over-http.md) | Le driver Turso Cloud parle lui-même Hrana sur HTTP (sans `libsql`), ne garde aucun flux entre deux instructions, lit une réponse entière sous un budget de 32 Mio, et s'arrête en abandonnant la requête | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

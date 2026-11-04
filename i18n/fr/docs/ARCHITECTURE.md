@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="392dafc0a356" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="57dca412dd2e" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -157,7 +157,7 @@ vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient
 
 ## 3. Le workspace Cargo
 
-21 crates, telles qu'elles existent — 13 sous `crates/`, 8 drivers sous
+22 crates, telles qu'elles existent — 13 sous `crates/`, 9 drivers sous
 `drivers/`, les membres du workspace étant `crates/*` et `drivers/*` — plus le
 front `apps/desktop` ([§2 bis](#2-bis-linterface-tauri)) :
 
@@ -196,7 +196,9 @@ oxyn/
 │   │                             #   dépend d'oxyn-query pour la grammaire redis-cli que partage son caviardage
 │   ├── oxyn-driver-mongodb/      # commandes de base en Extended JSON, documents vers Arrow
 │   │                             #   (ADR-0063) ; dépend d'oxyn-query pour lire une commande
-│   └── oxyn-driver-elasticsearch/ # REST/JSON, couvre aussi OpenSearch (ADR-0062)
+│   ├── oxyn-driver-elasticsearch/ # REST/JSON, couvre aussi OpenSearch (ADR-0062)
+│   └── oxyn-driver-turso/        # Turso Cloud : Hrana sur HTTP (`/v2/pipeline`), dialecte
+│                                 #   de SQLite, sans libsql, un flux par instruction (ADR-0069)
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/
