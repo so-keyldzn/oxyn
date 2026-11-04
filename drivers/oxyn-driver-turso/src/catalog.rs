@@ -5,7 +5,7 @@
 //!
 //! Like SQLite's ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md)): no catalog
 //! tier, and one namespace, `main`, since a connection is one database and
-//! `ATTACH` is refused ([`crate::refuse`]).
+//! `ATTACH` is refused (`crate::refuse`).
 //!
 //! # Every name is a bound value
 //!

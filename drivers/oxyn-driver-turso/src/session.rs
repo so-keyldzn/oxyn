@@ -4,10 +4,10 @@
 //!
 //! A session holds an HTTP client and what the server said at connection. It
 //! keeps no Hrana stream between statements: each one opens its own, runs, and
-//! closes it in the same request ([`crate::wire`]). So nothing a statement
+//! closes it in the same request (`crate::wire`). So nothing a statement
 //! does to a connection outlives it — and the statements that would
 //! (`BEGIN`, `PRAGMA x = y`, `ATTACH`) are refused rather than accepted and
-//! forgotten ([`crate::refuse`]).
+//! forgotten (`crate::refuse`).
 //!
 //! # Stopping
 //!
