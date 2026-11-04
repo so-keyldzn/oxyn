@@ -44,6 +44,10 @@ uuid.workspace = true
 tracing-subscriber.workspace = true
 # A user's `agents/` directory, with its links and its oversized files.
 tempfile.workspace = true
+# A paused clock (`Builder::start_paused`) for the idle-watch tests: their
+# bounds are milliseconds, and a scheduling delay on a loaded runner must not
+# be able to decide the outcome.
+tokio = { workspace = true, features = ["test-util"] }
 
 # Kill the process **group** of an agent launched behind `npx`: otherwise the
 # real agent reattaches to pid 1 and outlives the end of the conversation.
