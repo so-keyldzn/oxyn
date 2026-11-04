@@ -221,8 +221,11 @@ jobs:
     # compiles three times — clippy, nextest, doc tests: about 74 minutes of
     # `make rust` on macOS, 68 on Ubuntu, against 30 warm (measured
     # 2026-10-24). The repository's cache quota evicts a pull request's cache
-    # between runs, so cold is the common case.
-    timeout-minutes: 110
+    # between runs, so cold is the common case. Measured 2026-11-03, with the
+    # macOS arm64 runners short of capacity: 108 minutes of `make rust` on
+    # macOS for #349 (two minutes under the limit), and the same job of #346
+    # cancelled at the 110-minute limit with no test failing.
+    timeout-minutes: 150
     env:
       # Line numbers are enough for a panic trace; the rest of the debug info
       # weighs down linking and the cache without serving anything on a runner.
