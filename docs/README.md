@@ -100,6 +100,7 @@ To locate the boards and their states before implementation, see
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | A session tells the risk of a non-SQL request it classified as a write: `Session::classify_risk`, consulted only after a mutating `classify_intent`, can only raise the risk, `None` by default (refines 0064) | accepted |
 | [0067](adr/0067-ci-tests-the-packages-a-pull-request-changes.md) | On a pull request, CI checks only the Rust packages it changes and those that depend on them (`OXYN_PACKAGES`); anything it cannot attribute to one package checks the whole workspace, and `main` always does (refines 0045) | accepted |
 | [0068](adr/0068-a-preview-comes-in-key-order.md) | A preview comes in key order, and offers pages, wherever the driver vouches that this order is a bounded read (`Relation::key_order_preview`); virtual tables, Redshift and keyless relations stay unordered (supersedes 0028 points 1 and 2, refines 0063) | accepted |
+| [0069](adr/0069-turso-driver-hrana-over-http.md) | The Turso Cloud driver speaks Hrana over HTTP itself (no `libsql`), keeps no stream between statements, reads a whole answer under a 32 MiB budget, and stops by dropping the request | proposed |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

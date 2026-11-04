@@ -78,7 +78,8 @@ pub fn dialect_for(driver: &DriverId) -> SqlDialect {
     match driver.as_str() {
         DriverId::POSTGRES => SqlDialect::Postgres,
         DriverId::MYSQL => SqlDialect::MySql,
-        DriverId::SQLITE => SqlDialect::Sqlite,
+        // Turso Cloud is libSQL, a fork of SQLite: the same grammar (ADR-0069).
+        DriverId::SQLITE | DriverId::TURSO => SqlDialect::Sqlite,
         // Identifiers expected for the drivers of the vision, recognized now so
         // that adding a driver does not require coming back here. An
         // identifier missing from this list is not an error.
@@ -158,6 +159,7 @@ mod tests {
         assert_eq!(dialect_for(&DriverId::postgres()), SqlDialect::Postgres);
         assert_eq!(dialect_for(&DriverId::mysql()), SqlDialect::MySql);
         assert_eq!(dialect_for(&DriverId::sqlite()), SqlDialect::Sqlite);
+        assert_eq!(dialect_for(&DriverId::turso()), SqlDialect::Sqlite);
     }
 
     #[test]

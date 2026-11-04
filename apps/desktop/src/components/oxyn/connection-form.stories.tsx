@@ -11,6 +11,7 @@ import {
   postgresDriver,
   savedConnections,
   sqliteDriver,
+  tursoDriver,
 } from "./fixtures"
 import type { ConnectionDetails } from "@/lib/ipc/settings"
 
@@ -529,6 +530,55 @@ export const ClickHouse: Story = {
     await expect(args.onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/**
+ * Turso Cloud: two fields, the database URL and the database token. The token
+ * is typed into a masked field, says it is not the Platform API token, travels
+ * as a secret and is never among the values that are saved with the connection
+ * (I-03).
+ */
+export const TursoCloud: Story = {
+  args: { driver: tursoDriver },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.queryByLabelText(/^Host/)).toBeNull()
+    await expect(canvas.queryByLabelText(/^TLS mode/)).toBeNull()
+    await expect(
+      canvas.getByLabelText(/^Database URL/)
+    ).toHaveAccessibleDescription(/libsql:\/\/<db>-<org>\.turso\.io/)
+    const token = canvas.getByLabelText(/^Database token/)
+    await expect(token).toHaveAttribute("type", "password")
+    await expect(token).toHaveAccessibleDescription(
+      /not the Platform API token/
+    )
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await expect(canvas.getByRole("button", { name: "Connect" })).toBeDisabled()
+    await userEvent.type(canvas.getByLabelText(/^Name/), "edge")
+    await userEvent.type(
+      canvas.getByLabelText(/^Database URL/),
+      "libsql://edge-acme.turso.io"
+    )
+    await userEvent.type(token, "story-token")
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            url: "libsql://edge-acme.turso.io",
+          }),
+          secrets: { token: "story-token" },
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ token: expect.anything() }),
       })
     )
   },

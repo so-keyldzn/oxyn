@@ -31,6 +31,7 @@ use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_redis::RedisDriver;
 use oxyn_driver_sqlite::SqliteDriver;
+use oxyn_driver_turso::TursoDriver;
 use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome, PendingCommand};
 use oxyn_secrets::{KeyringSecretStore, SecretStore};
 use oxyn_store::Store;
@@ -1068,6 +1069,9 @@ fn shipped_drivers() -> Result<DriverRegistry> {
     drivers
         .register(Arc::new(MongoDriver::new()))
         .context("registering the MongoDB driver")?;
+    drivers
+        .register(Arc::new(TursoDriver::new()))
+        .context("registering the Turso driver")?;
     Ok(drivers)
 }
 

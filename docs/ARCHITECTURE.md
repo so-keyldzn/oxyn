@@ -151,7 +151,7 @@ to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
 
 ## 3. The Cargo workspace
 
-21 crates, as they exist — 13 under `crates/`, 8 drivers under `drivers/`, the
+22 crates, as they exist — 13 under `crates/`, 9 drivers under `drivers/`, the
 members of the workspace being `crates/*` and `drivers/*` — plus the
 `apps/desktop` front end ([§2 bis](#2-bis-the-tauri-interface)):
 
@@ -190,7 +190,9 @@ oxyn/
 │   │                             #   depends on oxyn-query for the redis-cli grammar its redaction shares
 │   ├── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
 │   │                             #   (ADR-0063); depends on oxyn-query to read a command
-│   └── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
+│   ├── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
+│   └── oxyn-driver-turso/        # Turso Cloud: Hrana over HTTP (`/v2/pipeline`), SQLite's
+│                                 #   dialect, no libsql, one stream per statement (ADR-0069)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/

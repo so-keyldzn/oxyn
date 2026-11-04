@@ -680,3 +680,26 @@ fn an_unknown_pending_connection_is_refused() {
             .is_err()
     );
 }
+
+#[test]
+fn turso_is_shipped_with_its_url_and_a_token_that_is_a_secret() {
+    let drivers = shipped_drivers().expect("the shipped drivers register");
+    let turso = drivers
+        .get(&DriverId::turso())
+        .expect("Turso Cloud is registered");
+    let metadata = turso.metadata();
+    assert_eq!(metadata.display_name, "Turso Cloud");
+    let secrets: Vec<&str> = metadata
+        .secret_fields()
+        .map(|field| field.key.as_str())
+        .collect();
+    // The keyring maps the `token` key to the bundle's token slot, which is
+    // where the driver reads the database token from.
+    assert_eq!(secrets, ["token"]);
+    assert!(
+        metadata
+            .connection_fields
+            .iter()
+            .any(|field| field.key == "url" && field.required)
+    );
+}

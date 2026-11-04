@@ -8014,6 +8014,7 @@ dependencies = [
  "oxyn-driver-postgres",
  "oxyn-driver-redis",
  "oxyn-driver-sqlite",
+ "oxyn-driver-turso",
  "oxyn-embed",
  "oxyn-exec",
  "oxyn-llm",
@@ -8233,6 +8234,28 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "oxyn-driver-turso"
+version = "0.0.14"
+dependencies = [
+ "arrow 59.3.0",
+ "async-trait",
+ "chrono",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-driver",
+ "oxyn-query",
+ "reqwest",
+ "rstest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
