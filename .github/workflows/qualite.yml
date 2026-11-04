@@ -340,6 +340,9 @@ jobs:
         # exercised here. Binary published by EmbarkStudios, version and
         # checksums read on 2026-09-25 (RESEARCH-NOTES § Licenses).
         run: |
+          # The cargo-deny step, which creates this directory, is skipped when a
+          # change touches no Rust; the macOS image no longer ships it.
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
           case "$RUNNER_OS" in
             macOS) cible=aarch64-apple-darwin
                    empreinte=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
