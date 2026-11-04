@@ -1,13 +1,20 @@
 //! An agent that goes silent, or never confirms a stop, does not hold the
 //! session: the bounds of the `idle` module, with milliseconds for minutes.
+//!
+//! Every scenario runs on a paused clock: tokio advances it only when nothing
+//! else can make progress, so a bound fires exactly when the agent has gone
+//! quiet and never because the scheduler was late. A test on the real clock
+//! failed once on a loaded runner when a 50 ms heartbeat arrived 150 ms late
+//! against a 200 ms bound.
 
 use std::time::Duration;
 
 use super::*;
 use crate::external::settings::SettingChange;
 
-/// The bounds, short enough for a test and long enough for a loaded machine
-/// to deliver a message within them.
+/// The bounds. Their size no longer matters for stability — the clock is
+/// virtual — only their ratios do: the heartbeat of the "not cut" scenario is
+/// a fraction of `idle`, the tool wait a multiple of it.
 const SHORT: Limits = Limits {
     idle: Duration::from_millis(200),
     cancel_grace: Duration::from_millis(150),
@@ -17,6 +24,17 @@ const SHORT: Limits = Limits {
 /// Safety bound: past it, something still waits — the defect these tests
 /// close.
 const GUARD: Duration = Duration::from_secs(10);
+
+/// [`block_on`] with the clock paused at the start: time moves only when every
+/// task is waiting on a timer, then jumps to the earliest one.
+fn block_on_paused<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .expect("runtime")
+        .block_on(future)
+}
 
 /// Runs a scenario against an in-memory agent, the driver and the agent on
 /// their own tasks: unlike [`run`], either may end first — a session torn down
@@ -38,7 +56,7 @@ fn run_limited_with_environment<T>(
     let (ours, theirs) = Channel::duplex();
     let (session, driver) =
         ExternalSession::over_with(ours, private(), None, None, environment, SHORT);
-    block_on(async move {
+    block_on_paused(async move {
         tokio::spawn(driver);
         tokio::spawn(agent(theirs));
         tokio::time::timeout(GUARD, scenario(session))

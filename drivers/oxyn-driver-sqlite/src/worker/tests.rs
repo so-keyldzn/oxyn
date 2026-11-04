@@ -298,3 +298,40 @@ async fn a_missing_database_in_read_only_is_a_connection_error() {
         "the path must not come out: {err}"
     );
 }
+
+#[tokio::test]
+async fn an_interruption_landing_just_before_the_first_step_is_not_lost() {
+    // The engine clears its interruption flag when a statement starts: an
+    // interruption set between the driver's last check and the first
+    // `sqlite3_step` used to vanish, and an endless statement ran for nobody.
+    // Here the interruption is set by the task itself, right before it steps,
+    // which is that window made deterministic. The count is finite so a
+    // regression ends in a failed assertion instead of a hang.
+    const LONG: &str = "WITH RECURSIVE c(x) AS \
+        (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 50000000) SELECT count(*) FROM c";
+
+    let cancel_token = CancelToken::new();
+    let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
+    let interrupter = Arc::clone(&handle.interrupter);
+
+    let outcome = handle
+        .call(&cancel_token, move |conn: &Connection| {
+            let id = interrupter
+                .running()
+                .expect("a task that runs is the one the thread declared");
+            interrupter.interrupt(id);
+            Ok(conn.query_row(LONG, [], |row| row.get::<_, i64>(0)))
+        })
+        .await
+        .expect("call");
+
+    match outcome {
+        Err(rusqlite::Error::SqliteFailure(err, _)) => {
+            assert_eq!(err.code, rusqlite::ErrorCode::OperationInterrupted);
+        }
+        other => panic!("the interrupted statement must stop, got {other:?}"),
+    }
+
+    handle.close().await.expect("close");
+    thread.join().expect("the thread ends");
+}
