@@ -225,6 +225,8 @@ impl DriverId {
     pub const REDIS: &'static str = "redis";
     /// MongoDB driver (ADR-0063).
     pub const MONGODB: &'static str = "mongodb";
+    /// Turso Cloud driver, Hrana over HTTP (ADR-0069).
+    pub const TURSO: &'static str = "turso";
 
     /// Builds a driver identifier after validation.
     ///
@@ -311,6 +313,12 @@ impl DriverId {
     #[must_use]
     pub fn mongodb() -> Self {
         Self::known(Self::MONGODB)
+    }
+
+    /// Turso Cloud driver identifier.
+    #[must_use]
+    pub fn turso() -> Self {
+        Self::known(Self::TURSO)
     }
 
     /// Borrowed view of the identifier.
@@ -452,6 +460,7 @@ mod tests {
             DriverId::mongodb(),
             DriverId::new("mongodb").expect("valid")
         );
+        assert_eq!(DriverId::turso(), DriverId::new("turso").expect("valid"));
     }
 
     #[test]
