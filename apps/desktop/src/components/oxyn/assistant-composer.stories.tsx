@@ -645,21 +645,16 @@ export const MentionOneActiveRow: Story = {
   },
 }
 
-/** Resolves after `count` rendered frames: time as the page lives it. */
-function afterFrames(count: number) {
-  return new Promise<void>((resolve) => {
-    const next = (left: number) =>
-      requestAnimationFrame(() => (left <= 1 ? resolve() : next(left - 1)))
-    next(count)
-  })
-}
-
 /**
- * Typing `@` shows the list at once: no debounce, no wait for the backend —
- * it is there within two rendered frames of the keystroke. The 100 ms of
- * docs/PERFORMANCE.md is measured in the app, on a dedicated machine, not
- * here: a wall clock on a shared CI runner read 104, 165 and 266 ms for the
- * same render. Frames do not stretch with the load the way milliseconds do.
+ * Typing `@` shows the list at once: no debounce, no wait for the backend, no
+ * second keystroke. The listbox is looked up the instant the keystroke has
+ * been dispatched, with no `waitFor` and no frame to wait for: a list that
+ * needs either is a list behind a timer, and the lookup throws.
+ *
+ * The 100 ms of docs/PERFORMANCE.md is not tested here. It is a budget on the
+ * time the user perceives, measured in the app with the system's instruments
+ * on a dedicated machine; a wall clock in a story on a shared CI runner read
+ * 104, 165 and 266 ms for the same render, which tests the runner's load.
  */
 export const MentionListOpensAtOnce: Story = {
   render: (args) => <WithMentions {...args} />,
@@ -668,7 +663,6 @@ export const MentionListOpensAtOnce: Story = {
     await userEvent.click(field)
     await userEvent.type(field, "Count ")
     await userEvent.keyboard("@")
-    await afterFrames(2)
     await expect(
       within(document.body).getByRole("listbox", { name: "Objects to mention" })
     ).toBeVisible()

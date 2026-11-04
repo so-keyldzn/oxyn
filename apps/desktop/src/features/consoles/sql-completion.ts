@@ -17,7 +17,8 @@ import type {
   CompletionResult,
   CompletionSource,
 } from "@codemirror/autocomplete"
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
+import { ensureSyntaxTree } from "@codemirror/language"
+import type { syntaxTree } from "@codemirror/language"
 import type { EditorState, Text } from "@codemirror/state"
 
 import type {
@@ -111,7 +112,11 @@ export function sqlCompletionSource(
   return (context: CompletionContext): CompletionResult | null => {
     const catalog = read()
     if (catalog === null) return null
-    const where = whereAt(context.state, context.pos)
+    const tree = wholeTree(context.state)
+    // A parse cut short would offer the columns of every relation for a
+    // statement that does name one: no suggestion beats a wrong one.
+    if (tree === null) return null
+    const where = whereAt(context.state, context.pos, tree)
     if (where === null || (where.empty && !context.explicit)) return null
 
     const index = indexOf(catalog)
@@ -174,8 +179,10 @@ export function wantedNames(
 ): Array<Array<NamePart>> {
   // The whole statement: a name written after the cursor still wants its
   // columns, and a tree cut short by the parser's time slice would lose it.
-  ensureSyntaxTree(state, state.doc.length, 25)
-  const where = whereAt(state, pos)
+  // A miss asks for nothing; the next pause in typing asks again.
+  const tree = wholeTree(state)
+  if (tree === null) return []
+  const where = whereAt(state, pos, tree)
   if (where === null || where.statement === null) return []
   // A common table expression is not a relation of the catalog: asking for the
   // one it shadows would describe a table the statement never reads.
@@ -208,8 +215,17 @@ function distinct(chains: Array<Array<NamePart>>): Array<Array<NamePart>> {
 
 // --- The cursor ---------------------------------------------------------------
 
-function whereAt(state: EditorState, pos: number): Where | null {
-  const tree = syntaxTree(state)
+/**
+ * The tree spanning the whole document, or `null` when the parser's budget ran
+ * out first. `syntaxTree` is not an alternative: it returns the snapshot taken
+ * when the state was built, which a time slice may have cut short, whatever
+ * `ensureSyntaxTree` has parsed since — only its return value carries that.
+ */
+function wholeTree(state: EditorState): Tree | null {
+  return ensureSyntaxTree(state, state.doc.length, 25)
+}
+
+function whereAt(state: EditorState, pos: number, tree: Tree): Where | null {
   const at = tree.resolveInner(pos, -1)
   if (NOT_A_NAME.has(at.name)) return null
   // At the very start of a statement — a console just opened, the caret at 0 —
