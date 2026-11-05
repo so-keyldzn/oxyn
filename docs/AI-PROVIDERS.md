@@ -155,18 +155,25 @@ starting the agent can be enough for it to contact its service.
 > a graph label is described there like a table, in the query language of
 > the connection ([ADR-0030 § 4 bis](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-the-database-structure-one-tool-for-every-destination)).
 >
-> **A Redis key goes out by its exact name.** The Redis catalog lists exact
-> keys — relations of kind `key_pattern`, "an exact key is the pattern that
-> matches only itself" — at most `TREE_KEYS` (1,000) per database, from a
-> bounded `SCAN` (`drivers/oxyn-driver-redis/src/catalog.rs`), and
-> `ContextBuilder::render_relation` writes each relation it keeps by its kind
-> and its name, with no filter on the kind. Under a tier that carries names
-> ([`Metadata` is not "nothing goes out"](#metadata-by-default-is-not-nothing-goes-out)),
-> the exact names of the keys selected for the question therefore reach the
-> prompt, and a key name can embed data itself. Whether to replace them with
-> patterns is **not decided**: see issue
-> [#339](https://github.com/so-keyldzn/oxyn/issues/339), opened on 2026-10-25,
-> and [ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
+> **A Redis key name never goes out below the tier that carries values.** The
+> Redis catalog lists exact keys — relations of kind `key_pattern`, "an exact
+> key is the pattern that matches only itself" — at most `TREE_KEYS` (1,000) per
+> database, and a key name often embeds data itself (`user:<email>`,
+> `session:<token>`). Under `Local` and `Metadata`, `ContextBuilder::build`
+> therefore writes no key name, whether the key was selected by the question,
+> mentioned with `@`, or left out of the budget. It writes **patterns**: the
+> prefix up to the first separator (`:`, `/`, `|`, `.`, `#`), followed by `*`,
+> with the number of keys that share it (`session:* — 12 keys`). A prefix is
+> sent only when it reads as a namespace — at most 32 characters of letters,
+> digits, `_` and `-`, starting with a letter, with at most four digits, shared
+> by at least two keys; every other key is only counted ("N other keys"). A
+> mentioned key is acknowledged without its name. Exact names go out only under
+> `Sampled`, the tier that already carries values. The driver is unchanged: it
+> lists keys, as its catalog contract says, and the gateway filters
+> ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md), decision of
+> issue [#339](https://github.com/so-keyldzn/oxyn/issues/339)). A user who
+> wants the model to see a precise key name raises the connection's tier or
+> types the name in the question.
 
 > **What Oxyn cannot promise here**, and therefore does not promise: what
 > the agent does with what it receives. Billing, retention and data

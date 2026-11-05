@@ -71,6 +71,7 @@ use serde::{Deserialize, Serialize};
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
+mod key_patterns;
 mod mentions;
 mod semantic;
 mod wanted;
@@ -445,6 +446,10 @@ impl<'a> ContextBuilder<'a> {
             body.push('\n');
         }
 
+        // Key names never leave below the tier that carries values: the
+        // connection's key structure goes out as patterns, once, here.
+        body.push_str(&key_patterns::render(self.cache, self.tier, naming));
+
         let header_cost = estimate_tokens(&body);
         let mut used = header_cost;
         let mut kept: Vec<CatalogPath> = Vec::new();
@@ -453,6 +458,9 @@ impl<'a> ContextBuilder<'a> {
 
         let selected = self.select_relations(&mentioned.relations);
         for path in selected.iter().cloned() {
+            if self.withholds_name(&path) {
+                continue;
+            }
             let mut chunk = self.render_relation(&path, naming);
             let mut cost = estimate_tokens(&chunk);
             if header_cost + cost > self.policy.max_context_tokens {
@@ -579,6 +587,16 @@ impl<'a> ContextBuilder<'a> {
             unloaded_relations: unloaded,
             unlisted_schemas: unlisted,
         }
+    }
+
+    /// Is this relation one whose name the tier does not let out?
+    ///
+    /// Such a relation is never rendered, mentioned or listed by name; see
+    /// [`key_patterns`].
+    fn withholds_name(&self, path: &CatalogPath) -> bool {
+        self.cache
+            .relation_summary(path)
+            .is_some_and(|reference| key_patterns::withholds_name(self.tier, reference.kind))
     }
 
     /// Chooses the relations to describe: the mentioned ones first, in input
@@ -993,6 +1011,9 @@ mod tests;
 
 #[cfg(test)]
 mod generic_tests;
+
+#[cfg(test)]
+mod key_pattern_tests;
 
 #[cfg(test)]
 mod mention_tests;

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="cc09ef0dd3cb" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="0c287e350350" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -285,15 +285,16 @@ que fait un arrêt. Vérifié le 2026-10-22
 * **−** Une capture est une fenêtre, pas un abonnement qui dure : un message
   publié après sa fermeture n'est pas vu. `MONITOR` ralentit un serveur chargé
   tant que la fenêtre dure.
-* **−** **Limite connue, décision ouverte.** Le catalogue de la décision 11
-  liste des clés *exactes*, et le contexte de l'IA écrit chaque relation qu'il
-  retient par son nom, quel que soit son genre ([AI-PROVIDERS](../AI-PROVIDERS.md)) :
-  sous un niveau qui porte les noms, les noms exacts des clés retenues pour une
-  question atteignent l'invite, et un nom de clé peut embarquer lui-même une
-  donnée. Cet ADR ne décide pas s'il faut continuer de les envoyer ou envoyer
-  des motifs de clés à la place : ce choix est celui du mainteneur, et l'issue
-  [#339](https://github.com/so-keyldzn/oxyn/issues/339) (ouverte le 2026-10-25)
-  le pose. Tant qu'il n'est pas pris, AI-PROVIDERS dit ce qui part.
+* **−** **Les noms de clés sont des motifs dans une invite IA.** Le catalogue de
+  la décision 11 liste des clés *exactes*, et un nom de clé peut embarquer une
+  donnée (`user:<email>`). Décidé pour l'issue
+  [#339](https://github.com/so-keyldzn/oxyn/issues/339) : sous un niveau qui ne
+  porte pas de valeurs de lignes (`Local`, `Metadata`), la porte du contexte IA
+  n'envoie aucun nom de clé. Elle envoie le préfixe jusqu'au premier séparateur
+  avec un compte (`session:* — 12 keys`), et compte les clés dont le préfixe se
+  lirait comme un identifiant ; les noms exacts ne partent que sous `Sampled`
+  ([AI-PROVIDERS](../AI-PROVIDERS.md)). Le driver ne change pas, et un modèle qui
+  a besoin d'une clé précise la demande à l'utilisateur.
 
 **Coût de sortie :** modéré. Remplacer la couche RESP écrite à la main par une
 bibliothèque réécrit `resp.rs`, `connection.rs` et la boucle de lecture du
