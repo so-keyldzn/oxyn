@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 import sys
 import tomllib
 import unicodedata
@@ -213,7 +214,59 @@ def translation_errors(root: Path) -> list[str]:
 
 
 def check_translations() -> list[str]:
-    return translation_errors(REPO_ROOT)
+    return translation_errors(REPO_ROOT) + missing_mirror_errors(
+        REPO_ROOT, _tracked_markdown(REPO_ROOT)
+    )
+
+
+# The documents with no mirror, and why. i18n/README.md states the same list in
+# prose; this one is what the check reads. A path ending in `/` is a directory.
+MIRROR_EXEMPT = (
+    ".claude/skills/",  # third-party skills, installed by `skills-lock.json`
+    ".agents/skills/",  # the same skills; the `oxyn-*` ones do have a mirror
+    ".claude/agent-memory/",  # tooling notes
+    ".claude/audits/",  # dated reports, written once
+    ".github/",  # templates the forge renders as they are
+    "crates/",  # prompts and agent definitions shipped as runtime data
+    "CLA.md",  # legal text, English only
+    "i18n/",  # the mirrors themselves
+)
+# Where a source directory lands under i18n/fr/ (a dot-directory must not be
+# loaded as a second rule, command or agent).
+MIRROR_RENAMES = ((".claude/", "claude/"), (".codex/", "codex/"), (".agents/", "agents/"))
+
+
+def mirror_path(source: str) -> str:
+    for prefix, renamed in MIRROR_RENAMES:
+        if source.startswith(prefix):
+            return f"{MIRRORS}/{renamed}{source[len(prefix):]}"
+    return f"{MIRRORS}/{source}"
+
+
+def _tracked_markdown(root: Path) -> list[str]:
+    listing = subprocess.run(
+        ["git", "ls-files", "*.md"], cwd=root, capture_output=True, text=True, check=False
+    )
+    return listing.stdout.split("\n") if listing.returncode == 0 else []
+
+
+def missing_mirror_errors(root: Path, tracked: list[str]) -> list[str]:
+    """A tracked document with neither a mirror nor a listed exception.
+
+    `translation_errors` only judges the mirrors that exist, so a document added
+    without one passed unseen.
+    """
+    problems = []
+    for source in tracked:
+        if not source or source.startswith(MIRROR_EXEMPT):
+            continue
+        if not (root / mirror_path(source)).is_file():
+            problems.append(
+                f"{source}: no French mirror at {mirror_path(source)} — write it, "
+                "or list the document as an exception in i18n/README.md and "
+                "MIRROR_EXEMPT (ADR-0047)"
+            )
+    return problems
 
 
 # ADR-0045 says `controles` checks "the ADR index". The index is the table of

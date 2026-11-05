@@ -20,7 +20,18 @@ text, then the `sha256` in its header, in the same pull request. If you do not
 write French, say so in the pull request: the maintainer updates the mirror
 before merging.
 
-Every Markdown document of the repository has a mirror, except the
-third-party skills of `.claude/skills/` and the agent memories of
-`.claude/agent-memory/`, which are tooling notes. A new document gets its
-mirror in the same pull request.
+Every Markdown document of the repository has a mirror, except:
+
+- the third-party skills (`.claude/skills/`, `.agents/skills/` — the `oxyn-*`
+  skills of `.agents/skills/` are ours and do have a mirror);
+- the agent memories of `.claude/agent-memory/`, which are tooling notes;
+- the audit reports of `.claude/audits/`, dated and written once;
+- `.github/`, whose templates the forge renders as they are;
+- `crates/`, whose agent definitions and prompts are runtime data;
+- `CLA.md`, a legal text kept in English only;
+- `i18n/` itself: the mirrors, and this note.
+
+A new document gets its mirror in the same pull request. `make socle` refuses a
+tracked Markdown document with neither a mirror nor a place in this list; the
+list it reads is `MIRROR_EXEMPT` in
+[`.claude/verifier_socle.py`](../.claude/verifier_socle.py).
