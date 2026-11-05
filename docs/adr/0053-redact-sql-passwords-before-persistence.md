@@ -23,6 +23,16 @@ scanner to replace the string literal in `PASSWORD`, `IDENTIFIED BY`, and
 `IDENTIFIED WITH … BY` clauses with `'<redacted>'`. It preserves all other
 bytes, including formatting and comments.
 
+Three connection-secret forms of routine administration are recognized as well,
+in the PostgreSQL, MySQL and ANSI-union readings alike: the `CONNECTION '…'`
+literal of `CREATE`/`ALTER SUBSCRIPTION` (redacted whole: a conninfo can carry
+`password=` in several spellings, and keeping the host would need a conninfo
+parser), `PASSWORD '…'` in the `OPTIONS` of `CREATE`/`ALTER SERVER`, and
+`SOURCE_PASSWORD`/`MASTER_PASSWORD = '…'` of `CHANGE REPLICATION SOURCE TO` and
+`CHANGE MASTER TO` (issue #303). Connection strings passed as function arguments
+(`dblink`, `postgres_fdw` helpers) and `START REPLICA … PASSWORD` remain outside
+the grammar.
+
 The MySQL dialect also covers MariaDB user modifiers, authentication in `GRANT`,
 and plugin authentication strings. MySQL executable comments are scanned as SQL;
 ordinary comments remain unchanged.

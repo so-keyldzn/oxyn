@@ -655,6 +655,29 @@ fn password_literals_execute_verbatim_but_are_redacted_from_disk() {
             SqlDialect::MySql,
             "CREATE USER u IDENTIFIED BY 'witness-secret'",
         ),
+        (
+            DriverId::postgres(),
+            SqlDialect::Postgres,
+            "CREATE SUBSCRIPTION sub CONNECTION 'host=primary dbname=app user=repl \
+             password=witness-secret' PUBLICATION pub",
+        ),
+        (
+            DriverId::mysql(),
+            SqlDialect::MySql,
+            "CREATE SERVER fed FOREIGN DATA WRAPPER mysql OPTIONS (USER 'u', \
+             PASSWORD 'witness-secret', HOST 'h')",
+        ),
+        (
+            DriverId::mysql(),
+            SqlDialect::MySql,
+            "CHANGE REPLICATION SOURCE TO SOURCE_HOST='h', SOURCE_USER='repl', \
+             SOURCE_PASSWORD='witness-secret'",
+        ),
+        (
+            DriverId::mysql(),
+            SqlDialect::Ansi,
+            "CHANGE MASTER TO MASTER_PASSWORD='witness-secret'",
+        ),
     ];
 
     for (driver, dialect, sql) in cases {
