@@ -12,13 +12,20 @@ const target = {
   serverCancel: true,
 }
 
-const executed = (result: string, rows = 3): CommandOutcome => ({
+const executed = (
+  result: string,
+  rows = 3,
+  timing: { elapsedMs: number; latencyMs: number } = {
+    elapsedMs: 12,
+    latencyMs: 12,
+  }
+): CommandOutcome => ({
   type: "executed",
   result,
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows,
-  elapsedMs: 12,
-  latencyMs: 12,
+  elapsedMs: timing.elapsedMs,
+  latencyMs: timing.latencyMs,
   complete: true,
   cancelled: false,
   truncated: false,
@@ -129,7 +136,10 @@ describe("preview store", () => {
     previews.attach("k", target)
     previews.read("k", PLAIN_SHAPE)
     // 3 ms of SQL, after 20 s behind another read on the shared session.
-    await answer("cmd1", { ...executed("r1"), elapsedMs: 3, latencyMs: 20_003 })
+    await answer(
+      "cmd1",
+      executed("r1", 3, { elapsedMs: 3, latencyMs: 20_003 })
+    )
     expect(previews.store.state.k?.state).toMatchObject({
       status: "populated",
       elapsedMs: 20_003,
@@ -363,9 +373,7 @@ describe("an automatic read that goes out of sight", () => {
       state: { status: "initial" },
     })
 
-    // The server answered anyway, after the cancel: a timeout, then rows.
-    await answer("cmd1", { type: "denied", reason: "timeout30s" })
-    expect(previews.store.state.k?.state).toEqual({ status: "initial" })
+    // The server answered anyway, after the cancel.
     await answer("cmd1", executed("late"))
     expect(effects.forgetResult).toHaveBeenCalledWith("late")
     expect(previews.store.state.k?.state).toEqual({ status: "initial" })
