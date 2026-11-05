@@ -420,3 +420,145 @@ async fn a_cancelled_read_is_cancelled_and_its_handle_released() {
     assert!(session.registry.all().is_empty());
     holder.abort();
 }
+
+/// How the fake cluster answers the Tasks API once a write is stopped.
+#[derive(Clone, Copy)]
+enum Tasks {
+    /// Lists the write's task, then none once it was cancelled.
+    ListedThenGone,
+    /// Never lists a task for the write.
+    NeverListed,
+    /// Refuses to list tasks (an account without the privilege).
+    Forbidden,
+}
+
+/// A cluster that holds every request but the Tasks API unanswered, and
+/// reports the held request's `X-Opaque-Id` as a task per `tasks`.
+async fn cluster_holding_writes(tasks: Tasks) -> u16 {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port is free");
+    let port = listener.local_addr().expect("an address").port();
+    let opaque = Arc::new(Mutex::new(None::<String>));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut read = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let head = loop {
+                match socket.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break String::new(),
+                    Ok(n) => read.extend_from_slice(buffer.get(..n).unwrap_or_default()),
+                }
+                let text = String::from_utf8_lossy(&read).into_owned();
+                if let Some((head, _)) = text.split_once("\r\n\r\n") {
+                    break head.to_owned();
+                }
+            };
+            let first = head.lines().next().unwrap_or_default().to_owned();
+            if first.contains("/_tasks") && first.contains("_cancel") {
+                cancelled.store(true, Ordering::SeqCst);
+                let _ = socket.write_all(&answer("{}")).await;
+            } else if first.contains("/_tasks") {
+                let reply = match tasks {
+                    Tasks::Forbidden => {
+                        let body =
+                            r#"{"error":{"type":"security_exception","reason":"no"},"status":403}"#;
+                        format!(
+                            "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .into_bytes()
+                    }
+                    Tasks::NeverListed => answer(r#"{"tasks":{}}"#),
+                    Tasks::ListedThenGone => {
+                        let id = opaque
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .clone();
+                        let listed = match id {
+                            Some(id) if !cancelled.load(Ordering::SeqCst) => format!(
+                                r#"{{"tasks":{{"n1:7":{{"headers":{{"X-Opaque-Id":"{id}"}}}}}}}}"#
+                            ),
+                            _ => r#"{"tasks":{}}"#.to_owned(),
+                        };
+                        answer(&listed)
+                    }
+                };
+                let _ = socket.write_all(&reply).await;
+            } else {
+                // The write itself: remember its id, never answer.
+                let id = head.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("x-opaque-id")
+                        .then(|| value.trim().to_owned())
+                });
+                *opaque.lock().unwrap_or_else(PoisonError::into_inner) = id;
+                held.push(socket);
+            }
+        }
+    });
+    port
+}
+
+/// What a write stopped by the caller ends with, against a cluster that
+/// answers the Tasks API as `tasks` says.
+async fn stopped_write(tasks: Tasks, text: &str) -> (OxynError, usize) {
+    let port = cluster_holding_writes(tasks).await;
+    let session = session_to(port);
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        trigger.cancel();
+    });
+    let mut write = request(text);
+    write.limits.read_only = false;
+    let outcome = session.execute(write, &cancel).await.err();
+    (
+        outcome.expect("a stopped write is an error"),
+        session.registry.all().len(),
+    )
+}
+
+const BY_QUERY: &str = "POST /logs/_delete_by_query\n{\"query\":{\"match_all\":{}}}";
+
+#[tokio::test]
+async fn a_write_stopped_with_proof_is_unknown_and_says_what_stays_applied() {
+    let (outcome, open) = stopped_write(Tasks::ListedThenGone, BY_QUERY).await;
+    let OxynError::OutcomeUnknown(message) = &outcome else {
+        panic!("a stopped write is never Cancelled: {outcome:?}");
+    };
+    assert!(message.contains("stay applied"), "{message}");
+    assert_eq!(outcome.class(), ErrorClass::Ambiguous);
+    assert_eq!(open, 0, "the handle is released");
+}
+
+#[tokio::test]
+async fn a_write_stopped_with_no_task_listed_may_still_apply() {
+    let (outcome, _) = stopped_write(
+        Tasks::NeverListed,
+        "POST /_bulk\n{\"index\":{\"_index\":\"a\"}}\n{\"n\":1}",
+    )
+    .await;
+    let OxynError::OutcomeUnknown(message) = &outcome else {
+        panic!("a stopped write is never Cancelled: {outcome:?}");
+    };
+    assert!(message.contains("may still apply"), "{message}");
+    assert!(!message.contains("never ran"), "{message}");
+}
+
+#[tokio::test]
+async fn a_write_stopped_without_the_right_to_list_tasks_is_unproven_not_cancelled() {
+    let (outcome, _) = stopped_write(Tasks::Forbidden, BY_QUERY).await;
+    let OxynError::OutcomeUnknown(message) = &outcome else {
+        panic!("a stopped write is never Cancelled: {outcome:?}");
+    };
+    assert!(message.contains("not proven"), "{message}");
+    assert_eq!(outcome.class(), ErrorClass::Ambiguous);
+}

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AssistantPanel } from "./assistant-panel"
 import type * as ConversationStore from "./conversation-store"
+import type { AssistantState } from "./conversation-store"
 import { enabledEntry } from "@/components/oxyn/assistant-fixtures"
 import { WorkspaceLayout } from "@/components/oxyn/workspace-layout"
 import type { SampleRequest } from "@/lib/ipc/ai"
@@ -15,13 +16,16 @@ const calls = vi.hoisted(() => ({
   withdrawSample: vi.fn(),
 }))
 
+// What `useAssistant` answers: the initial state unless a test sets another.
+const store = vi.hoisted(() => ({ state: null as AssistantState | null }))
+
 // The panel itself is under test — its sample approval, owned by the send
 // that awaits it. What it reaches in the backend is stubbed at the store.
 vi.mock("./conversation-store", async (importActual) => {
   const actual = await importActual<typeof ConversationStore>()
   return {
     ...actual,
-    useAssistant: () => actual.INITIAL_ASSISTANT,
+    useAssistant: () => store.state ?? actual.INITIAL_ASSISTANT,
     resumeAssistant: () => Promise.resolve(),
     requestSample: calls.requestSample,
     askQuestion: calls.askQuestion,
@@ -73,22 +77,30 @@ vi.mock("./tool-rows", () => ({ ToolRows: () => null }))
 vi.mock("./erd-block", () => ({ ErdBlock: () => null }))
 // The conversation view is presentational and has its own stories: here it
 // only sends, and what the panel answers is kept to be watched.
-const asked = vi.hoisted(() => ({ result: null as Promise<boolean> | null }))
+const asked = vi.hoisted(() => ({
+  result: null as Promise<boolean> | null,
+  agentPickerDisabled: null as boolean | null,
+}))
 vi.mock("@/components/oxyn/assistant-view", () => ({
   AssistantView: ({
     onAsk,
+    agentPicker,
   }: {
     onAsk: (question: string, mentions: Array<never>) => Promise<boolean>
-  }) => (
-    <button
-      type="button"
-      onClick={() => {
-        asked.result = onAsk("Which clients churned?", [])
-      }}
-    >
-      Ask
-    </button>
-  ),
+    agentPicker: { disabled: boolean }
+  }) => {
+    asked.agentPickerDisabled = agentPicker.disabled
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          asked.result = onAsk("Which clients churned?", [])
+        }}
+      >
+        Ask
+      </button>
+    )
+  },
 }))
 
 // The side column and the resizable group measure themselves; jsdom cannot.
@@ -180,6 +192,8 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   asked.result = null
+  asked.agentPickerDisabled = null
+  store.state = null
 })
 
 describe("the assistant panel across the compact threshold", () => {
@@ -221,5 +235,36 @@ describe("the assistant panel across the compact threshold", () => {
       { request: "approval-1", source: request.address, columns: ["email"] },
       []
     )
+  })
+})
+
+describe("the composer's agent chip", () => {
+  function renderPanel() {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Workspace compact={false} />
+      </QueryClientProvider>
+    )
+  }
+
+  it("is available between answers", () => {
+    renderPanel()
+    expect(asked.agentPickerDisabled).toBe(false)
+  })
+
+  it("is inert while an answer is written, though nothing is being sent", async () => {
+    const { INITIAL_ASSISTANT } = await vi.importActual<
+      typeof ConversationStore
+    >("./conversation-store")
+    // `sending` is false: the question was handed over long ago, and the
+    // answer is still being written (`thread.running` names its exchange).
+    store.state = {
+      ...INITIAL_ASSISTANT,
+      sending: false,
+      opening: false,
+      thread: { ...INITIAL_ASSISTANT.thread, running: 1 },
+    }
+    renderPanel()
+    expect(asked.agentPickerDisabled).toBe(true)
   })
 })

@@ -235,6 +235,17 @@ secret.** The implementation is manual and redacts the value. A derived `Debug`
 is the most frequent leak because it is invisible in review —
 it is the `tracing::debug!("{cfg:?}")` added six months later that leaks.
 
+Persisted files follow the same rule on Unix: the local state
+(`oxyn.sqlite3` and its `-wal` and `-shm` files) holds the query history, the
+audit journal's statements, conversation transcripts and connection
+parameters, so Oxyn creates its own data directory with mode 0700 and the
+database file with 0600 — SQLite gives `-wal` and `-shm` the mode of the main
+file — and tightens an existing store to those modes when it opens it, as it
+already does for the log directory. Only the leaf directory Oxyn owns is
+tightened, never its ancestors, nor the directory of a path chosen by the
+caller. Without it the umask (022) leaves the state world-readable on a
+traversable home directory. Windows relies on the per-user profile.
+
 ### What goes out to an AI recipient leaves a trace
 
 **What goes out to an AI recipient is logged**, in `ai_egress`, an append-only

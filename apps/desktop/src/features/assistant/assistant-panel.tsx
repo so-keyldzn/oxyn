@@ -357,7 +357,11 @@ export function AssistantPanel({
           missingAgent: state.thread.missingAgent,
           loading: agentOptions.isPending,
           unavailable: agentOptions.isError,
-          disabled: state.opening || state.sending,
+          // Inert while an answer is written, not only while a question is
+          // handed over: the prompt of an agent never changes under a written
+          // history (docs/UX-SPEC.md, "The agent is chosen per conversation").
+          disabled:
+            state.opening || state.sending || state.thread.running !== null,
           onSelect: (id) => newThread(open.connection, id),
           onReload: reloadAgents.reload,
           reloading: reloadAgents.reloading,
