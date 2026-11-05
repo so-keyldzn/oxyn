@@ -297,20 +297,21 @@ runs the workflow itself. `script/test_livraison_workflow.py`, also run by
 which job holds the updater key, the environment or a writing token, a build
 step in `signature`, an artifact name or path that diverges between two jobs;
 the actions themselves, the artifacts and the token permissions are first
-exercised by a release. None of this proves that an installed Oxyn accepts the result. That
-takes two steps:
+exercised by a release. None of this proves that an installed Oxyn accepts the result.
 
-1. **Local rehearsal**, with the `update-rehearsal` cargo feature, never
-   enabled in CI: a throwaway key, bundles 0.0.1 and 0.0.2 served on
-   `127.0.0.1`. Check the download, the install on ⌘Q, the install on the
-   Dock's Quit, "Restart now", the absence of a recovery screen after the
-   relaunch, a tampered `.sig` ending in a signature error, and an offline
-   check failing silently.
-2. **Real releases.** Publish v0.0.2, installed by hand (v0.0.1 has no
-   updater), then v0.0.3. Check that v0.0.2 updates itself on a clean Mac and
-   as an AppImage, and that a `.deb` install says "Updates are managed by your
-   package manager". The ARM64 AppImage gets the same check with the first
-   release that ships it and the one after.
+That is only shown on **real releases**. There is no local rehearsal: the
+update endpoint is a compile-time constant (`updates/channel.rs`,
+[ADR-0051](adr/0051-automatic-updates-from-github-releases.md)), with no
+feature or variable that redirects it to a loopback server, and adding one
+would put an override in the shipped binary. After each release, on an Oxyn of
+the previous release installed on a clean Mac and as an AppImage, check that it
+updates itself: the download, the install on ⌘Q, the install on the Dock's
+Quit, "Restart now", the absence of a recovery screen after the relaunch, and
+an offline check failing silently. A `.deb` install must say "Updates are
+managed by your package manager". The ARM64 AppImage gets the same check with
+the first release that ships it and the one after. Refusing a modified archive
+or another key is covered by the manual `minisign -V` check above, not by an
+installed Oxyn.
 
 Updater contracts are recorded in
 [RESEARCH-NOTES](RESEARCH-NOTES.md#tauri-updater-contracts--checked-on-2026-10-02).
