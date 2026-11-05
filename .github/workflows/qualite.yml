@@ -617,13 +617,15 @@ jobs:
     if: needs.zones.outputs.rust == 'true' && needs.zones.outputs.embedding == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      # The store `make test-embedding` fills and reads; cached below.
-      OXYN_EMBED_MODEL_ROOT: ${{ runner.temp }}/oxyn-embed-model
     steps:
       - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Name the model store
+        # The store `make test-embedding` fills and reads; cached below. The
+        # `runner` context does not exist in a job-level `env`, hence this step.
+        run: echo "OXYN_EMBED_MODEL_ROOT=$RUNNER_TEMP/oxyn-embed-model" >> "$GITHUB_ENV"
 
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
