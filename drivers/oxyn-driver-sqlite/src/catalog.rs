@@ -51,6 +51,7 @@ use oxyn_core::{CancelToken, Capabilities, OxynError, Result};
 use rusqlite::Connection;
 
 use crate::error::{self, Effect};
+use crate::key_order::{self, KeyIndex};
 use crate::worker::WorkerHandle;
 
 /// The default namespace of an SQLite session.
@@ -82,6 +83,26 @@ impl SqliteCatalog {
     /// The namespace targeted by a path, `main` by default.
     fn database_of(path: &CatalogPath) -> &str {
         path.namespace().unwrap_or(MAIN)
+    }
+
+    /// How the primary key's own index orders `relation`, for a preview to ask
+    /// for exactly that order.
+    ///
+    /// # Errors
+    /// [`OxynError::Cancelled`] if the token fires, the engine's error
+    /// otherwise.
+    pub(crate) async fn key_index(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<KeyIndex> {
+        let database = Self::database_of(relation).to_owned();
+        let name = Self::relation_of(relation)?.to_owned();
+        self.worker
+            .call(cancel, move |connection: &Connection| {
+                key_order::read(connection, &database, &name)
+            })
+            .await
     }
 
     /// The databases of the connection — `main`, `temp`, then the attached
@@ -222,9 +243,18 @@ impl CatalogProvider for SqliteCatalog {
                 let Some(kind) = relation_kind(connection, &database, &name)? else {
                     return Ok(None);
                 };
+                let is_virtual = is_virtual(connection, &database, &name)?;
+                // A virtual table is not asked for its indexes: its module
+                // decides what they mean, and it is not ordered by default.
+                let key = if is_virtual {
+                    KeyIndex::unconstrained()
+                } else {
+                    key_order::read(connection, &database, &name)?
+                };
                 Ok(Some(RawRelation {
                     kind,
-                    is_virtual: is_virtual(connection, &database, &name)?,
+                    is_virtual,
+                    key,
                     columns: table_info(connection, &database, &name)?,
                 }))
             })
@@ -246,8 +276,10 @@ impl CatalogProvider for SqliteCatalog {
         // A b-tree table answers `ORDER BY key LIMIT n` from its index; a view
         // has no key to order on, and says so by having none. A virtual table
         // may have to read every row first: its previews are left unordered
-        // until the user asks for an order.
-        Ok(if described.is_virtual {
+        // until the user asks for an order. So is a table whose key index mixes
+        // directions: `ORDER BY a ASC, b ASC` cannot be walked in it, and
+        // opening the table would sort all of it.
+        Ok(if described.is_virtual || !described.key.walkable {
             relation
         } else {
             relation.with_key_order_preview()
@@ -364,6 +396,8 @@ struct RawRelation {
     /// A virtual table: its module, not the engine, decides what reading it in
     /// key order costs.
     is_virtual: bool,
+    /// How the primary key's index orders the table.
+    key: KeyIndex,
     columns: Vec<RawColumn>,
 }
 

@@ -82,6 +82,9 @@ pub mod driver;
 pub mod error;
 mod incoming_keys;
 mod interrupt;
+#[cfg(test)]
+mod key_index_tests;
+mod key_order;
 pub mod options;
 pub mod params;
 mod preview;
