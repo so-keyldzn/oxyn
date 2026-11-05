@@ -2,7 +2,6 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { storybookTest } from "@storybook/addon-vitest/vitest-plugin"
 import tailwindcss from "@tailwindcss/vite"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
@@ -11,6 +10,13 @@ import { playwright } from "@vitest/browser-playwright"
 import { defineConfig } from "vite"
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Vitest sets `VITEST` before it loads this file. The Storybook plugin is
+// imported only then: a production build has no use for it, and importing it
+// at the top pulled Storybook's code into every `vite build`.
+const storybookTest = process.env.VITEST
+  ? (await import("@storybook/addon-vitest/vitest-plugin")).storybookTest
+  : null
 
 // Tauri serves static files only: there is no HTTP server behind the webview,
 // so Start runs in SPA mode and its shell is written as `index.html`, the file
@@ -70,9 +76,9 @@ export default defineConfig({
         // running in this directory, and two optimizers rewriting the same
         // cache made a story file fail to import once, at random.
         cacheDir: "node_modules/.vite-storybook-tests",
-        plugins: [
-          storybookTest({ configDir: path.join(dirname, ".storybook") }),
-        ],
+        plugins: storybookTest
+          ? [storybookTest({ configDir: path.join(dirname, ".storybook") })]
+          : [],
         test: {
           name: "storybook",
           // Pays each file's cold start before its first story is timed.
