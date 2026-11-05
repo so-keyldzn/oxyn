@@ -3,9 +3,15 @@
 > **Authority**: which MCP servers the repository declares, why, and why the
 > obvious candidates are rejected.
 
-Configuration: [`.mcp.json`](../.mcp.json) at the root, approval through
-`enabledMcpjsonServers` in [`.claude/settings.json`](../.claude/settings.json)
-— in the **committed** file, so that a clone has nothing to re-approve.
+Configuration: [`.mcp.json`](../.mcp.json) at the root declares four servers.
+Approval goes through `enabledMcpjsonServers`, and the committed
+[`.claude/settings.json`](../.claude/settings.json) pre-approves **only
+`fetch`**: it needs nothing but `uvx`. The other three are not pre-approved on
+purpose — `figma` reaches a remote account service, and `figma-desktop` and
+`semantiq` need a local application or binary a clone may not have — so a clone
+approves them when it first uses them, or lists them in its own, untracked
+`.claude/settings.local.json`. Codex declares the two Figma servers on its side
+([.codex/README.md](../.codex/README.md#figma)).
 
 ## The criterion
 
@@ -33,6 +39,46 @@ returns the content.
 `WebFetch` remains preferable to skim a long page from which you only want an
 answer.
 
+### `figma`
+
+| | |
+|---|---|
+| Origin | the Figma remote MCP service, `https://mcp.figma.com/mcp` (HTTP) |
+| Launch | none: a remote endpoint, authorized in the Figma account; no credential is stored in the repository |
+
+**Why it is not redundant.** The mockups the interface follows
+([FIGMA-HANDOFF](FIGMA-HANDOFF.md)) live in Figma; nothing native to Claude Code
+reads a frame, its measurements or its variables. It is the one declared server
+that sends requests to an external service, which is why it is not pre-approved.
+
+### `figma-desktop`
+
+| | |
+|---|---|
+| Origin | the Dev Mode MCP server of Figma Desktop |
+| Launch | none: `http://127.0.0.1:3845/mcp`, available only while Figma Desktop runs with its MCP server enabled |
+
+**Why it is not redundant.** The same reading as `figma`, on the file open in the
+local application, with no round trip to a remote service. The mockup tokens of
+[RESEARCH-NOTES](RESEARCH-NOTES.md#figma-mockup-tokens) were read this way.
+Both Figma servers are optional: nothing in the build or in the gates depends on
+them.
+
+### `semantiq`
+
+| | |
+|---|---|
+| Origin | the `semantiq` code-search tool, installed on the machine |
+| Launch | `semantiq serve --project .`; its index is the local `.semantiq.db*`, ignored by git and rebuilt on demand |
+
+**Why it is not redundant.** `Grep` and `Glob` find a string; they do not find
+"where is this behavior implemented" described in words, nor a symbol's callers,
+hierarchy or impact. `semantiq` answers those from a local index, with no network
+access. It is not conclusive: `find_refs` stops at its `limit` and counts a `use`
+as a definition, and `deps` does not follow `pub use` re-exports, so "nothing
+else uses X" is checked with grep. [CLAUDE.md](../CLAUDE.md#searching-the-code)
+says when to start with it and when grep stays the tool.
+
 ## What is rejected, and why
 
 Documented so that the question is not asked again every six months.
@@ -57,9 +103,10 @@ It is not filled, for two reasons:
 1. **No official server exists** — those of the reference repository are
    archived. Every candidate is a third-party server, to be audited before being
    plugged into a database.
-2. **There is no driver to test yet.** The need is real from
-   phase 2 ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--the-protocols-that-matter)),
-   not before.
+2. **The need is covered without a boundary.** Drivers now exist
+   ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--the-protocols-that-matter))
+   and are tested against real servers in CI (`make test-serveurs`); a developer
+   querying a local database does it with the client tools below.
 
 When the need arises, the decision will go through an ADR, and the criterion
 will be the access surface: an MCP server that receives a production connection

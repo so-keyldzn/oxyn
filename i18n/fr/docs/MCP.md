@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/MCP.md" sha256="8dfe620760f5" -->
+<!-- oxyn-translation source="docs/MCP.md" sha256="4d13fda966c8" -->
 
 > Traduction française de [docs/MCP.md](../../../docs/MCP.md). **La version anglaise fait foi.**
 
@@ -7,9 +7,16 @@
 > **Autorité** : quels serveurs MCP le dépôt déclare, pourquoi, et pourquoi les
 > candidats évidents sont écartés.
 
-Configuration : [`.mcp.json`](../../../.mcp.json) à la racine, approbation par
-`enabledMcpjsonServers` dans [`.claude/settings.json`](../../../.claude/settings.json)
-— dans le fichier **commité**, pour qu'un clone n'ait rien à réapprouver.
+Configuration : [`.mcp.json`](../../../.mcp.json) à la racine déclare quatre
+serveurs. L'approbation passe par `enabledMcpjsonServers`, et le
+[`.claude/settings.json`](../../../.claude/settings.json) commité ne pré-approuve
+que **`fetch`** : il n'a besoin que d'`uvx`. Les trois autres ne le sont pas, à
+dessein — `figma` joint un service distant lié à un compte, et `figma-desktop` et
+`semantiq` demandent une application ou un binaire locaux qu'un clone n'a pas
+forcément —, si bien qu'un clone les approuve à la première utilisation, ou les
+liste dans son propre `.claude/settings.local.json`, non suivi. Codex déclare les
+deux serveurs Figma de son côté
+([.codex/README.md](../../../.codex/README.md#figma)).
 
 ## Le critère
 
@@ -37,6 +44,49 @@ résumé est une perte : c'est précisément le genre d'approximation que
 `WebFetch` reste préférable pour survoler une page longue dont on ne veut qu'une
 réponse.
 
+### `figma`
+
+| | |
+|---|---|
+| Origine | le service MCP distant de Figma, `https://mcp.figma.com/mcp` (HTTP) |
+| Lancement | aucun : un point d'accès distant, autorisé dans le compte Figma ; aucun identifiant n'est stocké dans le dépôt |
+
+**Pourquoi il n'est pas redondant.** Les maquettes que suit l'interface
+([FIGMA-HANDOFF](FIGMA-HANDOFF.md)) vivent dans Figma ; rien de natif dans Claude
+Code ne lit un cadre, ses mesures ou ses variables. C'est le seul serveur déclaré
+qui envoie des requêtes à un service externe, ce qui explique qu'il ne soit pas
+pré-approuvé.
+
+### `figma-desktop`
+
+| | |
+|---|---|
+| Origine | le serveur MCP du mode Dev de Figma Desktop |
+| Lancement | aucun : `http://127.0.0.1:3845/mcp`, disponible seulement quand Figma Desktop tourne avec son serveur MCP activé |
+
+**Pourquoi il n'est pas redondant.** La même lecture que `figma`, sur le fichier
+ouvert dans l'application locale, sans aller-retour vers un service distant. Les
+jetons de maquette de
+[RESEARCH-NOTES](RESEARCH-NOTES.md#jetons-de-la-maquette-figma) ont été lus ainsi. Les
+deux serveurs Figma sont facultatifs : rien dans le build ni dans les portes n'en
+dépend.
+
+### `semantiq`
+
+| | |
+|---|---|
+| Origine | l'outil de recherche de code `semantiq`, installé sur la machine |
+| Lancement | `semantiq serve --project .` ; son index est le `.semantiq.db*` local, ignoré par git et reconstruit à la demande |
+
+**Pourquoi il n'est pas redondant.** `Grep` et `Glob` trouvent une chaîne ; ils ne
+trouvent ni « où ce comportement est-il implémenté », décrit en mots, ni les
+appelants, la hiérarchie ou l'impact d'un symbole. `semantiq` y répond depuis un
+index local, sans accès réseau. Il ne fait pas foi : `find_refs` s'arrête à sa
+`limit` et compte un `use` comme une définition, et `deps` ne suit pas les
+réexports `pub use`, si bien que « rien d'autre n'utilise X » se vérifie au grep.
+[CLAUDE.md](../CLAUDE.md#chercher-dans-le-code) dit quand commencer par lui et
+quand grep reste l'outil.
+
 ## Ce qui est écarté, et pourquoi
 
 Documenté pour que la question ne soit pas reposée tous les six mois.
@@ -61,9 +111,11 @@ Il n'est pas comblé, pour deux raisons :
 1. **Aucun serveur officiel n'existe** — ceux du dépôt de référence sont
    archivés. Tout candidat est un serveur tiers, à auditer avant d'être branché
    sur une base.
-2. **Il n'y a pas encore de driver à tester.** Le besoin est réel à partir de la
-   phase 2 ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent)),
-   pas avant.
+2. **Le besoin est couvert sans frontière.** Des drivers existent
+   ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent))
+   et sont testés contre de vrais serveurs en CI (`make test-serveurs`) ; qui
+   interroge une base locale en développant le fait avec les outils clients
+   ci-dessous.
 
 Quand le besoin se présentera, la décision passera par un ADR, et le critère
 sera la surface d'accès : un serveur MCP qui reçoit une chaîne de connexion de
