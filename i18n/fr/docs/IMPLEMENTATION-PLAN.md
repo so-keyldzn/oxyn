@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="38bef51d8e75" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="86e25382deef" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2302,8 +2302,9 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 - `oxyn-driver-elasticsearch` (ADR-0062) — connexion, classification de
   politique et risque, catalogue par le mapping, résultats typés et en flux,
   arrêt prouvé par le serveur et requête sous le curseur sont en place ; sa
-  suite sur serveur réel tourne en CI sur Elasticsearch 9.5.5 et avant une
-  livraison sur OpenSearch 3.9.0. Restent : complétion des endpoints et des
+  suite sur serveur réel tourne en CI sur Elasticsearch 9.5.5 ; OpenSearch 3.9.0
+  n'a que l'exécution manuelle datée du 2026-10-24, ni job CI ni étape de
+  livraison. Restent : complétion des endpoints et des
   corps, opérations d'index natives par le parcours de revue, un comptage avant
   une requête par requête, et des vues de cluster (`_cat`, ILM/ISM, snapshots,
   tâches).
