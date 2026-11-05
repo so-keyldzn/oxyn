@@ -224,6 +224,12 @@ session, whose context a user may have changed:
   database wins among the attached ones and is silent on `main` and `temp`, so
   their rank is the source's and not a documented guarantee
   ([RESEARCH-NOTES](RESEARCH-NOTES.md#editor-completion--check-of-2026-10-21));
+* MongoDB answers **client-side**, the one exception to "read from the server":
+  the form's database, else `admin`. The server has no search path to read — a
+  name is never looked up across namespaces — and a command that carries no `$db`
+  runs in the database the session was opened on, which is what the driver
+  reports; no round trip would say more. The answer is the session's default
+  state, which a console that changed its database does not see, like the others;
 * any other driver keeps the default, `NotSupported`: an empty list would assert
   that no namespace resolves anything, and a driver that cannot tell cannot
   assert it.

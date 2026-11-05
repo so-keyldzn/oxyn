@@ -203,7 +203,12 @@ lacks, within bounds, never at the pace of the keystrokes.**
      is an empty path, which is an answer; an unreadable name is an error,
      never an empty path;
    * **SQLite** answers `temp`, then `main`, then the attached databases in the
-     order they were attached (`sqlite3FindTable`, SQLite 3.50.2).
+     order they were attached (`sqlite3FindTable`, SQLite 3.50.2);
+   * **MongoDB** answers client-side, the one exception to "read from the
+     server": the form's database, else `admin`. There is no search path to
+     read, and a command without `$db` runs in the database the session was
+     opened on, which is the one reported
+     ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-it-declares-its-capabilities-per-session-and-simulates-nothing)).
 
    A provider that cannot answer **refuses**, and the cache keeps "unknown",
    which is not an empty list
