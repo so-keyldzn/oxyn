@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="1bd8909ff162" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a542c4e55a1e" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -294,6 +294,19 @@ your package manager` (.deb et .rpm), `Updates are turned off by your
 administrator`, `Updates are turned off in development builds`. Une
 vérification n'envoie que la version, le système d'exploitation et
 l'architecture.
+
+**La vérification est le seul appel réseau qu'Oxyn fait sans qu'on le lui
+demande**, et elle est active par défaut, sans écran pour y consentir : le
+principe de [VISION](VISION.md) — rien de ce sur quoi l'utilisateur travaille ne
+sort sans consentement — porte sur ses données, et une requête qui transporte la
+version de l'application n'en est pas une. C'est décidé et argumenté ici plutôt
+que supposé en silence : une préférence absente ou illisible vaut « active », pour
+qu'un fichier corrompu n'arrête pas discrètement les mises à jour de sécurité.
+L'interrupteur est dans Réglages ▸ Updates, et un administrateur ou un poste hors
+ligne la verrouille avec `OXYN_UPDATES=off`. Mettre la valeur par défaut à
+« désactivée », ou demander au premier lancement, est une décision produit que le
+mainteneur peut encore prendre ; elle changerait ce paragraphe et VISION
+ensemble.
 
 **Après une mise à jour**, la première fenêtre ouverte dit une fois
 `Oxyn updated to 1.4.0`, avec `What's new`, qui ouvre la page de la release

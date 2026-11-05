@@ -275,6 +275,17 @@ are managed by your package manager` (.deb and .rpm), `Updates are turned off
 by your administrator`, `Updates are turned off in development builds`. A check
 sends only the version, the operating system and the architecture.
 
+**The check is the one network call Oxyn makes without being asked**, and it is
+on by default with no screen to consent to it: the principle of
+[VISION](VISION.md) — nothing the user works on leaves without consent — is about
+their data, and a request that carries the version of the application is not
+that. It is decided and argued here rather than silently assumed: a missing or
+unreadable preference counts as "on", so that a corrupt file does not quietly
+stop security updates. The switch is in Settings ▸ Updates, and an administrator
+or an offline workstation locks it off with `OXYN_UPDATES=off`. Defaulting to off,
+or asking at first launch, is a product decision the maintainer can still take;
+it would change this paragraph and VISION together.
+
 **After an update**, the first window to open says once `Oxyn updated to
 1.4.0`, with `What's new`, which opens the release page in the system browser.
 Release notes are shown as plain text.
