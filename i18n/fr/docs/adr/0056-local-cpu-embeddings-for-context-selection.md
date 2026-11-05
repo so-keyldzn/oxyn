@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="765a43401f20" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="bc5f074c457c" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -151,6 +151,18 @@ embeddings de phrases multilingues fixes à des valeurs de référence calculée
 par le modèle amont hors d'Oxyn, si bien qu'une régénération, une montée de
 Burn ou une constante oubliée fait échouer la compilation au lieu de dégrader
 chaque classement.
+
+Le test demande le vrai modèle : il est donc `#[ignore]` et `make qualite` ne le
+lance pas avec les suites ordinaires. `make test-embedding` le lance, et le job
+`embedding` de la CI appelle cette cible sur toute pull request qui atteint
+`oxyn-embed` ou un fichier transversal — les épingles de Burn et de `tokenizers`
+vivent dans `Cargo.toml` et `Cargo.lock` — et sur tout push vers `main`. Le job
+restaure le modèle converti depuis `actions/cache` (clé calculée sur
+`pinned.rs`) ou, en cas d'absence, télécharge les fichiers épinglés et vérifie
+leur SHA-256 avant de les convertir. Là où le modèle manque — un
+`make qualite` local sans `OXYN_EMBED_MODEL_ROOT` —, la cible affiche que le test
+n'a **pas** tourné, comme `test-serveurs` le fait pour les suites serveur, et la
+CI refuse de le sauter (amendé le 2026-11-05).
 
 **Une exemption de lints limitée à un module.** Le code généré contient 69
 `unwrap()` et quelque 250 conversions `as` (comptés le 2026-10-07). Ils
@@ -536,7 +548,7 @@ absents.
   convertit alors de nouveau. Les quatre épinglages exacts existent pour que
   cela n'arrive jamais par `cargo update`.
 * **−** **Oublier une constante résiduelle donne des vecteurs faux, pas une
-  erreur.** Seul le test de sortie de référence l'attrape ; une régénération
+  erreur.** Seul le test de sortie de référence l'attrape, dans le job `embedding` de la CI ; une régénération
   qui met à jour les valeurs attendues de ce test au lieu d'enquêter le
   neutralise.
 * **−** Un module de code généré exempté des lints du workspace : 69

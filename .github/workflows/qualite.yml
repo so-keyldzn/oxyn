@@ -9,6 +9,7 @@
 #   stories    make front-tests SHARD=i/n, one job per shard
 #   rust       make front-build rust
 #   serveurs   make test-serveurs
+#   embedding  make test-embedding
 #
 # Together they are `make qualite`. `make socle` checks it: a workflow that
 # forgot a target reached by `qualite` fails the gate.
@@ -85,6 +86,7 @@ jobs:
       rust: ${{ steps.zones.outputs.rust }}
       front: ${{ steps.zones.outputs.front }}
       serveurs: ${{ steps.zones.outputs.serveurs }}
+      embedding: ${{ steps.zones.outputs.embedding }}
       rust_packages: ${{ steps.zones.outputs.rust_packages }}
     steps:
       - name: Check out the repository
@@ -605,12 +607,72 @@ jobs:
         if: always()
         run: docker rm --force oxyn-production-read-tls || true
 
+  embedding:
+    # The reference-output test of ADR-0056: the vectors of the generated graph
+    # against onnxruntime's, on the pinned model. Without this job nothing
+    # would fail when a Burn bump or a regeneration leaves a wrong constant.
+    # Skipped on a PR that reaches neither `oxyn-embed` nor a cross-cutting
+    # file such as the Burn pins of `Cargo.toml` (`script/zones-ci`).
+    needs: zones
+    if: needs.zones.outputs.rust == 'true' && needs.zones.outputs.embedding == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # The store `make test-embedding` fills and reads; cached below.
+      OXYN_EMBED_MODEL_ROOT: ${{ runner.temp }}/oxyn-embed-model
+    steps:
+      - name: Check out the repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Restore the Cargo cache
+        # Swatinem/rust-cache v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          cache-on-failure: true
+
+      - name: Restore the converted model
+        # actions/cache v6.1.0 (55cc834…, read on 2026-11-05, RESEARCH-NOTES).
+        # The key is the hash of `pinned.rs`, where the revision, the sizes and
+        # the SHA-256 values of the model live: moving a pin, a Burn bump
+        # included (it changes the converted file's checksum), starts from
+        # scratch. A restored file is no more trusted than a downloaded one:
+        # the loader checks its SHA-256 before the test reads a vector.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.OXYN_EMBED_MODEL_ROOT }}
+          key: embedding-model-${{ hashFiles('crates/oxyn-embed/src/pinned.rs') }}
+
+      - name: Install cargo-nextest
+        # Same release and checksum as the `rust` job.
+        run: |
+          # renovate: cargo-nextest
+          version=0.9.146
+          archive="cargo-nextest-$version-x86_64-unknown-linux-gnu.tar.gz"
+          checksum=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+          curl -LsSfO "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/$archive"
+          echo "$checksum  $archive" | shasum -a 256 -c -
+          tar xzf "$archive" -C "${CARGO_HOME:-$HOME/.cargo}/bin" cargo-nextest
+
+      - name: make test-embedding
+        # On a cache miss it first downloads the pinned files (Hugging Face,
+        # then the release of this repository), checks their SHA-256 and
+        # converts them.
+        env:
+          OXYN_PACKAGES: ${{ needs.zones.outputs.rust_packages }}
+        run: make test-embedding
+
   qualite:
     # The only required status check. It succeeds if `zones` succeeded and no
     # other job failed or was cancelled: a job skipped because its area is
     # untouched counts as successful. A failed `zones` would skip all the
     # others, hence its separate case.
-    needs: [zones, controles, stories, rust, serveurs]
+    needs: [zones, controles, stories, rust, serveurs, embedding]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -17,7 +17,7 @@
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test test-serveurs doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
+.PHONY: qualite verif-rapide format lint test test-serveurs test-embedding doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -63,6 +63,7 @@ aide:
 	@echo "make front     checks the front end: npm licenses, format, lint, types, tests, stories, build"
 	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies, package contracts"
 	@echo "make test-serveurs  runs the ignored database-server suites (requires their test URLs)"
+	@echo "make test-embedding runs the embedding reference test (requires OXYN_EMBED_MODEL_ROOT, downloads 220 MB)"
 	@echo "make desktop-dev  runs the Tauri application with hot reload"
 	@echo "make desktop   builds the Tauri application (PROFIL=release to publish)"
 	@echo ""
@@ -97,7 +98,7 @@ $(TAURI):
 # --- The gate -----------------------------------------------------------------
 # As long as no Cargo.toml exists, the Rust targets are skipped and only the
 # foundation is checked. Silence is not success: the message says so.
-qualite: socle todo versions test-serveurs
+qualite: socle todo versions test-serveurs test-embedding
 ifeq ($(wildcard Cargo.toml),)
 	@echo ""
 	@echo "No Cargo.toml: the Rust checks did NOT run."
@@ -191,6 +192,46 @@ else
 		exit 1; \
 	fi; \
 	exit $$status
+endif
+
+# The embedding reference test (ADR-0056) compares the vectors of the generated
+# graph with onnxruntime's on the pinned model: it is what fails the build when
+# a Burn bump or a regeneration leaves a wrong constant. It needs the real model
+# (220 MB downloaded, converted to 390 MB), so it is `#[ignore]`d and runs here.
+#
+# OXYN_EMBED_MODEL_ROOT is the directory holding the model: when it has no
+# converted model yet, the pinned files are downloaded into it, checked against
+# their SHA-256 and converted first (the ignored download test), which is what
+# the CI job caches. Locally the variable is unset: the target says the test did
+# NOT run, and a CI run without it fails rather than skipping.
+#
+# EMBEDDING_PACKAGES names the packages the target reaches; `script/zones-ci`
+# reads it to skip the `embedding` job on a pull request that reaches none.
+EMBEDDING_PACKAGES := oxyn-embed
+EMBEDDING_DOWNLOAD := the_pinned_model_downloads_converts_and_is_kept
+EMBEDDING_SELECTED := $(filter $(EMBEDDING_PACKAGES),$(OXYN_PACKAGES))
+test-embedding:
+ifeq ($(NEXTEST),)
+ifeq ($(origin CI),undefined)
+	@echo "cargo-nextest missing: embedding reference test NOT run outside CI."
+else
+	@echo "cargo-nextest is required for the embedding reference test."
+	@exit 1
+endif
+else ifeq ($(if $(strip $(OXYN_PACKAGES)),$(EMBEDDING_SELECTED),all),)
+	@echo "embedding reference test NOT run: OXYN_PACKAGES reaches none of $(EMBEDDING_PACKAGES)."
+else ifeq ($(origin CI)$(OXYN_EMBED_MODEL_ROOT),undefined)
+	@echo "embedding reference test NOT run outside CI: OXYN_EMBED_MODEL_ROOT is not set."
+else
+	@test -n "$(OXYN_EMBED_MODEL_ROOT)" || { echo "OXYN_EMBED_MODEL_ROOT is not set: refusing a silently skipped embedding test."; exit 1; }
+	@mkdir -p "$(OXYN_EMBED_MODEL_ROOT)"
+	@if ! find "$(OXYN_EMBED_MODEL_ROOT)" -name model.bpk | grep -q .; then \
+		echo "No converted model in $(OXYN_EMBED_MODEL_ROOT): downloading the pinned files."; \
+		OXYN_EMBED_DOWNLOAD_ROOT="$(OXYN_EMBED_MODEL_ROOT)" $(CARGO) nextest run -p oxyn-embed --run-ignored only \
+			-E 'test($(EMBEDDING_DOWNLOAD))' || exit 1; \
+	fi
+	OXYN_EMBED_MODEL_ROOT="$(OXYN_EMBED_MODEL_ROOT)" $(CARGO) nextest run -p oxyn-embed --run-ignored only \
+		-E 'not test($(EMBEDDING_DOWNLOAD))'
 endif
 
 doc:
