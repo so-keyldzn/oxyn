@@ -3,8 +3,10 @@
 //! Every type here is **narrower** than the domain type it comes from. The
 //! webview is a new input surface ([ADR-0029](../../../docs/adr/0029-interface-tauri-shadcn.md)):
 //! whatever reaches JavaScript can be read by a script injected through a cell
-//! value, so a configuration's parameters, its secret reference and its bound
-//! values never do ([I-03](../../../CLAUDE.md#i-03)).
+//! value, so a secret, a configuration's secret reference and its bound values
+//! never do ([I-03](../../../CLAUDE.md#i-03)). The non-secret parameters of a
+//! saved connection cross in one payload only, `settings::ConnectionDetails`,
+//! because the edit form shows them again.
 //!
 //! Identifiers do cross, as opaque strings: the front needs them to address a
 //! session or a result. The views never render them.

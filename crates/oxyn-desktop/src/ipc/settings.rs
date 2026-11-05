@@ -9,7 +9,8 @@
 //! parameters **the driver declares as non-secret fields**. A secret never
 //! comes back, not even masked, and neither does the secret reference; the
 //! form only learns whether one is stored ([I-03](../../../../CLAUDE.md#i-03)).
-//! The list of saved connections still carries no parameter at all.
+//! The list of saved connections carries no parameter, only the `location`
+//! hint (host and port, database or file name) that tells homonyms apart.
 //!
 //! Secrets travel one way, into [`ConnectionEdit::secrets`], and only when the
 //! user retyped one: an empty slot keeps what the keyring holds, as long as

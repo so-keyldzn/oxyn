@@ -142,8 +142,14 @@ control must not cancel the consent given afterwards.
 
 **What does not cross.** A connection configuration awaiting consent stays
 in the backend: the front end only holds the identifier of the command to approve.
-The parameters and the secret reference of a connection are never serialized
-to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
+The secret values and the secret reference of a connection are never serialized
+to the webview ([I-03](../CLAUDE.md#i-03)). Its **non-secret** parameters do
+cross, in two places: `ConnectionDetails.values`, which carries the ones the driver
+declares so that the edit form shows them again
+([UX-SPEC](UX-SPEC.md#editing-a-saved-connection)), and the `location` hint of
+`ConnectionSummary` (host and port, database or file name). Tests in `ipc.rs` and
+`ipc/settings/tests.rs` check that neither payload carries a secret, the reference,
+or a parameter the driver does not declare.
 
 ---
 
@@ -1005,8 +1011,11 @@ nothing; what reaches a provider is still rendered under the tier.
 
 A single implementation (`OpenAiCompatibleProvider`) covers Ollama, LM Studio, llama.cpp,
 OpenAI, Azure OpenAI, OpenRouter and any compatible API. **Anthropic** has its own
-(`anthropic/{mod,wire,decode}.rs`). **Gemini** is a typed refusal: the provider exists,
-validates its configuration and refuses each call — it sends nothing. Bedrock has nothing.
+(`anthropic/{mod,wire,decode}.rs`). **Gemini** refuses generation with a typed error: the provider exists,
+validates its configuration and `stream()` returns `LlmError::NotImplemented`
+before any request is built. It does send one thing — the model listing, a `GET`
+carrying the key ([AI-PROVIDERS](AI-PROVIDERS.md#listing-a-providers-models)).
+Bedrock has nothing.
 
 What the two implemented protocols **share** is the stream driver (`stream.rs`),
 not the decoding: it is what guarantees that a `ChatEvent::Done` is emitted exactly
@@ -1073,7 +1082,11 @@ protected by two SQLite triggers — `audit_journal_forbid_update` and
 connection, text, policy decision, duration, affected rows, and the **family** of
 the error when there is one. The latter is a column, `error_class`, never a
 turn of phrase in the message: the question asked of the log after an incident is "did this agent
-modify the database?", and only `ambiguë` answers "we do not know" (I-13). The
+modify the database?", and only `ambiguous` answers "we do not know" (I-13). The
+column holds `transient`, `permanent` or `ambiguous`; rows written before
+2026-09-16 hold the French codes `transitoire`, `permanente` and `ambiguë`, which
+`oxyn-store` still reads and nobody writes any more. A query run without Oxyn
+([I-11](../CLAUDE.md#i-11)) must match both spellings. The
 log being append-only, what is not written to it at the moment of the incident is never
 added later. It is the user's history *and* the agents' audit trail. A **refused
 command appears in it too**: a log that only records what worked says nothing about what an
