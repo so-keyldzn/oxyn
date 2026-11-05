@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="938338bdea8f" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="3d9e7dcc1148" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -258,6 +258,18 @@ Conséquence pratique : **aucun `#[derive(Debug)]` sur un type qui porte un
 secret.** L'implémentation est manuelle et rédige la valeur. Un `Debug` dérivé
 est le mode de fuite le plus fréquent parce qu'il est invisible à la relecture —
 c'est le `tracing::debug!("{cfg:?}")` ajouté six mois plus tard qui fuit.
+
+Les fichiers persistés suivent la même règle sous Unix : l'état local
+(`oxyn.sqlite3` et ses fichiers `-wal` et `-shm`) contient l'historique des
+requêtes, les instructions du journal d'audit, les transcriptions des
+conversations et les paramètres de connexion ; Oxyn crée donc son répertoire de
+données en mode 0700 et le fichier de base en 0600 — SQLite donne à `-wal` et
+`-shm` le mode du fichier principal — et resserre un état existant à ces modes à
+son ouverture, comme il le fait déjà pour le répertoire des journaux. Seul le
+répertoire feuille qu'Oxyn possède est resserré, jamais ses ancêtres ni le
+répertoire d'un chemin choisi par l'appelant. Sans cela, l'umask (022) laisse
+l'état lisible par tous sur un répertoire personnel traversable. Windows
+s'appuie sur le profil de l'utilisateur.
 
 ### Ce qui sort vers un destinataire IA laisse une trace
 

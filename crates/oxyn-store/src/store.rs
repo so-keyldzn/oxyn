@@ -86,12 +86,20 @@ impl Store {
     /// * [`StoreError::Io`] if the tree cannot be created;
     /// * the errors of [`Store::open_at`].
     pub fn open_default() -> Result<Self> {
-        Self::open_at(Self::default_path()?)
+        let path = Self::default_path()?;
+        if let Some(directory) = path.parent() {
+            // The data directory is Oxyn's own: a store created by an older
+            // version sits in a 0755 one.
+            crate::owner_only::tighten_directory(directory);
+        }
+        Self::open_at(path)
     }
 
     /// Opens — or creates — the local state at a given path.
     ///
-    /// The parent directory is created if needed. Missing migrations are
+    /// The parent directory is created if needed — with mode 0700 on unix,
+    /// and the file with 0600, an existing file being tightened to it: the
+    /// state holds history, journal and transcripts. Missing migrations are
     /// applied before the method returns: an existing `Store` always has an
     /// up-to-date schema.
     ///
@@ -103,8 +111,11 @@ impl Store {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)?;
+            crate::owner_only::create_directory(parent)?;
         }
+        // Before SQLite does: it would create the file 0644 and copy that mode
+        // onto `-wal` and `-shm`.
+        crate::owner_only::prepare_database_file(&path)?;
         let conn = Connection::open(&path)?;
         Self::from_connection(conn, Some(path))
     }
@@ -310,6 +321,50 @@ impl fmt::Debug for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("path exists")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_store_is_owner_only_with_its_wal_files() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let directory = root.path().join("oxyn");
+        let file = directory.join(DATABASE_FILE_NAME);
+        let store = Store::open_at(&file).expect("open");
+        // A write, so that the WAL files exist while the store is open.
+        store.workspaces().create("w").expect("write");
+        assert_eq!(mode(&directory), 0o700);
+        assert_eq!(mode(&file), 0o600);
+        for suffix in ["-wal", "-shm"] {
+            let mut sibling = file.as_os_str().to_owned();
+            sibling.push(suffix);
+            assert_eq!(mode(Path::new(&sibling)), 0o600, "{suffix}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_world_readable_store_is_tightened_but_not_its_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("temp dir");
+        let file = root.path().join(DATABASE_FILE_NAME);
+        drop(Store::open_at(&file).expect("first open"));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("loosen");
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("loosen dir");
+        drop(Store::open_at(&file).expect("second open"));
+        assert_eq!(mode(&file), 0o600);
+        // A caller-chosen directory may be shared: only the default one is ours.
+        assert_eq!(mode(root.path()), 0o755);
+    }
 
     #[test]
     fn an_in_memory_database_is_migrated_on_open() {

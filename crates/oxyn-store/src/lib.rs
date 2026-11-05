@@ -106,6 +106,7 @@ pub mod workspaces;
 
 pub mod agents;
 mod encoding;
+mod owner_only;
 pub mod preferences;
 pub mod providers;
 mod schema;
