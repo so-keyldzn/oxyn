@@ -348,3 +348,106 @@ async fn cancelling_a_stream_nobody_reads_stops_it_on_the_server() {
     let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
+
+/// Waits until a backend is waiting on a relation lock on `table`, and
+/// returns its pid.
+async fn pid_waiting_for_table(control: &mut PgConnection, table: &str) -> i32 {
+    sleep_until_deadline(
+        control,
+        "a statement waiting for the table lock",
+        async |c| {
+            sqlx::query_scalar::<_, i32>(
+                "SELECT pid FROM pg_catalog.pg_locks WHERE locktype = 'relation' AND NOT granted \
+             AND relation = $1::regclass",
+            )
+            .bind(table)
+            .fetch_optional(c)
+            .await
+            .expect("reading pg_locks")
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn cancelling_a_prepare_blocked_on_a_lock_stops_it_on_the_server() {
+    // Issue #305: Parse opens the tables, so `prepare` blocks behind an
+    // ACCESS EXCLUSIVE lock before any cursor exists. Cancelling there used to
+    // drop the future and send nothing: the backend stayed `active` on the
+    // user's statement, and the clean lease went back to the pool, whose ping
+    // waited for the lock too — four Esc exhausted the pool.
+    let Some((session, _pool, mut control)) = bench().await else {
+        return;
+    };
+    sqlx::query("DROP TABLE IF EXISTS oxyn_prepare_lock")
+        .execute(&mut control)
+        .await
+        .expect("cleanup");
+    sqlx::query("CREATE TABLE oxyn_prepare_lock (i int)")
+        .execute(&mut control)
+        .await
+        .expect("table");
+    sqlx::query("BEGIN")
+        .execute(&mut control)
+        .await
+        .expect("begin");
+    sqlx::query("LOCK TABLE oxyn_prepare_lock IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut control)
+        .await
+        .expect("exclusive lock");
+
+    let select = || {
+        ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::Postgres),
+            "SELECT * FROM oxyn_prepare_lock",
+        )
+        .with_intent(StatementIntent::Read)
+        .with_limits(ExecLimits::default().with_max_rows(None))
+    };
+
+    // More cancellations than the pool has connections (two here): a leaked
+    // permit would make the third `execute` fail on acquire.
+    for _ in 0..3 {
+        let token = CancelToken::new();
+        let waiter = session.execute(select(), &token);
+        let (outcome, ()) = tokio::join!(waiter, async {
+            let pid = pid_waiting_for_table(&mut control, "oxyn_prepare_lock").await;
+            token.cancel();
+            // The server-side proof: the backend stopped waiting for the lock,
+            // which is still held.
+            gone(&mut control, pid).await;
+        });
+        assert!(
+            matches!(outcome, Err(ref err) if err.is_cancelled()),
+            "the prepare must report Cancelled"
+        );
+        assert_eq!(session.in_flight(), 0);
+    }
+
+    sqlx::query("ROLLBACK")
+        .execute(&mut control)
+        .await
+        .expect("release");
+    let started = Instant::now();
+    let mut cursor = session
+        .execute(
+            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "SELECT 1")
+                .with_intent(StatementIntent::Read),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("the pool still serves");
+    while cursor.next_batch().await.expect("rows").is_some() {}
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "no acquire timeout"
+    );
+
+    sqlx::query("DROP TABLE oxyn_prepare_lock")
+        .execute(&mut control)
+        .await
+        .expect("cleanup");
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
+}

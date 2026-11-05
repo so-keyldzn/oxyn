@@ -55,6 +55,11 @@ impl Lease {
         self.dirty = true;
     }
 
+    /// Is the connection currently marked as not fit to go back as is?
+    pub(crate) const fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     /// To call **after** the server has confirmed the reset to the default.
     pub(crate) const fn restored(&mut self) {
         self.dirty = false;

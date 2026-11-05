@@ -184,6 +184,37 @@ impl PostgresSession {
         }
     }
 
+    /// Stops on the server a pre-cursor round trip that the token interrupted.
+    ///
+    /// Before the cursor exists there is no stream task, hence nobody to send
+    /// `pg_cancel_backend`: a dropped `prepare` left the backend `active` on
+    /// the user's statement, waiting for a lock, while the interface said
+    /// "cancelled". The lease is discarded first — the connection never serves
+    /// anyone again, so the pid is ours alone while the request goes out — and
+    /// the request is held to [`CANCEL_BOUND`](crate::cancel::CANCEL_BOUND).
+    /// A cancellation that fails is logged, not reported: the caller asked for
+    /// `Cancelled` and gets it, and the closed connection ends the session on
+    /// the server side as soon as the backend is free to notice.
+    async fn stop_if_interrupted<T>(
+        &self,
+        connection: &mut Lease,
+        pid: i32,
+        issue: Result<T>,
+    ) -> Result<T> {
+        if matches!(issue, Err(OxynError::Cancelled)) {
+            connection.discard();
+            if let Err(error) = self.canceller.cancel_backend(pid).await {
+                tracing::warn!(
+                    target: "oxyn::driver::postgres",
+                    error = %error,
+                    "a statement interrupted before its first row could not be cancelled \
+                     on the server"
+                );
+            }
+        }
+        issue
+    }
+
     /// The statement that sets the context on an execution's connection.
     ///
     /// `None` when there is nothing to set and nothing was ever set: the
@@ -381,24 +412,28 @@ impl Session for PostgresSession {
         if let Some(statement) = self.context_statement() {
             let sql = AssertSqlSafe(statement).into_sql_str();
             connection.taint();
-            race_cancel(cancel, async {
+            let issue = race_cancel(cancel, async {
                 sqlx::raw_sql(sql)
                     .execute(&mut *connection)
                     .await
                     .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
-            .await?;
+            .await;
+            self.stop_if_interrupted(&mut connection, pid, issue)
+                .await?;
         }
 
         if limits.read_only {
             connection.taint();
-            race_cancel(cancel, async {
+            let issue = race_cancel(cancel, async {
                 sqlx::raw_sql(SQL_BEGIN_READ_ONLY)
                     .execute(&mut *connection)
                     .await
                     .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
-            .await?;
+            .await;
+            self.stop_if_interrupted(&mut connection, pid, issue)
+                .await?;
         }
 
         // The user's SQL goes out **as is**: that is the feature of a
@@ -410,8 +445,22 @@ impl Session for PostgresSession {
         // and `SqlStr` is not `Clone`. One copy per statement, not per row.
         let fallback_text = text.clone();
         let sql = AssertSqlSafe(text).into_sql_str();
-        let prepared =
-            race_cancel(cancel, async { Ok((&mut *connection).prepare(sql).await) }).await?;
+        // `prepare` is a round trip that can block on the server — Parse opens
+        // the tables with a lock, and waits behind an `ACCESS EXCLUSIVE` held by
+        // another session. Marked dirty for its duration: an abandoned future
+        // must not hand sqlx a connection to `ping` on return, a ping that only
+        // completes when the blocked Parse does and keeps the pool permit until
+        // then. Clean again only once `prepare` has answered, success or error:
+        // the protocol is then back at `ReadyForQuery`, as before.
+        let clean_before = !connection.is_dirty();
+        connection.taint();
+        let issue = race_cancel(cancel, async { Ok((&mut *connection).prepare(sql).await) }).await;
+        let prepared = self
+            .stop_if_interrupted(&mut connection, pid, issue)
+            .await?;
+        if clean_before {
+            connection.restored();
+        }
 
         // ADR-0048: a statement `sqlx` cannot prepare, or whose result has a
         // type the server cannot send in binary, runs in the simple protocol.
