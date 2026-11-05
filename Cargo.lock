@@ -8185,6 +8185,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-query",
  "secrecy",
  "sqlx",
  "thiserror 2.0.20",

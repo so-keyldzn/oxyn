@@ -114,6 +114,7 @@ pub mod cursor;
 pub mod decode;
 pub mod driver;
 mod lease;
+mod pinned;
 mod preview;
 pub mod session;
 mod transaction_text;

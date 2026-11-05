@@ -63,6 +63,16 @@ use crate::transaction_text::{controls_transaction, opens_transaction};
 /// its own.
 const TRANSACTIONS_REFUSED: &str = "TRANSACTIONS (transactions are not supported in the console \
                                     yet: each statement commits on its own)";
+use crate::pinned::changes_pinned_setting;
+/// What the refusal of a typed `SET` of a pinned session setting says.
+///
+/// Fixed text: the value the user typed is never echoed. It names the pinned
+/// values, what the refusal protects, and the way out in the query itself.
+const PINNED_SETTING_REFUSED: &str = "a typed `SET` of the time zone, the date style or the \
+    client encoding: the session pins TimeZone = UTC, DateStyle = ISO, MDY and \
+    client_encoding = UTF8 so that every timestamptz and every text is read as such, and \
+    the setting would be undone by the next reset or land on another pooled connection; \
+    convert in the query instead (`AT TIME ZONE`, `to_char`, `to_date`)";
 use crate::types::{lacks_binary_output, schema_for};
 use crate::variant::{PostgresFlavor, PostgresVariant};
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
@@ -360,6 +370,13 @@ impl Session for PostgresSession {
         {
             return Err(OxynError::NotSupported {
                 capability: TRANSACTIONS_REFUSED.to_owned(),
+            });
+        }
+        // Before any borrow, like the refusal above: a pinned setting changed
+        // here would be accepted, then undone without a word. See `pinned`.
+        if changes_pinned_setting(&request.text) {
+            return Err(OxynError::NotSupported {
+                capability: PINNED_SETTING_REFUSED.to_owned(),
             });
         }
         if cancel.is_cancelled() {
