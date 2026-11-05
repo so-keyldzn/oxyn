@@ -227,7 +227,16 @@ impl Session for SqliteSession {
             })?,
         )?;
         let facts = match self.catalog.describe_relation(&described, cancel).await {
-            Ok(relation) => crate::preview::RelationFacts::of(&relation),
+            Ok(relation) => {
+                let facts = crate::preview::RelationFacts::of(&relation);
+                // Only a relation previewed in key order reads its key's index:
+                // the others compose no order the index could serve.
+                if relation.previews_in_key_order() {
+                    facts.with_key_index(&self.catalog.key_index(&described, cancel).await?)
+                } else {
+                    facts
+                }
+            }
             // A table whose module this connection does not load cannot be
             // described, and nothing here needs it: the read that follows fails
             // with the same module as data, which is what the Data tab explains.

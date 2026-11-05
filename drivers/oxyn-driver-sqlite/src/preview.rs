@@ -43,6 +43,10 @@ pub(crate) struct RelationFacts {
     /// table keeps its key for the sorts the user asks for, and is not
     /// ordered otherwise: see [`Relation::previews_in_key_order`].
     ordered_by_default: bool,
+    /// The key columns whose index collation is not the column's own, with
+    /// that collation: the key's `ORDER BY` names it, or SQLite sorts the
+    /// whole table instead of walking the index (#360).
+    key_collations: Vec<(String, String)>,
 }
 
 impl RelationFacts {
@@ -61,7 +65,14 @@ impl RelationFacts {
                 .map(|field| field.name.clone())
                 .collect(),
             ordered_by_default: relation.previews_in_key_order(),
+            key_collations: Vec::new(),
         }
+    }
+
+    /// Adds what the key's index says about its collations.
+    pub(crate) fn with_key_index(mut self, key: &crate::key_order::KeyIndex) -> Self {
+        self.key_collations.clone_from(&key.collations);
+        self
     }
 }
 
@@ -215,7 +226,16 @@ fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String
         if shape.sort.iter().any(|sort| sort.column == *key) {
             continue;
         }
-        terms.push(format!("{} ASC", quote_identifier(key, STYLE)));
+        let collation = facts
+            .key_collations
+            .iter()
+            .find(|(column, _)| column == key)
+            .map(|(_, collation)| format!(" COLLATE {}", quote_identifier(collation, STYLE)));
+        terms.push(format!(
+            "{}{} ASC",
+            quote_identifier(key, STYLE),
+            collation.unwrap_or_default()
+        ));
     }
     Ok((!terms.is_empty()).then(|| terms.join(", ")))
 }

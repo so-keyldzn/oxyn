@@ -825,6 +825,11 @@ async fn every_native_type_previews_read_only() {
             .await
             .expect("a second element");
     }
+    // `VADD` does not imply `VRANGE` (8.4): on 8.0.2 the server accepts the
+    // vector set and has no command to read it. The driver's refusal to
+    // compose a preview is then the right answer, and it is asserted rather
+    // than skipped, so a driver that stopped refusing would fail here.
+    let vrange = vectors && run(&session, "VRANGE vs - + 1").await.is_ok();
     for (key, expected) in [
         ("s", 1),
         ("h", 1),
@@ -838,6 +843,18 @@ async fn every_native_type_previews_read_only() {
             continue;
         }
         let path = CatalogPath::for_relation(Some(DB), None, key).expect("path");
+        if key == "vs" && !vrange {
+            let refusal = session
+                .preview_request(&path, 200, &PreviewShape::unordered(), &CancelToken::new())
+                .await
+                .expect_err("a server without VRANGE cannot preview a vector set");
+            assert!(
+                matches!(&refusal, OxynError::NotSupported { capability }
+                    if capability.contains("VRANGE")),
+                "{refusal}"
+            );
+            continue;
+        }
         let preview = session
             .preview_request(&path, 200, &PreviewShape::unordered(), &CancelToken::new())
             .await

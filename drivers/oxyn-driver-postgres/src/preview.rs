@@ -50,7 +50,7 @@ WITH RECURSIVE target AS ( \
     SELECT k.attnum, k.rank \
     FROM pg_catalog.pg_index i JOIN target ON target.oid = i.indrelid \
     CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, rank) \
-    WHERE i.indisprimary \
+    WHERE i.indisprimary AND k.rank <= i.indnkeyatts \
 ) \
 SELECT c.attname::text, \
        bool_or(t.typsend = 0 OR t.typcategory = 'Z' OR \
