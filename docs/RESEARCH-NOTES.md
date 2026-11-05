@@ -2297,6 +2297,18 @@ not constitute a reproduction of the product.
 | `raw_sql` runs the simple protocol and does not resolve unknown OIDs (`DeclareWithOid`) | every value arrives as text; `PgTypeInfo::name()` returns `"?"` for such a type | same |
 | `PgTypeInfo::kind()` calls `unreachable!` on an unresolved type | a simple-protocol column must never go through the typed decoding (ADR-0048) | [type_info.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/type_info.rs) |
 
+## `sqlx` startup parameters of a PostgreSQL connection — checked on 2026-11-05
+
+`sqlx-postgres` 0.9.0, the version in `Cargo.lock`, read in the installed
+source:
+
+| Fact | Consequence | Source |
+|---|---|---|
+| The startup message carries `DateStyle = ISO, MDY`, `client_encoding = UTF8` and `TimeZone = UTC` unconditionally; only `extra_float_digits`, `application_name` and the `-c` options are optional | every Oxyn session reads and writes timestamps and dates under these values, whatever the server, database or role is configured with. They are pinned and declared in [DRIVER-CONTRACT §7](DRIVER-CONTRACT.md) | `sqlx-postgres-0.9.0/src/connection/establish.rs` (`params` vector), `src/options/mod.rs` (no accessor for them) |
+| PostgreSQL applies the startup `options` field (`-c`) first, then the explicit startup parameters, the later winning | an extra connection parameter `TimeZone=…` is overridden by the pinned `UTC`; `RESET ALL` returns to the pinned value | PostgreSQL REL_17_STABLE `src/backend/utils/init/postinit.c`, `process_startup_options` (read by the audit of 2026-10-22, issue #306) |
+| `sqlx-core` opens a TCP connection with a bare `tokio::net::TcpStream::connect`, and the startup exchange has no deadline either | the second connection that sends `pg_cancel_backend` is bounded by the driver, 10 s over open, send and close (issue #304) | `sqlx-core-0.9.0/src/net/socket/mod.rs`, `sqlx-postgres-0.9.0/src/connection/establish.rs`; no `timeout` under `src/net/` |
+| `PoolConnection::drop` returns a connection with a `ping` that writes `Sync` and waits for every pending `ReadyForQuery`, with no deadline | a clean connection dropped while a `Parse` is blocked on a lock keeps its pool permit until the lock is released; the driver marks the lease dirty for the duration of `prepare` (issue #305) | `sqlx-core-0.9.0/src/pool/connection.rs` (`return_to_pool`), `sqlx-postgres-0.9.0/src/connection/mod.rs` (`ping`) |
+
 ## PostgreSQL binary wire formats — checked on 2026-09-28
 
 What the server sends for each type in the extended protocol's **binary**

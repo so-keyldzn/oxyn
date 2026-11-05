@@ -63,6 +63,16 @@ use crate::transaction_text::{controls_transaction, opens_transaction};
 /// its own.
 const TRANSACTIONS_REFUSED: &str = "TRANSACTIONS (transactions are not supported in the console \
                                     yet: each statement commits on its own)";
+use crate::pinned::changes_pinned_setting;
+/// What the refusal of a typed `SET` of a pinned session setting says.
+///
+/// Fixed text: the value the user typed is never echoed. It names the pinned
+/// values, what the refusal protects, and the way out in the query itself.
+const PINNED_SETTING_REFUSED: &str = "a typed `SET` of the time zone, the date style or the \
+    client encoding: the session pins TimeZone = UTC, DateStyle = ISO, MDY and \
+    client_encoding = UTF8 so that every timestamptz and every text is read as such, and \
+    the setting would be undone by the next reset or land on another pooled connection; \
+    convert in the query instead (`AT TIME ZONE`, `to_char`, `to_date`)";
 use crate::types::{lacks_binary_output, schema_for};
 use crate::variant::{PostgresFlavor, PostgresVariant};
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
@@ -182,6 +192,37 @@ impl PostgresSession {
             database,
             context: Mutex::new(None),
         }
+    }
+
+    /// Stops on the server a pre-cursor round trip that the token interrupted.
+    ///
+    /// Before the cursor exists there is no stream task, hence nobody to send
+    /// `pg_cancel_backend`: a dropped `prepare` left the backend `active` on
+    /// the user's statement, waiting for a lock, while the interface said
+    /// "cancelled". The lease is discarded first — the connection never serves
+    /// anyone again, so the pid is ours alone while the request goes out — and
+    /// the request is held to [`CANCEL_BOUND`](crate::cancel::CANCEL_BOUND).
+    /// A cancellation that fails is logged, not reported: the caller asked for
+    /// `Cancelled` and gets it, and the closed connection ends the session on
+    /// the server side as soon as the backend is free to notice.
+    async fn stop_if_interrupted<T>(
+        &self,
+        connection: &mut Lease,
+        pid: i32,
+        issue: Result<T>,
+    ) -> Result<T> {
+        if matches!(issue, Err(OxynError::Cancelled)) {
+            connection.discard();
+            if let Err(error) = self.canceller.cancel_backend(pid).await {
+                tracing::warn!(
+                    target: "oxyn::driver::postgres",
+                    error = %error,
+                    "a statement interrupted before its first row could not be cancelled \
+                     on the server"
+                );
+            }
+        }
+        issue
     }
 
     /// The statement that sets the context on an execution's connection.
@@ -331,6 +372,13 @@ impl Session for PostgresSession {
                 capability: TRANSACTIONS_REFUSED.to_owned(),
             });
         }
+        // Before any borrow, like the refusal above: a pinned setting changed
+        // here would be accepted, then undone without a word. See `pinned`.
+        if changes_pinned_setting(&request.text) {
+            return Err(OxynError::NotSupported {
+                capability: PINNED_SETTING_REFUSED.to_owned(),
+            });
+        }
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
@@ -381,24 +429,28 @@ impl Session for PostgresSession {
         if let Some(statement) = self.context_statement() {
             let sql = AssertSqlSafe(statement).into_sql_str();
             connection.taint();
-            race_cancel(cancel, async {
+            let issue = race_cancel(cancel, async {
                 sqlx::raw_sql(sql)
                     .execute(&mut *connection)
                     .await
                     .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
-            .await?;
+            .await;
+            self.stop_if_interrupted(&mut connection, pid, issue)
+                .await?;
         }
 
         if limits.read_only {
             connection.taint();
-            race_cancel(cancel, async {
+            let issue = race_cancel(cancel, async {
                 sqlx::raw_sql(SQL_BEGIN_READ_ONLY)
                     .execute(&mut *connection)
                     .await
                     .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
-            .await?;
+            .await;
+            self.stop_if_interrupted(&mut connection, pid, issue)
+                .await?;
         }
 
         // The user's SQL goes out **as is**: that is the feature of a
@@ -410,8 +462,22 @@ impl Session for PostgresSession {
         // and `SqlStr` is not `Clone`. One copy per statement, not per row.
         let fallback_text = text.clone();
         let sql = AssertSqlSafe(text).into_sql_str();
-        let prepared =
-            race_cancel(cancel, async { Ok((&mut *connection).prepare(sql).await) }).await?;
+        // `prepare` is a round trip that can block on the server — Parse opens
+        // the tables with a lock, and waits behind an `ACCESS EXCLUSIVE` held by
+        // another session. Marked dirty for its duration: an abandoned future
+        // must not hand sqlx a connection to `ping` on return, a ping that only
+        // completes when the blocked Parse does and keeps the pool permit until
+        // then. Clean again only once `prepare` has answered, success or error:
+        // the protocol is then back at `ReadyForQuery`, as before.
+        let clean_before = !connection.is_dirty();
+        connection.taint();
+        let issue = race_cancel(cancel, async { Ok((&mut *connection).prepare(sql).await) }).await;
+        let prepared = self
+            .stop_if_interrupted(&mut connection, pid, issue)
+            .await?;
+        if clean_before {
+            connection.restored();
+        }
 
         // ADR-0048: a statement `sqlx` cannot prepare, or whose result has a
         // type the server cannot send in binary, runs in the simple protocol.

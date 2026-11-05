@@ -16,6 +16,7 @@ oxyn-core.workspace = true
 oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
+oxyn-query.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
@@ -26,3 +27,8 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# A listener that accepts and never answers, and a paused clock, for the
+# cancellation-bound tests that need no server.
+tokio = { workspace = true, features = ["net", "rt", "test-util"] }

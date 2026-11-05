@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="b750ce7523fb" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="acbcac099f2b" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -47,6 +47,28 @@ connexions et l'utilisateur conclut qu'Oxyn a cassé sa production.
 Concrètement : PostgreSQL a `pg_cancel_backend`, MySQL a `KILL QUERY`, SQLite a
 `sqlite3_interrupt`. Un driver qui ne peut pas annuler côté serveur le **déclare**
 dans ses capacités, il ne fait pas semblant.
+
+**La requête d'annulation est elle-même bornée dans le temps.**
+`pg_cancel_backend` et `KILL QUERY` partent sur une seconde connexion, et la
+bibliothèque cliente n'apporte aucune échéance propre à son ouverture (`sqlx`
+0.9.0, voir [RESEARCH-NOTES](RESEARCH-NOTES.md#paramètres-de-démarrage-de-sqlx-pour-une-connexion-postgresql--vérification-du-2026-11-05)) :
+un VPN tombé, un pare-feu qui avale les paquets, ou un équipement intermédiaire
+qui accepte le TCP sans jamais terminer la poignée de main retiendraient la
+tâche qui l'envoie — donc `Session::cancel`, le délai de l'exécuteur,
+`disconnect` et la place du pool — pendant le délai TCP du système, ou
+indéfiniment. Chaque driver donne aux trois étapes (ouvrir, envoyer, fermer)
+**une seule** échéance : 10 s pour les drivers PostgreSQL et MySQL. Une
+connexion qui ne s'ouvre pas à temps est une `OxynError::Connection` ; une
+requête partie et sans réponse à temps est une `OxynError::Timeout`, ambiguë :
+le serveur l'a peut-être appliquée, l'appelant tient donc l'annulation pour non
+prouvée. La fermeture ne dépasse jamais l'échéance. **Une instruction
+interrompue avant sa première ligne** (le `prepare` de PostgreSQL, bloqué sur le
+verrou d'une table, par exemple) est annulée de la même façon côté serveur, par
+la session elle-même, qui garde sa connexion pendant ce temps puis la ferme :
+l'interface ne dit jamais « annulé » d'un backend qui attend encore.
+
+**Panne concrète :** un chemin réseau figé, puis Échap : le bouton Arrêter tourne
+pendant des minutes et la fermeture de la connexion se bloque derrière.
 
 ### 3. Il produit des `RecordBatch` Arrow, en flux
 
@@ -354,6 +376,32 @@ appelée par `CALL`, une instruction construite à l'exécution
 `NO_BACKSLASH_ESCAPES`, où une chaîne se termine plus tôt que la vérification ne
 la lit. Un fuseau changé ainsi s'affiche sous l'étiquette UTC, faux, jusqu'à ce
 que la reconnexion suivante remette `+00:00`.
+
+**Le driver PostgreSQL épingle `TimeZone = UTC`, `DateStyle = ISO, MDY` et
+`client_encoding = UTF8`, et refuse qu'on les change en tapant.** `sqlx` envoie
+les trois dans le message de démarrage de chaque connexion et ne permet pas de
+les omettre ([RESEARCH-NOTES](RESEARCH-NOTES.md#paramètres-de-démarrage-de-sqlx-pour-une-connexion-postgresql--vérification-du-2026-11-05)).
+Un paramètre de démarrage l'emporte sur `postgresql.conf`, `ALTER DATABASE` et
+`ALTER ROLE` : le fuseau et le style de date configurés du serveur ne sont donc
+**pas** ceux de la session, quoi que psql affiche pour le même serveur.
+Conséquences à connaître : un littéral `timestamp`/`date` sans décalage converti
+en `timestamptz` vaut UTC, `created_at::date` et `date_trunc('day', …)` découpent
+par jours UTC, et `'05/10/2026'::date` se lit 10 mai même sur un serveur `DMY`.
+Pour travailler dans un autre fuseau, on le fait dans la requête (`AT TIME ZONE`,
+`to_char`, `to_date` avec un format). Un `SET [SESSION | LOCAL] TIME ZONE`,
+`SET TimeZone`, `SET DateStyle`, `SET client_encoding`, `SET NAMES` ou
+`set_config('<l'un d'eux>', …)` tapé est refusé par `OxynError::NotSupported`
+avant tout envoi, avec un message fixe : il serait sinon accepté, puis défait
+sans un mot par le `ROLLBACK` qui clôt une exécution en lecture seule, par le
+`RESET ALL` après une écriture, ou en tombant sur une autre connexion du pool.
+`SHOW` et `RESET` ne sont pas refusés. **Ce qu'une vérification lexicale ne voit
+pas reste possible :** le corps d'un bloc `DO` ou d'une fonction, un `EXECUTE`
+d'une chaîne construite à l'exécution, et un `set_config` dont le premier
+argument n'est pas un littéral. La remise à zéro suivante rétablit la valeur
+épinglée. Faire du fuseau un champ de la connexion, appliqué sur chaque
+connexion empruntée, est l'alternative écartée : elle exige que `PgConnectOptions`
+permette d'omettre la valeur de démarrage, ou une ré-application après chaque
+remise à zéro, et personne ne l'a demandée pour l'instant.
 
 **Panne concrète :** Oxyn affiche une valeur convertie dans le fuseau du poste,
 l'utilisateur la recopie dans un `UPDATE`, et décale la donnée de deux heures en

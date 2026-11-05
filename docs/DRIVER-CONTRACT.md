@@ -44,6 +44,27 @@ In practice: PostgreSQL has `pg_cancel_backend`, MySQL has `KILL QUERY`, SQLite 
 `sqlite3_interrupt`. A driver that cannot cancel on the server side **declares** it
 in its capabilities; it does not pretend.
 
+**The cancellation request is itself bounded in time.** `pg_cancel_backend` and
+`KILL QUERY` go out on a second connection, and the client
+library brings no deadline of its own on opening it (`sqlx` 0.9.0, see
+[RESEARCH-NOTES](RESEARCH-NOTES.md#sqlx-startup-parameters-of-a-postgresql-connection--checked-on-2026-11-05)): a VPN that dropped, a firewall
+that swallows packets, or a middlebox that accepts TCP and never completes the
+handshake would hold the task that sends it — hence `Session::cancel`, the
+executor's timeout, `disconnect` and the pool slot — for the OS connect timeout,
+or forever. Each driver gives the three steps (open, send, close) **one**
+deadline: 10 s for both the PostgreSQL and the MySQL driver. A connection that
+did not open in time is `OxynError::Connection`; a request that left and was not
+answered in time is `OxynError::Timeout`, which is ambiguous — the server may
+have applied it, so the caller treats the cancellation as unproven. The close
+never outlives the deadline. **A statement interrupted before its first row**
+(PostgreSQL's `prepare` blocks on the table lock, for example) is cancelled on
+the server the same way, by the session itself, which holds its connection
+meanwhile and closes it: the interface never says "cancelled" about a backend
+that is still waiting.
+
+**Concrete failure:** a stalled network path, then Esc: the Stop button spins
+for minutes and closing the connection hangs behind it.
+
 ### 3. It produces Arrow `RecordBatch`es, streamed
 
 The result interface is a stream of `arrow::RecordBatch`
@@ -336,6 +357,31 @@ at run time (`PREPARE … FROM @sql`, MariaDB's `EXECUTE IMMEDIATE`), and a text
 lexed under `NO_BACKSLASH_ESCAPES`, where a string ends earlier than the check
 reads it. A zone changed that way is shown under the UTC tag, wrong, until the
 next reconnect puts `+00:00` back.
+
+**The PostgreSQL driver pins `TimeZone = UTC`, `DateStyle = ISO, MDY` and
+`client_encoding = UTF8`, and refuses a typed change of them.** `sqlx` sends
+the three in the startup message of every connection and offers no way to
+leave them out ([RESEARCH-NOTES](RESEARCH-NOTES.md#sqlx-startup-parameters-of-a-postgresql-connection--checked-on-2026-11-05)).
+A startup parameter outranks `postgresql.conf`, `ALTER DATABASE` and `ALTER
+ROLE`, so the server's configured zone and date style are **not** the
+session's, whatever psql shows for the same server. Consequences the user must
+know: a `timestamp`/`date` literal without an offset cast to `timestamptz`
+means UTC, `created_at::date` and `date_trunc('day', …)` bucket by UTC days, and
+`'05/10/2026'::date` reads as 10 May even on a `DMY` server. The way to work in
+another zone is in the query (`AT TIME ZONE`, `to_char`, `to_date` with a
+format). A typed `SET [SESSION | LOCAL] TIME ZONE`, `SET TimeZone`, `SET
+DateStyle`, `SET client_encoding`, `SET NAMES` or `set_config('<one of them>',
+…)` is refused with `OxynError::NotSupported` before anything is sent, with a
+fixed message: it would otherwise be accepted, then undone without a word by the
+`ROLLBACK` that closes a read-only execution, by the `RESET ALL` after a write,
+or by landing on another pooled connection. `SHOW` and `RESET` are not refused.
+**What a lexical check cannot see stays possible:** the body of a `DO` block or
+of a function, `EXECUTE` of a string built at run time, and a `set_config`
+whose first argument is not a literal. The next reset puts the pinned value
+back. Making the zone a connection field, applied on every borrowed connection,
+is the alternative not taken: it needs `PgConnectOptions` to let the startup
+value be omitted, or a re-application after each reset, and nobody has asked for
+it yet.
 
 **Concrete failure:** Oxyn displays a value converted into the machine's time zone,
 the user copies it into an `UPDATE`, and shifts the data by two hours in
