@@ -40,6 +40,9 @@ from verifier_socle import (  # noqa: E402
     check_readme_make_targets,
     dependency_tool_errors,
     readme_make_errors,
+    adr_index_errors,
+    missing_mirror_errors,
+    mirror_path,
     translation_errors,
 )
 
@@ -312,6 +315,41 @@ def translation_failures() -> list[str]:
     return failures
 
 
+def missing_mirror_failures() -> list[str]:
+    """A document with no mirror fails unless it is a listed exception."""
+    failures = []
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        mirror = root / "i18n" / "fr" / "claude" / "commands" / "plan.md"
+        mirror.parent.mkdir(parents=True)
+        mirror.write_text("x", encoding="utf-8")
+        tracked = [".claude/commands/plan.md", "CLA.md", ".agents/skills/shadcn/SKILL.md"]
+        if missing_mirror_errors(root, tracked):
+            failures.append(f"a mirrored or exempt document is refused: {tracked}")
+        if not any("docs/NEW.md" in e for e in missing_mirror_errors(root, ["docs/NEW.md"])):
+            failures.append("a document without a mirror is accepted")
+        if mirror_path(".claude/commands/plan.md") != "i18n/fr/claude/commands/plan.md":
+            failures.append("the mirror path of a .claude document is wrong")
+    return failures
+
+
+def adr_index_failures() -> list[str]:
+    """A missing row, a drifted status and a dangling row each fail."""
+    failures = []
+    adr = "# ADR-0002 — Title\n\n**Status:** accepted (2026-10-20) · **Date:** 2026-09-05\n"
+    index = "| # | Decision | Status |\n|---|---|---|\n| [0002](adr/0002-a.md) | A | accepted |\n"
+    if adr_index_errors({"0002-a.md": adr}, index):
+        failures.append("a complete ADR index is refused")
+    if not any("no row" in e for e in adr_index_errors({"0002-a.md": adr, "0003-b.md": adr}, index)):
+        failures.append("an ADR without an index row is accepted")
+    drifted = index.replace("| accepted |", "| proposed |")
+    if not any("proposed" in e for e in adr_index_errors({"0002-a.md": adr}, drifted)):
+        failures.append("an index status that differs from the header is accepted")
+    if not any("targets no file" in e for e in adr_index_errors({}, index)):
+        failures.append("an index row without a file is accepted")
+    return failures
+
+
 README_BEFORE = """Run `make lancer` for the prose, which is not checked.
 
 ```sh
@@ -371,6 +409,8 @@ def main() -> int:
 
     failures += ci_failures()
     failures += translation_failures()
+    failures += adr_index_failures()
+    failures += missing_mirror_failures()
     failures += dependency_failures()
     failures += readme_failures()
     failures += server_suite_failures()
@@ -378,7 +418,7 @@ def main() -> int:
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 16 + 4
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 4 + 3 + 16 + 4
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

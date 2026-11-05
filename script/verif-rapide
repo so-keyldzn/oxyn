@@ -47,7 +47,8 @@ LEFT_TO_CI = [
     "the stories Vitest does not relate to the modified files",
     "the front-end build and the npm licenses",
     "the foundation's hook tests",
-    "macOS, on main",
+    "the ignored server suites (`make test-serveurs`: PostgreSQL, TLS PostgreSQL, MySQL)",
+    "the macOS legs of the controles, stories and rust jobs (every pull request, ADR-0045)",
 ]
 
 

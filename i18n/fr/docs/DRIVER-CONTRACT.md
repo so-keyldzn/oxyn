@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="acbcac099f2b" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="0173acd29b7f" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -235,6 +235,13 @@ d'une console, dont l'utilisateur a pu changer le contexte :
   longtemps l'emporte parmi les bases attachées et se tait sur `main` et `temp` :
   leur rang est celui du code source, non une garantie documentée
   ([RESEARCH-NOTES](RESEARCH-NOTES.md#complétion-de-léditeur--vérification-du-2026-10-21)) ;
+* MongoDB répond **côté client**, la seule exception à « lu du serveur » : la base
+  du formulaire, sinon `admin`. Le serveur n'a aucun chemin de recherche à lire — un
+  nom n'est jamais cherché à travers des espaces de noms — et une commande sans
+  `$db` s'exécute dans la base sur laquelle la session a été ouverte, ce que le
+  driver rapporte ; aucun aller-retour n'en dirait plus. La réponse est l'état par
+  défaut de la session, qu'une console ayant changé de base ne voit pas, comme pour
+  les autres ;
 * tout autre driver garde le défaut, `NotSupported` : une liste vide affirmerait
   qu'aucun espace de noms ne résout quoi que ce soit, et un driver qui ne sait pas
   ne peut pas l'affirmer.

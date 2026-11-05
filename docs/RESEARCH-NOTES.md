@@ -432,6 +432,14 @@ default features.
 
 ## Figma interface resources
 
+> **History (GPUI era) — nothing in this section ships any more.** The
+> `oxyn-ui` crate, `assets/ui` and `assets/fonts` were removed on 2026-09-18
+> and 2026-09-25 with the GPUI interface
+> ([ADR-0029](adr/0029-interface-tauri-shadcn.md)); the files are readable at
+> commit `8a1b7ff`. The application now takes its icons and fonts from npm
+> packages, whose licenses are recorded in
+> [Icon and font packages](#icon-and-font-packages--checked-on-2026-11-05).
+
 Sources checked on **2026-09-07** during the GPUI integration:
 
 | Resource | Frozen source | Use |
@@ -558,9 +566,10 @@ the local Figma Dev Mode MCP server (`get_metadata`, `get_variable_defs`), not
 copied from a screenshot. Colors and icons have their own, more detailed
 provenance in `assets/ui/provenance.json`, removed from the repository, readable at commit `8a1b7ff`.
 
-Dimensions, spacings and radii are published in
+Dimensions, spacings and radii were published in
 `crates/oxyn-ui/src/theme.rs` — `Metrics`, `Spacing`, `Radii` — where each
-field cites its node. **Typography only partially is**: `Typography` carries
+field cited its node; that crate was removed on 2026-09-18, and the values now
+live in the interface's tokens (`apps/desktop/src/styles.css`). **Typography only partially is**: `Typography` carries
 neither weights nor named styles, and two of its values remain unsourced —
 see the table of gaps below.
 
@@ -589,10 +598,16 @@ see the table of gaps below.
 > and the other invisible to the theme. The view now reads
 > `Metrics::toolbar_height`.
 
-### Embedded binaries and their licenses
+### Embedded binaries and their licenses (GPUI era, removed)
 
-These files are linked into the binary by `include_bytes!` in
-`crates/oxyn-ui/src/icons.rs`. They carry an exact upstream commit, like a
+> **History.** Nothing below describes the shipped artifact: the files were
+> removed with the GPUI interface (see the note under *Figma interface
+> resources*), and no release has ever linked them. The question of this
+> section is closed by that removal; the current posture is in
+> [Icon and font packages](#icon-and-font-packages--checked-on-2026-11-05).
+
+These files were linked into the binary by `include_bytes!` in
+`crates/oxyn-ui/src/icons.rs`. They carried an exact upstream commit, like a
 code dependency.
 
 | Fact | Value | Source | Checked on |
@@ -602,10 +617,24 @@ code dependency.
 | Icons | Hugeicons Stroke Rounded, 12 glyphs, commit `f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6` | [hugeicons/hugeicons-static](https://github.com/hugeicons/hugeicons-static); SHA-256 in `assets/ui/provenance.json`, removed from the repository, readable at commit `8a1b7ff` | 2026-09-07 |
 | Icon license | **No MIT license granted**; the upstream README allows use as is, without mentioning a redistribution right | `assets/ui/HUGEICONS-UPSTREAM-README.txt`, removed from the repository, readable at commit `8a1b7ff` | 2026-09-07 |
 
-> **To settle before the first binary release.** Oxyn redistributes these
-> twelve glyphs by linking them into the executable. As long as no version is
-> published, the question does not arise; it will arise all at once on the day
-> of the first release, and it is a legal question, not a code one.
+> **Closed on 2026-09-18, by removal.** The question was whether Oxyn could
+> redistribute these twelve glyphs by linking them into the executable. They
+> were removed before any release; the application now depends on the MIT
+> packages recorded next.
+
+### Icon and font packages — checked on 2026-11-05
+
+What the interface depends on today (`apps/desktop/package.json`). The license
+is the `license` field of each version on the npm registry, read on
+**2026-11-05**.
+
+| Fact | Value | Source | Checked on |
+|---|---|---|---|
+| Icons | `@hugeicons/react` 1.1.10 and `@hugeicons/core-free-icons` 4.3.3, license **MIT** | npm registry, `npm view <package>@<version> license` | 2026-11-05 |
+| Fonts | `@fontsource-variable/geist` 5.3.0 and `@fontsource-variable/geist-mono` 5.3.0, license **OFL-1.1** | same | 2026-11-05 |
+
+`script/licences-tierces` checks every shipped npm dependency against the
+licenses `deny.toml` accepts, so a change of license on a bump fails the gate.
 
 ### What could not be read, and why
 

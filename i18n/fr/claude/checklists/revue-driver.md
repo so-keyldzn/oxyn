@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/checklists/revue-driver.md" sha256="dbc4e7b77b7f" -->
+<!-- oxyn-translation source=".claude/checklists/revue-driver.md" sha256="af93891c60dd" -->
 
 > Traduction française de [.claude/checklists/revue-driver.md](../../../../.claude/checklists/revue-driver.md). **La version anglaise fait foi.**
 
@@ -33,8 +33,9 @@ correspond à une panne qui ne se verra pas en test.
 
 - [ ] Produit des `RecordBatch`, jamais une représentation en lignes
 - [ ] Le lot est borné **en octets**, pas en nombre de lignes
-- [ ] **Test de flux sur un volume qui ne tiendrait pas en mémoire**, avec une
-      borne sur la mémoire du processus — sans borne, le test passe par accident
+- [ ] **Test de flux sur un volume qui ne tiendrait pas en mémoire**, qui
+      affirme de nombreux lots, chacun borné en octets — la mémoire du processus
+      n'est pas mesurée par un test ([tests](../rules/tests.md#les-deux-tests-quun-driver-ne-contourne-pas))
 - [ ] Si la source est sans schéma : l'inférence par échantillonnage est déclarée
       comme telle jusqu'à l'interface, et un champ hors échantillon produit une
       erreur explicite, jamais une perte silencieuse

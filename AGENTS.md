@@ -32,15 +32,23 @@ adaptation. Explicitly read all applicable rules, including for a new file.
 Resolve links from the file that contains them; shell command paths start from
 the repository root.
 
-| Files concerned | Common rule |
+The `paths:` list at the top of each rule is the only place that says which
+files it covers; this table does not copy it, because a copy diverges (it had:
+`ia` also covers `crates/oxyn-llm/**`, `tests` also covers `*_tests.rs` and
+`tests.rs`, `manifestes` also covers `clippy.toml`, the workflows and
+`script/*`). For the file you are about to touch, open the frontmatter of each
+rule and read the ones whose pattern matches. The same table, with the
+patterns, is in [CLAUDE.md](CLAUDE.md#on-demand-rules).
+
+| Rule | Subject |
 |---|---|
-| Any Rust file | [rust](.claude/rules/rust.md) |
-| `drivers/oxyn-driver-*/**`, `crates/oxyn-driver/**`, `crates/oxyn-driver-*/**` | [drivers](.claude/rules/drivers.md) |
-| `apps/desktop/**`, `crates/oxyn-desktop/**` | [front](.claude/rules/front.md) |
-| `crates/oxyn-ai/**` | [ia](.claude/rules/ia.md) |
-| Any `tests/` or `benches/` directory | [tests](.claude/rules/tests.md) |
-| Markdown, including project skills | [documentation](.claude/rules/documentation.md) |
-| `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `Makefile`, `deny.toml` | [manifestes](.claude/rules/manifestes.md) |
+| [rust](.claude/rules/rust.md) | Rust code |
+| [drivers](.claude/rules/drivers.md) | drivers and the driver trait crate |
+| [front](.claude/rules/front.md) | the Tauri interface |
+| [ia](.claude/rules/ia.md) | the AI crates |
+| [tests](.claude/rules/tests.md) | tests and benches |
+| [documentation](.claude/rules/documentation.md) | Markdown, including project skills |
+| [manifestes](.claude/rules/manifestes.md) | manifests, tooling configuration, scripts and workflows |
 
 ## Procedures and skills
 

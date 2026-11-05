@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="57dca412dd2e" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="f21a4e1e2f91" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -148,8 +148,14 @@ main ne doit pas annuler l'accord donné ensuite.
 
 **Ce qui ne traverse pas.** Une configuration de connexion en attente d'accord reste
 dans le backend : le front ne tient que l'identifiant de la commande à approuver.
-Les paramètres et la référence de secret d'une connexion ne sont jamais sérialisés
-vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient.
+Les valeurs secrètes et la référence de secret d'une connexion ne sont jamais
+sérialisées vers la webview ([I-03](../CLAUDE.md#i-03)). Ses paramètres **non
+secrets** traversent, à deux endroits : `ConnectionDetails.values`, qui porte ceux
+que le pilote déclare pour que le formulaire de modification les montre à nouveau
+([UX-SPEC](UX-SPEC.md#modifier-une-connexion-enregistrée)), et l'indice `location` de
+`ConnectionSummary` (hôte et port, base ou nom de fichier). Des tests d'`ipc.rs` et
+d'`ipc/settings/tests.rs` vérifient qu'aucune des deux charges ne porte un secret, la
+référence, ou un paramètre que le pilote ne déclare pas.
 
 ---
 
@@ -1028,8 +1034,11 @@ rendu sous le niveau.
 
 Une seule implémentation (`OpenAiCompatibleProvider`) couvre Ollama, LM Studio, llama.cpp,
 OpenAI, Azure OpenAI, OpenRouter et toute API compatible. **Anthropic** a la sienne
-(`anthropic/{mod,wire,decode}.rs`). **Gemini** est un refus typé : le fournisseur existe,
-valide sa configuration et refuse chaque appel — il n'envoie rien. Bedrock n'a rien.
+(`anthropic/{mod,wire,decode}.rs`). **Gemini** refuse la génération par une erreur typée : le fournisseur existe,
+valide sa configuration et `stream()` renvoie `LlmError::NotImplemented` avant de
+construire une requête. Il envoie bien une chose — la liste des modèles, un `GET`
+qui porte la clé ([AI-PROVIDERS](AI-PROVIDERS.md#lister-les-modèles-dun-fournisseur)).
+Bedrock n'a rien.
 
 Ce que les deux protocoles implémentés **partagent** est le pilote de flux (`stream.rs`),
 pas le décodage : c'est lui qui garantit qu'un `ChatEvent::Done` est émis exactement une
@@ -1096,7 +1105,11 @@ protégée par deux triggers SQLite — `audit_journal_forbid_update` et
 connexion, texte, décision de politique, durée, lignes affectées, et la **famille** de
 l'erreur quand il y en a une. Cette dernière est une colonne, `error_class`, jamais une
 tournure du message : la question qu'on pose au journal après incident est « cet agent
-a-t-il modifié la base ? », et seule `ambiguë` y répond « on ne sait pas » (I-13). Le
+a-t-il modifié la base ? », et seule `ambiguous` y répond « on ne sait pas » (I-13). La
+colonne contient `transient`, `permanent` ou `ambiguous` ; les lignes écrites avant
+le 2026-09-16 contiennent les codes français `transitoire`, `permanente` et
+`ambiguë`, que `oxyn-store` lit encore et que plus personne n'écrit. Une requête
+lancée sans Oxyn ([I-11](../CLAUDE.md#i-11)) doit reconnaître les deux graphies. Le
 journal étant append-only, ce qui n'y est pas écrit à l'instant de l'incident ne s'y
 ajoute jamais. C'est l'historique
 de l'utilisateur *et* la piste d'audit des agents. Une commande **refusée y figure

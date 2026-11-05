@@ -4,7 +4,7 @@ argument-hint: "<protocole ou crate, ex. postgres>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Skill, WebFetch
 ---
 
-<!-- oxyn-translation source=".claude/commands/driver.md" sha256="c40e1446246a" -->
+<!-- oxyn-translation source=".claude/commands/driver.md" sha256="26a588328d4c" -->
 
 > Traduction française de [.claude/commands/driver.md](../../../../.claude/commands/driver.md). **La version anglaise fait foi.**
 
@@ -90,8 +90,9 @@ se contournent pas :
 
 1. **l'annulation prouvée côté serveur** — vérifiée dans la vue des processus du
    SGBD, pas au retour de la fonction ;
-2. **le flux sur un volume qui ne tiendrait pas en mémoire** — avec une borne sur
-   la mémoire du processus, sinon le test passe par accident.
+2. **le flux sur un volume qui ne tiendrait pas en mémoire** — en affirmant un
+   nombre de lots, chacun borné en octets (la mémoire du processus n'est pas
+   mesurée par un test : [tests](../rules/tests.md#les-deux-tests-quun-driver-ne-contourne-pas)).
 
 Enfin, lancer l'agent `relecteur-invariants` sur le résultat.
 

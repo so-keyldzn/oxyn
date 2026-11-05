@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/VISION.md" sha256="6e041fac43f8" -->
+<!-- oxyn-translation source="docs/VISION.md" sha256="9f4276ddf098" -->
 
 > Traduction française de [docs/VISION.md](../../../docs/VISION.md). **La version anglaise fait foi.**
 
@@ -26,7 +26,14 @@ Qu'ils soient servis par des modèles locaux ou des APIs cloud, les agents trava
 * **Blazing fast** — la latence perçue est une fonctionnalité.
 * **Open by default** — formats ouverts, pas de verrouillage.
 * **AI when it adds value** — jamais imposée, jamais dans le chemin critique.
-* **Privacy first** — hors-ligne par défaut, aucune donnée ne sort sans consentement.
+* **Privacy first** — rien de ce sur quoi vous travaillez ne sort sans
+  consentement : ni contenu de base, ni schéma, ni requête, ni identifiant. Oxyn
+  fait un seul appel réseau de lui-même, la vérification des mises à jour, qui
+  est active par défaut, ne divulgue que la version, le système d'exploitation et
+  l'architecture (et, comme toute requête, l'adresse IP) à github.com, et se
+  coupe d'un seul interrupteur dans les Réglages
+  ([UX-SPEC](UX-SPEC.md#mises-à-jour)). Tout autre appel — un fournisseur d'IA,
+  un téléchargement de modèle — part d'un choix humain.
 * **Extensible through plugins**
 * **Built for professionals**
 

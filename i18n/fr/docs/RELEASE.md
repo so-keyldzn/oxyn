@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RELEASE.md" sha256="26af43725660" -->
+<!-- oxyn-translation source="docs/RELEASE.md" sha256="16c1b3af493d" -->
 # Livraisons GitHub
 
 GitHub Actions construit les paquets ; le mainteneur publie le brouillon
@@ -323,21 +323,22 @@ quel job détient la clé de mise à jour, l'environnement ou un jeton qui
 écrit, une étape de build dans `signature`, un nom ou un chemin d'artefact qui
 diverge entre deux jobs ; les actions elles-mêmes, les artefacts et les
 permissions des jetons sont exercés pour la première fois par une livraison. Rien de tout
-cela ne prouve qu'un Oxyn installé accepte le résultat. Il y faut deux
-étapes :
+cela ne prouve qu'un Oxyn installé accepte le résultat.
 
-1. **Répétition locale**, avec la feature cargo `update-rehearsal`, jamais
-   activée en CI : une clé jetable, des bundles 0.0.1 et 0.0.2 servis sur
-   `127.0.0.1`. Vérifier le téléchargement, l'installation au ⌘Q,
-   l'installation en quittant depuis le Dock, « Restart now », l'absence
-   d'écran de récupération après la relance, un `.sig` falsifié qui finit en
-   erreur de signature, et une vérification hors ligne qui échoue en silence.
-2. **Releases réelles.** Publier v0.0.2, installée à la main (v0.0.1 n'a pas
-   de mise à jour automatique), puis v0.0.3. Vérifier que v0.0.2 se met à jour
-   seule sur un Mac vierge et en AppImage, et qu'une installation `.deb`
-   affiche « Updates are managed by your package manager ». L'AppImage ARM64
-   reçoit la même vérification avec la première release qui la livre et la
-   suivante.
-
+Cela ne se montre que sur de **vraies releases**. Il n'y a pas de répétition
+locale : le point d'accès des mises à jour est une constante de compilation
+(`updates/channel.rs`,
+[ADR-0051](adr/0051-automatic-updates-from-github-releases.md)), sans feature ni
+variable qui le redirige vers un serveur de boucle locale, et en ajouter une
+mettrait une surcharge dans le binaire livré. Après chaque release, sur un Oxyn
+de la release précédente installé sur un Mac vierge et en AppImage, vérifier
+qu'il se met à jour seul : le téléchargement, l'installation au ⌘Q,
+l'installation en quittant depuis le Dock, « Restart now », l'absence d'écran de
+récupération après la relance, et une vérification hors ligne qui échoue en
+silence. Une installation `.deb` doit afficher « Updates are managed by your
+package manager ». L'AppImage ARM64 reçoit la même vérification avec la première
+release qui la livre et la suivante. Le refus d'une archive modifiée ou d'une
+autre clé est couvert par la vérification manuelle `minisign -V` ci-dessus, pas
+par un Oxyn installé.
 Contrats de mise à jour :
 [RESEARCH-NOTES](RESEARCH-NOTES.md#contrats-de-mise-à-jour-tauri--vérifiés-le-2026-10-02).

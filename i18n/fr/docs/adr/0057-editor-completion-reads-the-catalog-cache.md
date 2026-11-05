@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="29a850cccb7d" -->
+<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="8a97c5829c30" -->
 
 > Traduction française de [docs/adr/0057-editor-completion-reads-the-catalog-cache.md](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md). **La version anglaise fait foi.**
 
@@ -215,7 +215,12 @@ cache, dans des bornes, jamais au rythme des frappes.**
      sélectionne une autre). `NULL` est un chemin vide, qui est une réponse ; un nom
      illisible est une erreur, jamais un chemin vide ;
    * **SQLite** répond `temp`, puis `main`, puis les bases attachées dans l'ordre où
-     elles l'ont été (`sqlite3FindTable`, SQLite 3.50.2).
+     elles l'ont été (`sqlite3FindTable`, SQLite 3.50.2) ;
+   * **MongoDB** répond côté client, la seule exception à « lu du serveur » : la
+     base du formulaire, sinon `admin`. Il n'y a pas de chemin de recherche à lire,
+     et une commande sans `$db` s'exécute dans la base sur laquelle la session a
+     été ouverte, celle qui est rapportée
+     ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-il-déclare-ses-capacités-par-session-et-ne-simule-rien)).
 
    Un fournisseur qui ne sait pas répondre **refuse**, et le cache garde
    « inconnu », ce qui n'est pas une liste vide

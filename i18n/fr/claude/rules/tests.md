@@ -6,7 +6,7 @@ paths:
   - "**/tests/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/tests.md" sha256="eeaae5a18e05" -->
+<!-- oxyn-translation source=".claude/rules/tests.md" sha256="50addddce393" -->
 
 > Traduction française de [.claude/rules/tests.md](../../../../.claude/rules/tests.md). **La version anglaise fait foi.**
 
@@ -38,9 +38,15 @@ prouve [I-10](../../CLAUDE.md#i-10).
 1. **L'annulation atteint le serveur.** Vérifiée côté serveur — la vue des
    processus, pas le retour de la fonction. Un test qui vérifie que le futur
    s'est arrêté ne teste rien.
-2. **Le flux tient sur un volume qui ne rentre pas en mémoire.** Avec une borne
-   sur la mémoire du processus, sinon le test passe par accident sur une machine
-   de développement bien dotée.
+2. **Le flux tient sur un volume qui ne rentre pas en mémoire.** Le volume est
+   choisi pour que le matérialiser ne tienne pas, et le test affirme ce qu'un
+   test peut affirmer : il arrive en de nombreux lots (`batches > 10` sur
+   PostgreSQL), chacun borné en octets. Il ne mesure pas la mémoire du
+   processus : la lire depuis un test exige une exception à un mur de clippy ou à
+   `unsafe_code`, un arbitrage que
+   [PERFORMANCE](../../../../docs/PERFORMANCE.md#why-it-is-not-a-permanent-test)
+   laisse ouvert. Une borne sur la mémoire du processus est la mesure manuelle
+   datée de ce document, pas un test à écrire par driver.
 
 ## Les tests d'interface
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="043020459d7e" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a542c4e55a1e" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -209,6 +209,19 @@ démarrage » ; elles restent aussi dans la bibliothèque
 ([ADR-0043](adr/0043-multi-fenetre.md)). Un écran montré à chaque démarrage cesse d'être lu, et c'est le jour où une
 écriture a réellement été interrompue qu'il faut qu'il le soit.
 
+**L'écran ne dépend pas de ce qu'il y a à restaurer.** Après un arrêt anormal, il
+apparaît même quand aucune copie de travail ne reste, et le dit : « Oxyn did not
+close normally. No saved working copies were found on this page. » — l'avertissement
+de résultat inconnu ci-dessous s'applique toujours. Il apparaît aussi quand la
+façon dont Oxyn s'est fermé la dernière fois **ne peut pas être lue** : un état
+illisible ne prouve pas une fermeture propre. L'écran porte alors une alerte,
+« How Oxyn last closed could not be read », avec la raison du backend, un
+réessai, et la consigne de chercher une ligne « Needs inspection » dans
+l'historique avant de lancer quoi que ce soit ; il liste toutes les copies de
+travail ouvertes plutôt que celles de la seule fenêtre. Une fermeture propre dont
+la liste des consoles ne peut pas être lue n'affiche pas l'écran : les copies
+restent dans la bibliothèque et un avertissement le dit.
+
 Au redémarrage après un arrêt anormal, Oxyn présente les onglets et brouillons
 locaux récupérables. L'utilisateur choisit les éléments à restaurer ou démarre
 avec un workspace vide. Sans sélection, l'action de restauration est désactivée.
@@ -281,6 +294,19 @@ your package manager` (.deb et .rpm), `Updates are turned off by your
 administrator`, `Updates are turned off in development builds`. Une
 vérification n'envoie que la version, le système d'exploitation et
 l'architecture.
+
+**La vérification est le seul appel réseau qu'Oxyn fait sans qu'on le lui
+demande**, et elle est active par défaut, sans écran pour y consentir : le
+principe de [VISION](VISION.md) — rien de ce sur quoi l'utilisateur travaille ne
+sort sans consentement — porte sur ses données, et une requête qui transporte la
+version de l'application n'en est pas une. C'est décidé et argumenté ici plutôt
+que supposé en silence : une préférence absente ou illisible vaut « active », pour
+qu'un fichier corrompu n'arrête pas discrètement les mises à jour de sécurité.
+L'interrupteur est dans Réglages ▸ Updates, et un administrateur ou un poste hors
+ligne la verrouille avec `OXYN_UPDATES=off`. Mettre la valeur par défaut à
+« désactivée », ou demander au premier lancement, est une décision produit que le
+mainteneur peut encore prendre ; elle changerait ce paragraphe et VISION
+ensemble.
 
 **Après une mise à jour**, la première fenêtre ouverte dit une fois
 `Oxyn updated to 1.4.0`, avec `What's new`, qui ouvre la page de la release
@@ -1072,6 +1098,25 @@ explique, si bien que le plan d'une écriture passe par la revue de cette
 ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md),
 « Explain: the planner only »). La mention `Execution plan` ci-dessus
 s'applique de la même façon.
+
+## Complétion dans une console SQL
+
+L'éditeur suggère des noms issus du cache du catalogue, sans interroger le serveur
+à chaque frappe
+([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)) : schémas ou
+bases, tables et vues, et les colonnes des relations que l'instruction nomme, avec
+leurs alias. Une relation n'est suggérée **non qualifiée** que lorsque le chemin
+de résolution des noms de la console est connu et que le nom ne peut pas être
+masqué par un espace de noms que personne n'a lu ; sinon elle n'est suggérée
+qu'avec son qualificatif, et aucun schéma par défaut n'est supposé.
+
+**Une liste partielle le dit.** Quand le cache contient un instantané coupé par une
+borne, une note apparaît dans un panneau sous le texte, où elle ne cache aucun
+SQL : `Suggestions are partial. Left out: 3 schemas or databases, 12 tables or
+views, 40 columns.` Elle ne nomme que ce qui a été laissé de côté, en nombres —
+jamais un nom d'objet — et omet un genre dont rien n'a été laissé. Sans rien de
+laissé, il n'y a pas de note. Une réponse partielle n'est jamais présentée comme
+complète.
 
 ## Contexte de session d'une console
 

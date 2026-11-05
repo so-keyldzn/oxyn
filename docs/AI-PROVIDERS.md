@@ -706,14 +706,15 @@ targeted connection ([I-01](../CLAUDE.md#i-01)). No other path writes
   that names the connection ([I-02](../CLAUDE.md#i-02),
   [SECURITY](SECURITY.md#connection-marking)), like any write on
   it; for an `Actor::Agent`, it is a refusal;
-* **lowering the tier of a `production` connection** — to `Sampled`, or from
-  `Local` to `Metadata` — is a critical decision: it opens the egress of
-  the structure or of rows of a customer database. It is meant for the **native
-  host dialog**, outside the webview, decided on 2026-09-24 for
-  critical confirmations. The ADR that writes it does not exist yet: until then,
-  it is the webview confirmation described by
-  [SECURITY](SECURITY.md#connection-marking) that applies, and it
-  alone;
+* **any change of the privacy tier — or of the environment — of a
+  connection** is a critical decision, lowering the tier of a customer database
+  included: it opens the egress of the structure or of rows. It is confirmed in
+  the **native host dialog**, outside the webview, in both directions and
+  whatever the starting environment (family 3 of
+  [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
+  The `Backend` asks before the edit is even sent; the webview button alone
+  never changes a tier. [SECURITY](SECURITY.md#connection-marking) holds the
+  same rule;
 * **the change applies from the next question.** The tier is re-read by the
   backend at every question, never taken from the session; an external agent
   kept alive, launched under the old tier, is released on save and

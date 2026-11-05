@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="AGENTS.md" sha256="d6745d630556" -->
+<!-- oxyn-translation source="AGENTS.md" sha256="6693c0599fbc" -->
 
 > Traduction française de [AGENTS.md](../../AGENTS.md). **La version anglaise fait foi.**
 
@@ -37,15 +37,23 @@ cette adaptation Codex. Lire explicitement toutes les règles applicables,
 y compris pour un fichier neuf. Résoudre les liens depuis le fichier qui
 les contient ; les chemins de commandes shell partent de la racine du dépôt.
 
-| Fichiers concernés | Règle commune |
+La liste `paths:` en tête de chaque règle est le seul endroit qui dit quels
+fichiers elle couvre ; ce tableau ne la recopie pas, parce qu'une copie diverge
+(elle avait divergé : `ia` couvre aussi `crates/oxyn-llm/**`, `tests` couvre aussi
+`*_tests.rs` et `tests.rs`, `manifestes` couvre aussi `clippy.toml`, les workflows
+et `script/*`). Pour le fichier qu'on s'apprête à toucher, ouvrir le frontmatter
+de chaque règle et lire celles dont un motif correspond. Le même tableau, avec
+les motifs, est dans [CLAUDE.md](CLAUDE.md#règles-chargées-à-la-demande).
+
+| Règle | Sujet |
 |---|---|
-| Tout fichier Rust | [rust](claude/rules/rust.md) |
-| `drivers/oxyn-driver-*/**`, `crates/oxyn-driver/**`, `crates/oxyn-driver-*/**` | [drivers](claude/rules/drivers.md) |
-| `apps/desktop/**`, `crates/oxyn-desktop/**` | [front](claude/rules/front.md) |
-| `crates/oxyn-ai/**` | [ia](claude/rules/ia.md) |
-| Tout répertoire `tests/` ou `benches/` | [tests](claude/rules/tests.md) |
-| Markdown, y compris les compétences de projet | [documentation](claude/rules/documentation.md) |
-| `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `Makefile`, `deny.toml` | [manifestes](claude/rules/manifestes.md) |
+| [rust](claude/rules/rust.md) | le code Rust |
+| [drivers](claude/rules/drivers.md) | les drivers et la crate du trait |
+| [front](claude/rules/front.md) | l'interface Tauri |
+| [ia](claude/rules/ia.md) | les crates d'IA |
+| [tests](claude/rules/tests.md) | les tests et les benchs |
+| [documentation](claude/rules/documentation.md) | le Markdown, compétences de projet comprises |
+| [manifestes](claude/rules/manifestes.md) | manifestes, configuration d'outillage, scripts et workflows |
 
 ## Procédures et compétences
 

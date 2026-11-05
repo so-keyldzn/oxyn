@@ -21,7 +21,13 @@ cloud APIs, the agents work *alongside* the user — never in their place.
 * **Blazing fast** — perceived latency is a feature.
 * **Open by default** — open formats, no lock-in.
 * **AI when it adds value** — never imposed, never on the critical path.
-* **Privacy first** — offline by default, no data leaves without consent.
+* **Privacy first** — nothing you work on leaves without consent: no database
+  content, schema, query or credential. Oxyn makes one network call of its own
+  accord, the update check, which is on by default, discloses only the version,
+  the operating system and the architecture (and, as any request does, the IP
+  address) to github.com, and is a single switch in Settings
+  ([UX-SPEC](UX-SPEC.md#updates)). Every other call — an AI provider, a model
+  download — starts from a human choice.
 * **Extensible through plugins**
 * **Built for professionals**
 

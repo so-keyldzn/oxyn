@@ -34,9 +34,14 @@ proves [I-10](../../CLAUDE.md#i-10).
 1. **Cancellation reaches the server.** Checked server-side — the process view,
    not the function's return. A test that checks the future stopped tests
    nothing.
-2. **Streaming holds on a volume that does not fit in memory.** With a bound on
-   the process memory, otherwise the test passes by accident on a well-equipped
-   development machine.
+2. **Streaming holds on a volume that does not fit in memory.** The volume is
+   chosen so that materializing it would not fit, and the test asserts what a
+   test can: it arrives in many batches (`batches > 10` on PostgreSQL), each
+   bounded in bytes. It does not measure the process memory: reading it from a
+   test needs an exception to a clippy wall or to `unsafe_code`, a trade-off
+   [PERFORMANCE](../../docs/PERFORMANCE.md#why-it-is-not-a-permanent-test)
+   leaves open. A bound on the process memory is the dated manual measurement
+   there, not a test to write per driver.
 
 ## Interface tests
 

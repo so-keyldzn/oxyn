@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 import sys
 import tomllib
 import unicodedata
@@ -213,7 +214,109 @@ def translation_errors(root: Path) -> list[str]:
 
 
 def check_translations() -> list[str]:
-    return translation_errors(REPO_ROOT)
+    return translation_errors(REPO_ROOT) + missing_mirror_errors(
+        REPO_ROOT, _tracked_markdown(REPO_ROOT)
+    )
+
+
+# The documents with no mirror, and why. i18n/README.md states the same list in
+# prose; this one is what the check reads. A path ending in `/` is a directory.
+MIRROR_EXEMPT = (
+    ".claude/skills/",  # third-party skills, installed by `skills-lock.json`
+    ".agents/skills/",  # the same skills; the `oxyn-*` ones do have a mirror
+    ".claude/agent-memory/",  # tooling notes
+    ".claude/audits/",  # dated reports, written once
+    ".github/",  # templates the forge renders as they are
+    "crates/",  # prompts and agent definitions shipped as runtime data
+    "CLA.md",  # legal text, English only
+    "i18n/",  # the mirrors themselves
+)
+# Where a source directory lands under i18n/fr/ (a dot-directory must not be
+# loaded as a second rule, command or agent).
+MIRROR_RENAMES = ((".claude/", "claude/"), (".codex/", "codex/"), (".agents/", "agents/"))
+
+
+def mirror_path(source: str) -> str:
+    for prefix, renamed in MIRROR_RENAMES:
+        if source.startswith(prefix):
+            return f"{MIRRORS}/{renamed}{source[len(prefix):]}"
+    return f"{MIRRORS}/{source}"
+
+
+def _tracked_markdown(root: Path) -> list[str]:
+    listing = subprocess.run(
+        ["git", "ls-files", "*.md"], cwd=root, capture_output=True, text=True, check=False
+    )
+    return listing.stdout.split("\n") if listing.returncode == 0 else []
+
+
+def missing_mirror_errors(root: Path, tracked: list[str]) -> list[str]:
+    """A tracked document with neither a mirror nor a listed exception.
+
+    `translation_errors` only judges the mirrors that exist, so a document added
+    without one passed unseen.
+    """
+    problems = []
+    for source in tracked:
+        if not source or source.startswith(MIRROR_EXEMPT):
+            continue
+        if not (root / mirror_path(source)).is_file():
+            problems.append(
+                f"{source}: no French mirror at {mirror_path(source)} — write it, "
+                "or list the document as an exception in i18n/README.md and "
+                "MIRROR_EXEMPT (ADR-0047)"
+            )
+    return problems
+
+
+# ADR-0045 says `controles` checks "the ADR index". The index is the table of
+# docs/README.md: a decision absent from it is invisible to a reader who starts
+# there, and a status that drifted from the ADR's own header misleads about
+# what is binding. `check_links` cannot see either: it only resolves links
+# that are already written.
+ADR_ROW_PATTERN = re.compile(r"^\|\s*\[(\d{4})\]\(adr/([^)]+)\)\s*\|.*\|\s*([a-z]+)[^|]*\|\s*$")
+ADR_STATUS_PATTERN = re.compile(r"^\*\*Status:\*\*\s*([a-z]+)", re.MULTILINE)
+
+
+def adr_index_errors(adrs: dict[str, str], index: str) -> list[str]:
+    """`adrs` maps an ADR file name to its text; `index` is docs/README.md."""
+    rows: dict[str, tuple[str, str]] = {}
+    problems = []
+    for line in index.splitlines():
+        row = ADR_ROW_PATTERN.match(line)
+        if not row:
+            continue
+        number, name, status = row.groups()
+        if name in rows:
+            problems.append(f"docs/README.md: ADR {number} appears twice in the index")
+        rows[name] = (number, status)
+    for name, text in sorted(adrs.items()):
+        if name not in rows:
+            problems.append(f"docs/adr/{name}: no row in the ADR index of docs/README.md")
+            continue
+        header = ADR_STATUS_PATTERN.search(text)
+        if not header:
+            problems.append(f"docs/adr/{name}: no `**Status:**` line in its header")
+        elif header.group(1) != rows[name][1]:
+            problems.append(
+                f"docs/README.md: ADR {rows[name][0]} is indexed as \"{rows[name][1]}\" "
+                f"but its header says \"{header.group(1)}\""
+            )
+    for name in sorted(set(rows) - set(adrs)):
+        problems.append(f"docs/README.md: the index row for adr/{name} targets no file")
+    return problems
+
+
+def check_adr_index() -> list[str]:
+    directory = REPO_ROOT / "docs" / "adr"
+    index = REPO_ROOT / "docs" / "README.md"
+    if not directory.is_dir() or not index.is_file():
+        return []
+    adrs = {
+        f.name: f.read_text(encoding="utf-8")
+        for f in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md"))
+    }
+    return adr_index_errors(adrs, index.read_text(encoding="utf-8"))
 
 
 def check_hooks() -> list[str]:
@@ -615,6 +718,7 @@ def main() -> int:
         + check_readme_make_targets()
         + check_ci_dependency_tools()
         + check_translations()
+        + check_adr_index()
     )
     warnings = check_inert_paths()
 

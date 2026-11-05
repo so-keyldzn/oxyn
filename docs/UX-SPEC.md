@@ -198,6 +198,17 @@ like the editors resumed by "Selective restore at startup"; they also stay in
 the library ([ADR-0043](adr/0043-multi-fenetre.md)). A screen shown at every startup stops being read, and it must be read on the day a
 write was really interrupted.
 
+**The screen does not depend on there being something to restore.** After an
+abnormal stop it appears even when no working copy remains, and says so: "Oxyn did
+not close normally. No saved working copies were found on this page." — the
+unknown-outcome warning below still applies. It also appears when how Oxyn last
+closed **cannot be read**: an unread status is no proof of a clean shutdown. The
+screen then carries an alert, "How Oxyn last closed could not be read", with the
+backend's reason, a retry, and the instruction to look for a "Needs inspection"
+row in History before running anything; it lists every open working copy rather
+than only the window's. A clean shutdown whose list of consoles cannot be read
+does not show the screen: the copies stay in the library and a warning says so.
+
 At restart after an abnormal stop, Oxyn presents the recoverable local tabs and
 drafts. The user chooses the items to restore or starts with an empty
 workspace. Without a selection, the restore action is disabled. The selection
@@ -263,6 +274,17 @@ not install its own updates, the view says why and offers no action: `Updates
 are managed by your package manager` (.deb and .rpm), `Updates are turned off
 by your administrator`, `Updates are turned off in development builds`. A check
 sends only the version, the operating system and the architecture.
+
+**The check is the one network call Oxyn makes without being asked**, and it is
+on by default with no screen to consent to it: the principle of
+[VISION](VISION.md) — nothing the user works on leaves without consent — is about
+their data, and a request that carries the version of the application is not
+that. It is decided and argued here rather than silently assumed: a missing or
+unreadable preference counts as "on", so that a corrupt file does not quietly
+stop security updates. The switch is in Settings ▸ Updates, and an administrator
+or an offline workstation locks it off with `OXYN_UPDATES=off`. Defaulting to off,
+or asking at first launch, is a product decision the maintainer can still take;
+it would change this paragraph and VISION together.
 
 **After an update**, the first window to open says once `Oxyn updated to
 1.4.0`, with `What's new`, which opens the release page in the system browser.
@@ -1012,6 +1034,23 @@ review of that write
 ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md),
 "Explain: the planner only"). The `Execution plan` mention above applies the
 same way.
+
+## Completion in a SQL console
+
+The editor suggests names from the catalog cache, without querying the server
+at each keystroke ([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)):
+schemas or databases, tables and views, and the columns of the relations the
+statement names, with their aliases. A relation is suggested **unqualified** only
+when the console's name resolution path is known and the name cannot be shadowed
+by a namespace nobody read; otherwise it is suggested qualified only, and no
+default schema is assumed.
+
+**A partial list says so.** When the cache holds a snapshot cut by a bound, a
+note appears in a panel under the text, where it hides none of the SQL:
+`Suggestions are partial. Left out: 3 schemas or databases, 12 tables or views,
+40 columns.` It names only what was left out, in counts — never an object name —
+and omits a kind with nothing left out. With nothing left out there is no note.
+A partial answer is never presented as complete.
 
 ## Session context of a console
 

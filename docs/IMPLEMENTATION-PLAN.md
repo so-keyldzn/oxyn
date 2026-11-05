@@ -2282,7 +2282,8 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
 - `oxyn-driver-elasticsearch` (ADR-0062) — connection, policy classification
   and risk, mapping catalog, typed and streamed results, server-proven stop and
   the request under the cursor are in place; its real-server suite runs in CI
-  on Elasticsearch 9.5.5 and before a release on OpenSearch 3.9.0. Remaining:
+  on Elasticsearch 9.5.5; OpenSearch 3.9.0 has only the dated manual run of
+  2026-10-24, no CI job and no release step. Remaining:
   endpoint and body completion, native index operations through the review
   flow, a count before a by-query request, and cluster views (`_cat`, ILM/ISM,
   snapshots, tasks).

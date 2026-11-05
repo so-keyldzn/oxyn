@@ -33,8 +33,11 @@ The supported majors are Elasticsearch 8 and 9 and OpenSearch 2 and 3, read
 from `version.number` and `version.distribution` of `GET /`. A server of another
 major, or a distribution the driver does not know, is refused at connection
 rather than accepted on a guess. Elasticsearch is tested in CI with the exact
-9.5.5 image; OpenSearch 3.9.0 is exercised against a real server before a
-release until the CI budget has an approved second server service. The
+9.5.5 image. OpenSearch is not in CI until the budget has an approved second
+server service, and no release step runs it: its support rests on the dated
+manual run of the driver's real-server suite against the 3.9.0 image
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#elasticsearch-and-opensearch--checked-on-2026-10-22),
+2026-10-24), repeated by hand when the driver changes. The
 Search DSL APIs the driver composes — `_search`, `_cat`, `_mapping`,
 `_data_stream`, `_tasks` — are present on every supported major.
 
