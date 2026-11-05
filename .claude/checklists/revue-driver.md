@@ -29,8 +29,9 @@ failure that will not show in tests.
 
 - [ ] Produces `RecordBatch`es, never a row representation
 - [ ] The batch is bounded **in bytes**, not in number of rows
-- [ ] **Streaming test over a volume that would not fit in memory**, with a
-      bound on the process memory — without a bound, the test passes by accident
+- [ ] **Streaming test over a volume that would not fit in memory**, asserting
+      many batches, each bounded in bytes — the process memory is not measured
+      by a test ([tests](../rules/tests.md#the-two-tests-a-driver-does-not-skip))
 - [ ] If the source is schemaless: inference by sampling is declared as such up
       to the interface, and a field outside the sample produces an explicit
       error, never a silent loss

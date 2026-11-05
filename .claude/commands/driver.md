@@ -88,8 +88,9 @@ worked around:
 
 1. **cancellation proven server-side** — checked in the DBMS's process view,
    not on the function's return;
-2. **streaming over a volume that would not fit in memory** — with a bound on
-   the process's memory, otherwise the test passes by accident.
+2. **streaming over a volume that would not fit in memory** — asserting a
+   count of batches, each bounded in bytes (the process memory itself is not
+   measured by a test: [tests](../rules/tests.md#the-two-tests-a-driver-does-not-skip)).
 
 Finally, run the `relecteur-invariants` agent on the result.
 
