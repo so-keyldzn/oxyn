@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="b750ce7523fb" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="249216c7b529" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -47,6 +47,28 @@ connexions et l'utilisateur conclut qu'Oxyn a cassé sa production.
 Concrètement : PostgreSQL a `pg_cancel_backend`, MySQL a `KILL QUERY`, SQLite a
 `sqlite3_interrupt`. Un driver qui ne peut pas annuler côté serveur le **déclare**
 dans ses capacités, il ne fait pas semblant.
+
+**La requête d'annulation est elle-même bornée dans le temps.**
+`pg_cancel_backend` et `KILL QUERY` partent sur une seconde connexion, et la
+bibliothèque cliente n'apporte aucune échéance propre à son ouverture (`sqlx`
+0.9.0, voir [RESEARCH-NOTES](RESEARCH-NOTES.md#paramètres-de-démarrage-de-sqlx-pour-une-connexion-postgresql--vérification-du-2026-11-05)) :
+un VPN tombé, un pare-feu qui avale les paquets, ou un équipement intermédiaire
+qui accepte le TCP sans jamais terminer la poignée de main retiendraient la
+tâche qui l'envoie — donc `Session::cancel`, le délai de l'exécuteur,
+`disconnect` et la place du pool — pendant le délai TCP du système, ou
+indéfiniment. Chaque driver donne aux trois étapes (ouvrir, envoyer, fermer)
+**une seule** échéance : 10 s pour les drivers PostgreSQL et MySQL. Une
+connexion qui ne s'ouvre pas à temps est une `OxynError::Connection` ; une
+requête partie et sans réponse à temps est une `OxynError::Timeout`, ambiguë :
+le serveur l'a peut-être appliquée, l'appelant tient donc l'annulation pour non
+prouvée. La fermeture ne dépasse jamais l'échéance. **Une instruction
+interrompue avant sa première ligne** (le `prepare` de PostgreSQL, bloqué sur le
+verrou d'une table, par exemple) est annulée de la même façon côté serveur, par
+la session elle-même, qui garde sa connexion pendant ce temps puis la ferme :
+l'interface ne dit jamais « annulé » d'un backend qui attend encore.
+
+**Panne concrète :** un chemin réseau figé, puis Échap : le bouton Arrêter tourne
+pendant des minutes et la fermeture de la connexion se bloque derrière.
 
 ### 3. Il produit des `RecordBatch` Arrow, en flux
 

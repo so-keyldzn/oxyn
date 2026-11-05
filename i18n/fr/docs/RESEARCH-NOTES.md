@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ac0ca9fcfce5" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="bd9b5460c4af" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2321,6 +2321,17 @@ le 2026-05-21), utilisée par `oxyn-driver-postgres` :
 | Le Bind de `query_with` demande le format binaire pour toutes les colonnes du résultat, en dur | `aclitem`, `gtsvector` et leurs tableaux (`typsend = 0` dans le `pg_type` de PostgreSQL 17.11) sont refusés par le serveur : `no binary output function available` | [executor.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/connection/executor.rs) |
 | `raw_sql` passe par le protocole simple et ne résout pas les OID inconnus (`DeclareWithOid`) | toutes les valeurs arrivent en texte ; `PgTypeInfo::name()` renvoie `"?"` pour un tel type | idem |
 | `PgTypeInfo::kind()` appelle `unreachable!` sur un type non résolu | une colonne du protocole simple ne doit jamais passer par le décodage typé (ADR-0048) | [type_info.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/type_info.rs) |
+
+## Paramètres de démarrage de `sqlx` pour une connexion PostgreSQL — vérification du 2026-11-05
+
+`sqlx-postgres` 0.9.0, la version de `Cargo.lock`, lu dans les sources installées :
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| Le message de démarrage porte `DateStyle = ISO, MDY`, `client_encoding = UTF8` et `TimeZone = UTC` sans condition ; seuls `extra_float_digits`, `application_name` et les options `-c` sont facultatifs | chaque session Oxyn lit et écrit les horodatages et les dates sous ces valeurs, quelle que soit la configuration du serveur, de la base ou du rôle. Elles sont épinglées et déclarées dans [DRIVER-CONTRACT §7](DRIVER-CONTRACT.md) | `sqlx-postgres-0.9.0/src/connection/establish.rs` (vecteur `params`), `src/options/mod.rs` (aucun accesseur) |
+| PostgreSQL applique d'abord le champ `options` (`-c`) du démarrage, puis les paramètres de démarrage explicites, le dernier l'emportant | un paramètre de connexion supplémentaire `TimeZone=…` est écrasé par l'`UTC` épinglé ; `RESET ALL` revient à la valeur épinglée | PostgreSQL REL_17_STABLE `src/backend/utils/init/postinit.c`, `process_startup_options` (lu par l'audit du 2026-10-22, issue #306) |
+| `sqlx-core` ouvre la connexion TCP par un simple `tokio::net::TcpStream::connect`, et l'échange de démarrage n'a pas d'échéance non plus | la seconde connexion qui envoie `pg_cancel_backend` est bornée par le driver, 10 s sur l'ouverture, l'envoi et la fermeture (issue #304) | `sqlx-core-0.9.0/src/net/socket/mod.rs`, `sqlx-postgres-0.9.0/src/connection/establish.rs` ; aucun `timeout` sous `src/net/` |
+| `PoolConnection::drop` rend une connexion par un `ping` qui écrit `Sync` et attend chaque `ReadyForQuery` en attente, sans échéance | une connexion propre lâchée pendant qu'un `Parse` est bloqué sur un verrou garde sa place du pool jusqu'à la libération du verrou ; le driver marque le bail comme sale pendant `prepare` (issue #305) | `sqlx-core-0.9.0/src/pool/connection.rs` (`return_to_pool`), `sqlx-postgres-0.9.0/src/connection/mod.rs` (`ping`) |
 
 ## Formats binaires de PostgreSQL sur le fil — vérification du 2026-09-28
 

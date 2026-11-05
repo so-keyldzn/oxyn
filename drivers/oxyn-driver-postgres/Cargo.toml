@@ -26,3 +26,8 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# A listener that accepts and never answers, and a paused clock, for the
+# cancellation-bound tests that need no server.
+tokio = { workspace = true, features = ["net", "rt", "test-util"] }

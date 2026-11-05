@@ -31,16 +31,31 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use oxyn_core::{CancelToken, DriverId, OxynError, Result, StatementHandle, StatementIntent};
 use sqlx::{ConnectOptions as _, Connection as _};
 use tokio::sync::watch;
+use tokio::time::{Instant, timeout_at};
 
 use crate::error::{map_connect_error, map_exec_error};
 use crate::options::ConnectSpec;
 
 /// Asks the server to interrupt another process's query.
 pub(crate) const SQL_CANCEL_BACKEND: &str = "SELECT pg_catalog.pg_cancel_backend($1)";
+
+/// How long a whole `pg_cancel_backend` may take: opening the second
+/// connection, sending the call, and closing that connection.
+///
+/// One deadline for the three steps, not one per step. `sqlx` carries no
+/// connect timeout (0.9.0: a bare `TcpStream::connect`, then the startup
+/// exchange): a VPN that dropped, a firewall that swallows packets, or a
+/// middlebox that accepts TCP and never completes TLS would otherwise hold the
+/// stream task — which sends the cancellation while it holds its connection —
+/// and with it `Session::cancel`, the executor's timeout, `disconnect` and the
+/// pool slot, for the OS connect timeout or forever. Same bound and same reason
+/// as the MySQL driver's `KILL_BOUND`.
+pub(crate) const CANCEL_BOUND: Duration = Duration::from_secs(10);
 
 /// What the stream task did with the cancellation it was asked for.
 #[derive(Debug, Clone)]
@@ -153,6 +168,8 @@ impl StatementRegistry {
 pub(crate) struct BackendCanceller {
     spec: ConnectSpec,
     driver: DriverId,
+    /// How long one cancellation may take; [`CANCEL_BOUND`] outside tests.
+    bound: Duration,
     #[cfg(test)]
     gate: Mutex<Option<tests_gate::CancelGate>>,
 }
@@ -163,9 +180,17 @@ impl BackendCanceller {
         Self {
             spec,
             driver,
+            bound: CANCEL_BOUND,
             #[cfg(test)]
             gate: Mutex::new(None),
         }
+    }
+
+    /// A canceller with another bound, so a test does not wait ten seconds.
+    #[cfg(test)]
+    pub(crate) fn with_bound(mut self, bound: Duration) -> Self {
+        self.bound = bound;
+        self
     }
 
     /// Asks the server to interrupt the query of process `backend_pid`.
@@ -174,29 +199,45 @@ impl BackendCanceller {
     /// returns `false` and nothing is made of it. What matters is that no query
     /// survives a tab being closed.
     ///
+    /// The three steps share one deadline of [`CANCEL_BOUND`].
+    ///
     /// # Errors
-    /// [`OxynError::Connection`] if the second connection does not open,
-    /// [`OxynError::Driver`] if the server refuses the call — typically for lack
-    /// of rights on a pid belonging to another role.
+    /// [`OxynError::Connection`] if the second connection does not open in
+    /// time; [`OxynError::Timeout`] — ambiguous — if the server does not answer
+    /// the call in time: the request may have landed, so the caller treats the
+    /// cancellation as unproven; [`OxynError::Driver`] if the server refuses the
+    /// call — typically for lack of rights on a pid belonging to another role.
     pub(crate) async fn cancel_backend(&self, backend_pid: i32) -> Result<()> {
         #[cfg(test)]
         self.pass_gate(backend_pid).await;
 
-        let mut connection = self
-            .spec
-            .options()
-            .connect()
+        let deadline = Instant::now() + self.bound;
+        let mut connection = timeout_at(deadline, self.spec.options().connect())
             .await
+            .map_err(|_elapsed| {
+                OxynError::Connection(
+                    "the connection that sends the cancellation did not open in time".to_owned(),
+                )
+            })?
             .map_err(|error| map_connect_error(&error))?;
 
-        let issue = sqlx::query(SQL_CANCEL_BACKEND)
-            .bind(backend_pid)
-            .fetch_optional(&mut connection)
-            .await;
+        let Ok(issue) = timeout_at(
+            deadline,
+            sqlx::query(SQL_CANCEL_BACKEND)
+                .bind(backend_pid)
+                .fetch_optional(&mut connection),
+        )
+        .await
+        else {
+            // The call left: the server may have applied it. Dropping the
+            // connection gives it up without waiting for a polite close.
+            return Err(OxynError::Timeout { after: self.bound });
+        };
 
         // Closed in every case: this connection has no further use, and letting
-        // it go would open one per cancellation.
-        let _ = connection.close().await;
+        // it go would open one per cancellation. Never past the deadline: the
+        // answer is known, the close adds nothing.
+        let _ = timeout_at(deadline, connection.close()).await;
 
         issue.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
         Ok(())
@@ -247,7 +288,12 @@ pub(crate) mod tests_gate {
 
 #[cfg(test)]
 mod tests {
+    use oxyn_core::{ConnectionConfig, ErrorClass};
+    use oxyn_driver::Credentials;
+    use tokio::net::TcpListener;
+
     use super::*;
+    use crate::driver::postgres_metadata;
 
     #[test]
     fn a_finished_execution_does_not_stay_in_the_registry() {
@@ -318,5 +364,103 @@ mod tests {
             .cancel(&DriverId::postgres(), handle)
             .await
             .expect("nothing left to cut");
+    }
+
+    /// A canceller aimed at a listener that accepts connections and never
+    /// answers: the shape of a middlebox that completes TCP and stalls the
+    /// startup exchange.
+    async fn canceller_towards_a_silent_server(bound: Duration) -> (BackendCanceller, TcpListener) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback is bindable");
+        let port = listener.local_addr().expect("a bound listener").port();
+        let config = ConnectionConfig::new("silent", DriverId::postgres())
+            .with_environment(oxyn_core::Environment::Local)
+            .with_param("host", "127.0.0.1")
+            .with_param("port", port.to_string())
+            .with_param("database", "shop")
+            .with_param("user", "oxyn")
+            .with_param("sslmode", "disable");
+        let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &Credentials::new())
+            .expect("a complete local configuration");
+        (
+            BackendCanceller::new(spec, DriverId::postgres()).with_bound(bound),
+            listener,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancellation_to_a_server_that_never_answers_returns_within_the_bound() {
+        // #304: `sqlx` has no connect or startup timeout. Without the deadline
+        // this call never returns, and the stream task holding the connection,
+        // `Session::cancel` and `disconnect` wait with it.
+        let bound = Duration::from_secs(7);
+        let (canceller, listener) = canceller_towards_a_silent_server(bound).await;
+        // Accepts and keeps the sockets open, answering nothing.
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                sockets.push(socket);
+            }
+        });
+
+        let started = Instant::now();
+        let issue = canceller.cancel_backend(42).await;
+        let elapsed = started.elapsed();
+        held.abort();
+
+        let error = issue.expect_err("a silent server cannot have confirmed the cancellation");
+        assert!(
+            matches!(error, OxynError::Connection(_) | OxynError::Timeout { .. }),
+            "a bounded failure, not a hang or a driver error: {error:?}"
+        );
+        assert!(
+            matches!(error.class(), ErrorClass::Transient | ErrorClass::Ambiguous),
+            "never permanent: the cancellation may be retried by the caller or reported unproven"
+        );
+        assert!(!error.is_retryable() || matches!(error, OxynError::Connection(_)));
+        assert!(
+            elapsed >= bound && elapsed < bound + Duration::from_secs(1),
+            "one deadline over the whole call: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_failed_cancellation_reaches_the_waiting_session_cancel() {
+        // The verdict the stream task publishes after the bounded attempt is
+        // what `Session::cancel` returns: an `Err` of the right class, not a
+        // wait for the OS.
+        let registry = Arc::new(StatementRegistry::default());
+        let handle = StatementHandle::new();
+        let token = CancelToken::new();
+        let verdict = registry.register(handle, token.clone());
+        let (canceller, listener) = canceller_towards_a_silent_server(Duration::from_secs(3)).await;
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                sockets.push(socket);
+            }
+        });
+        let task = tokio::spawn(async move {
+            token.cancelled().await;
+            let issue = canceller.cancel_backend(7).await;
+            verdict.settle(match issue {
+                Ok(()) => Verdict::Cancelled,
+                Err(error) => Verdict::CancelFailed(Arc::new(error)),
+            });
+        });
+
+        let started = Instant::now();
+        let error = registry
+            .cancel(&DriverId::postgres(), handle)
+            .await
+            .expect_err("the cancellation could not be confirmed");
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(matches!(
+            error.class(),
+            ErrorClass::Transient | ErrorClass::Ambiguous
+        ));
+        task.await.expect("the task rules");
+        held.abort();
     }
 }

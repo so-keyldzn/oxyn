@@ -44,6 +44,27 @@ In practice: PostgreSQL has `pg_cancel_backend`, MySQL has `KILL QUERY`, SQLite 
 `sqlite3_interrupt`. A driver that cannot cancel on the server side **declares** it
 in its capabilities; it does not pretend.
 
+**The cancellation request is itself bounded in time.** `pg_cancel_backend` and
+`KILL QUERY` go out on a second connection, and the client
+library brings no deadline of its own on opening it (`sqlx` 0.9.0, see
+[RESEARCH-NOTES](RESEARCH-NOTES.md#sqlx-startup-parameters-of-a-postgresql-connection--checked-on-2026-11-05)): a VPN that dropped, a firewall
+that swallows packets, or a middlebox that accepts TCP and never completes the
+handshake would hold the task that sends it — hence `Session::cancel`, the
+executor's timeout, `disconnect` and the pool slot — for the OS connect timeout,
+or forever. Each driver gives the three steps (open, send, close) **one**
+deadline: 10 s for both the PostgreSQL and the MySQL driver. A connection that
+did not open in time is `OxynError::Connection`; a request that left and was not
+answered in time is `OxynError::Timeout`, which is ambiguous — the server may
+have applied it, so the caller treats the cancellation as unproven. The close
+never outlives the deadline. **A statement interrupted before its first row**
+(PostgreSQL's `prepare` blocks on the table lock, for example) is cancelled on
+the server the same way, by the session itself, which holds its connection
+meanwhile and closes it: the interface never says "cancelled" about a backend
+that is still waiting.
+
+**Concrete failure:** a stalled network path, then Esc: the Stop button spins
+for minutes and closing the connection hangs behind it.
+
 ### 3. It produces Arrow `RecordBatch`es, streamed
 
 The result interface is a stream of `arrow::RecordBatch`
