@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CONTRIBUTING.md" sha256="94f974dede73" -->
+<!-- oxyn-translation source="CONTRIBUTING.md" sha256="f4c1c8b4505f" -->
 
 > Traduction française de [CONTRIBUTING.md](../../CONTRIBUTING.md). **La version anglaise fait foi.**
 
@@ -9,9 +9,9 @@ contribution a besoin : l'accord de licence, et la porte de qualité.
 
 ## L'accord de licence du contributeur
 
-Toute contribution externe demande un
-[accord de licence du contributeur](../../CLA.md) (CLA) signé avant de pouvoir
-être fusionnée. Vous le signez une fois, et il couvre toutes vos contributions
+Toute contribution externe demande que vous acceptiez
+l'[accord de licence du contributeur](../../CLA.md) (CLA) avant de pouvoir
+être fusionnée. Vous le donnez une fois, et il couvre toutes vos contributions
 futures.
 
 **Pourquoi un CLA.** Oxyn est sous licence GPL-3.0-or-later. Le contrat des
@@ -28,15 +28,28 @@ Les raisons sont consignées dans
 Vous restez libre d'utiliser votre contribution pour tout autre usage, sous
 n'importe quelle licence.
 
-**Comment signer.** Quand vous ouvrez une pull request, un bot vous demande de
-signer le CLA dans un commentaire. La pull request ne peut pas être fusionnée
-tant que vous n'avez pas signé. Si le bot n'apparaît pas, dites-le dans la pull
-request et le mainteneur vous enverra l'accord.
+**Comment l'accepter.** Lisez [CLA.md](../../CLA.md), puis publiez cette
+phrase (en anglais, telle quelle) en commentaire de votre première pull
+request :
+
+> I have read the Oxyn Individual Contributor License Agreement, version 1.0,
+> and I accept it for this pull request and all my future contributions.
+
+Si vous contribuez pour le compte d'un employeur, la section 4 du CLA
+s'applique : vous devez avoir son autorisation.
+
+**Comment c'est vérifié.** Il n'y a ni bot ni contrôle automatique : le
+contrôle `qualite` ne regarde pas le CLA. Le mainteneur lit votre commentaire
+et le vérifie, à la main, avant de fusionner une pull request de quelqu'un qui
+n'est pas le mainteneur. Sans lui, la pull request attend, quel que soit l'état
+de sa relecture. Votre commentaire reste dans la pull request comme trace de
+votre acceptation, et une pull request ultérieure n'en demande pas de nouveau,
+sauf si le CLA change de version.
 
 Le code copié d'un autre projet demande le même soin : dire d'où il vient et
 sous quelle licence (section 7 du CLA). Du code GPL venu d'un autre projet ne
 peut pas être accepté, même si les licences sont compatibles, parce que son
-titulaire du droit d'auteur n'a pas signé le CLA.
+titulaire du droit d'auteur n'a pas accepté le CLA.
 
 ## Avant d'ouvrir une pull request
 
