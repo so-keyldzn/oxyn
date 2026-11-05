@@ -5,8 +5,8 @@ every contribution needs: the license agreement, and the quality gate.
 
 ## The Contributor License Agreement
 
-Every external contribution needs a signed
-[Contributor License Agreement](CLA.md) before it can be merged. You sign it
+Every external contribution needs your acceptance of the
+[Contributor License Agreement](CLA.md) before it can be merged. You give it
 once, and it covers all your future contributions.
 
 **Why a CLA.** Oxyn is licensed under the GPL-3.0-or-later. The driver contract
@@ -21,15 +21,27 @@ change, and a single one could block it. The reasons are recorded in
 **What the CLA does not do.** You keep the copyright on your work. You remain
 free to use your contribution for anything else, under any license.
 
-**How to sign.** When you open a pull request, a bot asks you to sign the CLA
-in a comment. The pull request cannot be merged until you have signed. If the
-bot does not appear, say so in the pull request and the maintainer will send
-you the agreement.
+**How to accept it.** Read [CLA.md](CLA.md), then post this sentence as a
+comment on your first pull request:
+
+> I have read the Oxyn Individual Contributor License Agreement, version 1.0,
+> and I accept it for this pull request and all my future contributions.
+
+If you contribute on behalf of an employer, section 4 of the CLA applies: you
+must have their permission to do so.
+
+**How it is checked.** There is no bot and no automated check: the `qualite`
+check does not look at the CLA. The maintainer reads your comment and
+verifies it, by hand, before merging a pull request from someone who is not
+the maintainer. Without it, the pull request waits, whatever its review
+state. Your comment stays in the pull request as the record of your
+acceptance, and a later pull request of yours does not need a new one unless
+the CLA changes version.
 
 Code copied from another project needs the same care: say where it comes from
 and under which license (section 7 of the CLA). GPL code from another project
 cannot be accepted, even though the licenses are compatible, because its
-copyright holder has not signed the CLA.
+copyright holder has not accepted the CLA.
 
 ## Before you open a pull request
 

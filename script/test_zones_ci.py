@@ -227,5 +227,25 @@ class Servers(unittest.TestCase):
         self.assertFalse(ZONES.needs_servers(True, {"oxyn-query"}, self.SERVERS))
 
 
+class Embedding(unittest.TestCase):
+    EMBED = {"oxyn-embed"}
+
+    def test_the_makefile_list_is_read(self):
+        body = "X := 1\nEMBEDDING_PACKAGES := oxyn-embed  \nY := 2\n"
+        self.assertEqual(ZONES.embedding_packages(body), {"oxyn-embed"})
+        self.assertIsNone(ZONES.embedding_packages("X := 1\n"))
+
+    def test_the_repository_makefile_declares_oxyn_embed(self):
+        body = SCRIPT.parent.parent.joinpath("Makefile").read_text(encoding="utf-8")
+        self.assertEqual(ZONES.embedding_packages(body), {"oxyn-embed"})
+
+    def test_selection(self):
+        # A Burn or tokenizers bump edits Cargo.toml/Cargo.lock: all packages.
+        self.assertTrue(ZONES.needs_servers(True, None, self.EMBED))
+        self.assertTrue(ZONES.needs_servers(True, {"oxyn-embed", "oxyn-desktop"}, self.EMBED))
+        self.assertFalse(ZONES.needs_servers(True, {"oxyn-query"}, self.EMBED))
+        self.assertFalse(ZONES.needs_servers(False, None, self.EMBED))
+
+
 if __name__ == "__main__":
     unittest.main()

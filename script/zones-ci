@@ -19,7 +19,7 @@ the `paths` filter of `qualite.yml` does not start the workflow at all.
 It reads the checkout it is run from, as `git diff` does — the Cargo graph and
 the Makefile included —, so that it can be replayed on an older merge commit.
 
-Writes `rust=true|false`, `front=true|false`, `serveurs=true|false` and
+Writes `rust=true|false`, `front=true|false`, `serveurs=true|false`, `embedding=true|false` and
 `rust_packages=<names separated by spaces>` to `$GITHUB_OUTPUT` when the
 variable exists, and prints the details in every case. An empty
 `rust_packages` means the whole workspace: a lost or misread value falls back
@@ -70,6 +70,12 @@ FRONT_EMBEDDER = "oxyn-desktop"
 # `serveurs` job is skipped when the PR reaches none of them. Read from the
 # Makefile rather than copied: one list, in the target that uses it.
 SERVER_PACKAGES_PATTERN = re.compile(r"^SERVER_PACKAGES\s*:=\s*(.+?)\s*$", re.MULTILINE)
+
+# Same for `make test-embedding` and the `embedding` job (ADR-0056): the
+# reference-output test needs the 220 MB model, so a PR that reaches neither
+# `oxyn-embed` nor anything it depends on, nor a cross-cutting file (the Burn
+# and tokenizers pins live in `Cargo.toml` and `Cargo.lock`), skips it.
+EMBEDDING_PACKAGES_PATTERN = re.compile(r"^EMBEDDING_PACKAGES\s*:=\s*(.+?)\s*$", re.MULTILINE)
 
 
 def _matches(path_str: str, pattern: str) -> bool:
@@ -195,6 +201,11 @@ def server_packages(makefile: str) -> set[str] | None:
     return set(m.group(1).split()) if m else None
 
 
+def embedding_packages(makefile: str) -> set[str] | None:
+    m = EMBEDDING_PACKAGES_PATTERN.search(makefile)
+    return set(m.group(1).split()) if m else None
+
+
 def needs_servers(rust: bool, packages: set[str] | None, servers: set[str] | None) -> bool:
     if not rust:
         return False
@@ -239,6 +250,9 @@ def main(arguments: list[str]) -> int:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     servers = needs_servers("rust" in touched, packages, server_packages(makefile))
     print(f"Server suites: {'run' if servers else 'skipped'}")
+    # The same rule, over the packages of `make test-embedding`.
+    embedding = needs_servers("rust" in touched, packages, embedding_packages(makefile))
+    print(f"Embedding reference test: {'run' if embedding else 'skipped'}")
 
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
@@ -246,6 +260,7 @@ def main(arguments: list[str]) -> int:
             for zone in ("rust", "front"):
                 f.write(f"{zone}={'true' if zone in touched else 'false'}\n")
             f.write(f"serveurs={'true' if servers else 'false'}\n")
+            f.write(f"embedding={'true' if embedding else 'false'}\n")
             f.write(f"rust_packages={listed}\n")
     return 0
 

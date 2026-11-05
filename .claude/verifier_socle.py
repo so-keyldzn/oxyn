@@ -371,9 +371,17 @@ def _manifests() -> list[Path]:
 def _dependencies(manifest: dict) -> list[tuple[str, str, object]]:
     """(section, name, declaration) for every declared dependency."""
     found_items = []
-    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
-        for item_name, declaration in manifest.get(section, {}).items():
-            found_items.append((section, item_name, declaration))
+    # Cargo accepts the three tables at the top and again under each platform
+    # (`[target.'cfg(unix)'.dependencies]`). A check that stops at the top lets
+    # `tauri` or a private version through as soon as it is written there.
+    scopes = [("", manifest)]
+    for platform, tables in manifest.get("target", {}).items():
+        if isinstance(tables, dict):
+            scopes.append((f"target.{platform}.", tables))
+    for prefix, tables in scopes:
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for item_name, declaration in tables.get(section, {}).items():
+                found_items.append((prefix + section, item_name, declaration))
     return found_items
 
 

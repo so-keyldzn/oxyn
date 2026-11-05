@@ -37,6 +37,7 @@ from verifier_socle import (  # noqa: E402
     contract_pin_errors,
     fingerprint,
     aggregate_errors,
+    check_dependency_graph,
     check_readme_make_targets,
     dependency_tool_errors,
     readme_make_errors,
@@ -388,6 +389,53 @@ def readme_failures() -> list[str]:
     return failures
 
 
+MEMBER = """[package]
+name = "{name}"
+description = "x"
+
+[lints]
+workspace = true
+
+{body}
+"""
+
+TARGET_CASES = [
+    # (crate directory, manifest body, fragment every refusal must contain or None)
+    ("oxyn-core", "[target.'cfg(unix)'.dependencies]\ntauri = \"2\"\n", "I-08"),
+    ("oxyn-core", "[target.'cfg(unix)'.dev-dependencies]\ngpui = { workspace = true }\n", "`gpui`"),
+    ("oxyn-core", "[target.'cfg(windows)'.build-dependencies]\nsome-crate = \"1.2\"\n", "does not inherit"),
+    ("oxyn-core", "[target.'cfg(unix)'.dependencies]\nrustix.workspace = true\n", None),
+    ("oxyn-desktop", "[target.'cfg(unix)'.dependencies]\ntauri.workspace = true\n", None),
+]
+
+
+def target_table_failures() -> list[str]:
+    """Platform tables are scanned like the top-level ones (issue #314)."""
+    import verifier_socle
+
+    failures = []
+    original = verifier_socle.REPO_ROOT
+    try:
+        for directory, body, fragment in TARGET_CASES:
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+                member = root / "crates" / directory
+                member.mkdir(parents=True)
+                (member / "Cargo.toml").write_text(
+                    MEMBER.format(name=directory, body=body), encoding="utf-8"
+                )
+                verifier_socle.REPO_ROOT = root
+                problems = check_dependency_graph()
+                if fragment is None and problems:
+                    failures.append(f"valid target table refused: {problems}")
+                if fragment is not None and not any(fragment in p and "target." in p for p in problems):
+                    failures.append(f"target table not refused ({fragment}): {problems}")
+    finally:
+        verifier_socle.REPO_ROOT = original
+    return failures
+
+
 def main() -> int:
     failures = [
         f"_slug({heading!r}) = {_slug(heading)!r}, expected {expected!r}"
@@ -415,10 +463,11 @@ def main() -> int:
     failures += readme_failures()
     failures += server_suite_failures()
     failures += contract_pin_failures()
+    failures += target_table_failures()
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 4 + 3 + 16 + 4
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 4 + 3 + 16 + 4 + len(TARGET_CASES)
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

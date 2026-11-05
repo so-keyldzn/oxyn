@@ -138,6 +138,18 @@ fixed multilingual sentences with reference values computed by the upstream
 model outside Oxyn, so that a regeneration, a Burn bump or a forgotten
 constant fails the build instead of degrading every ranking.
 
+The test needs the real model, so it is `#[ignore]`d and `make qualite` does not
+run it with the ordinary suites: `make test-embedding` does, and the
+`embedding` job of CI calls that target on every pull request that reaches
+`oxyn-embed` or a cross-cutting file — the Burn and `tokenizers` pins live in
+`Cargo.toml` and `Cargo.lock` — and on every push to `main`. The job restores
+the converted model from `actions/cache` (keyed on `pinned.rs`) or, on a miss,
+downloads the pinned files and checks their SHA-256 before converting them.
+Where the model is not available — a local `make qualite` without
+`OXYN_EMBED_MODEL_ROOT` — the target prints that the test did **not** run, as
+`test-serveurs` does for the server suites, and CI refuses to skip it (amended
+2026-11-05).
+
 **A lint exemption scoped to one module.** The generated code holds 69
 `unwrap()` and some 250 `as` conversions (counted 2026-10-07). They depend on
 tensor shapes, never on values coming from a server or a file:
@@ -488,7 +500,7 @@ absent.
   converts again. The four exact pins exist so this never arrives through
   `cargo update`.
 * **−** **Forgetting a residual constant gives wrong vectors, not an error.**
-  Only the reference-output test catches it; a regeneration that updates that
+  Only the reference-output test catches it, in the `embedding` job of CI; a regeneration that updates that
   test's expected values instead of investigating defeats it.
 * **−** A module of generated code exempt from the workspace's lints: 69
   `unwrap()` that nothing reviews line by line, held only by the shape

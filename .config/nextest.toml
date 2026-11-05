@@ -88,3 +88,10 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 [[profile.default.overrides]]
 filter = 'package(oxyn-driver-duckdb)'
 slow-timeout = { period = "300s", terminate-after = 1 }
+
+# The ignored embedding tests (`make test-embedding`) load a 390 MB model and
+# run a 97 M-parameter graph on a CPU runner in the dev profile: 18 s on a
+# laptop (2026-11-05), but the 60 s default leaves no margin on a shared runner.
+[[profile.default.overrides]]
+filter = 'package(oxyn-embed)'
+slow-timeout = { period = "300s", terminate-after = 1 }
