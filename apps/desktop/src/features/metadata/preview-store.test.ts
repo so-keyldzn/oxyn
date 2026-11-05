@@ -136,10 +136,7 @@ describe("preview store", () => {
     previews.attach("k", target)
     previews.read("k", PLAIN_SHAPE)
     // 3 ms of SQL, after 20 s behind another read on the shared session.
-    await answer(
-      "cmd1",
-      executed("r1", 3, { elapsedMs: 3, latencyMs: 20_003 })
-    )
+    await answer("cmd1", executed("r1", 3, { elapsedMs: 3, latencyMs: 20_003 }))
     expect(previews.store.state.k?.state).toMatchObject({
       status: "populated",
       elapsedMs: 20_003,
