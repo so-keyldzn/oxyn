@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="7a93cda32e78" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="234124eebda2" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -731,14 +731,15 @@ connexion visée ([I-01](../CLAUDE.md#i-01)). Aucun autre chemin n'écrit
   qui nomme la connexion ([I-02](../CLAUDE.md#i-02),
   [SECURITY](SECURITY.md#marquage-des-connexions)), comme toute écriture sur
   elle ; pour un `Actor::Agent`, c'est un refus ;
-* **abaisser le niveau d'une connexion `production`** — vers `Sampled`, ou de
-  `Local` vers `Metadata` — est une décision critique : elle ouvre la sortie de
-  la structure ou de lignes d'une base client. Elle est destinée au **dialogue
-  natif de l'hôte**, hors de la webview, décidé le 2026-09-24 pour les
-  confirmations critiques. L'ADR qui l'écrit n'existe pas encore : d'ici là,
-  c'est la confirmation de la webview décrite par
-  [SECURITY](SECURITY.md#marquage-des-connexions) qui s'applique, et elle
-  seule ;
+* **tout changement du niveau de confidentialité — ou de l'environnement —
+  d'une connexion** est une décision critique, abaisser le niveau d'une base
+  client compris : il ouvre la sortie de la structure ou de lignes. Il se confirme
+  dans le **dialogue natif de l'hôte**, hors de la webview, dans les deux sens et
+  quel que soit l'environnement de départ (famille 3 de
+  [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
+  Le `Backend` demande avant même que la modification soit envoyée ; le seul
+  bouton de la webview ne change jamais un niveau.
+  [SECURITY](SECURITY.md#marquage-des-connexions) porte la même règle ;
 * **le changement vaut dès la question suivante.** Le niveau est relu par le
   backend à chaque question, jamais pris à la session ; un agent externe
   gardé en vie, lancé sous l'ancien niveau, est relâché à l'enregistrement et

@@ -4,7 +4,7 @@ argument-hint: "<ce qu'il faut mesurer>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
-<!-- oxyn-translation source=".claude/commands/benchmark.md" sha256="bc51c077485e" -->
+<!-- oxyn-translation source=".claude/commands/benchmark.md" sha256="c08ec6b63825" -->
 
 > Traduction française de [.claude/commands/benchmark.md](../../../../.claude/commands/benchmark.md). **La version anglaise fait foi.**
 
@@ -67,8 +67,13 @@ ne pourra la remettre en cause plus tard.
 
 ## Rappels
 
-- les budgets actuels sont **décidés**, pas mesurés : aucune campagne n'a encore
-  eu lieu. La première doit les confirmer ou les amender par un ADR
-  (`docs/PERFORMANCE.md` § statut des chiffres) ;
-- `criterion` est en `0.8.2` au 2026-09-05 — vérifier avec
-  [`/versions`](versions.md) avant de l'ajouter.
+- l'état de mesure de chaque budget — quelles campagnes ont eu lieu, dans quelles
+  conditions, ce qui reste non mesuré — est dans le paragraphe d'ouverture de
+  [PERFORMANCE](../../../../docs/PERFORMANCE.md) et dans ses sections de campagne
+  datées. Les lire avant de mesurer, et ajouter une nouvelle campagne à côté
+  d'elles plutôt que de l'écrire comme la première ; un budget qu'une campagne
+  contredit s'amende par un ADR ;
+- `criterion` est déjà une dev-dependency du workspace ; sa version et la date de
+  lecture sont dans
+  [RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md#benchmarks--check-of-2026-09-10).
+  Un changement de version passe par [`/versions`](versions.md).

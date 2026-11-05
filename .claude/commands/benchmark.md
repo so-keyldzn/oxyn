@@ -62,8 +62,12 @@ will be able to challenge it later.
 
 ## Reminders
 
-- the current budgets are **decided**, not measured: no campaign has taken
-  place yet. The first one must confirm them or amend them by an ADR
-  (`docs/PERFORMANCE.md` § status of the numbers);
-- `criterion` is at `0.8.2` as of 2026-09-05 — check with
-  [`/versions`](versions.md) before adding it.
+- the measurement status of every budget — which campaigns took place, under
+  what conditions, what is still unmeasured — is in the opening paragraph of
+  [PERFORMANCE](../../docs/PERFORMANCE.md) and in its dated campaign sections.
+  Read them before measuring, and add a new campaign next to them rather than
+  writing it up as the first; a budget a campaign contradicts is amended by an
+  ADR;
+- `criterion` is already a workspace dev-dependency; its version and the date it
+  was read are in [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#benchmarks--check-of-2026-09-10).
+  A bump goes through [`/versions`](versions.md).
