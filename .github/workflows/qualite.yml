@@ -237,6 +237,21 @@ jobs:
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Free disk space on the Linux runner
+        # The DuckDB cancellation suite writes a 3 GB database file on top of a
+        # cold Cargo build, and the hosted Ubuntu disk filled up under it twice
+        # (`No space left on device` in
+        # `streaming_three_gigabytes_stays_within_a_memory_bound`: the first
+        # run of #356, and #365 on 2026-11-05). The directories removed are
+        # preinstalled toolchains this workflow never uses. `df` before and
+        # after records what the step really frees.
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Install Tauri's system libraries
         # List from the Tauri documentation (Debian prerequisites), with no
         # addition: `keyring` goes through zbus, pure Rust, and needs no libdbus.
