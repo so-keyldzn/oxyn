@@ -18,6 +18,12 @@ export interface PreviewEntry {
   serverCancel: boolean
   /** The command reading now, or `null`. */
   running: string | null
+  /**
+   * The read in flight started by itself — first visit, or a change since —
+   * not by a gesture. Only such a read is dropped when the view hides: the
+   * user asked for the others.
+   */
+  automatic: boolean
   cancelling: boolean
   startedAt: number | null
   state: ResultState
@@ -200,6 +206,7 @@ export function createPreviewStore(effects: PreviewEffects) {
           [key]: {
             ...target,
             running: null,
+            automatic: false,
             cancelling: false,
             startedAt: null,
             state: { status: "initial" },
@@ -263,8 +270,34 @@ export function createPreviewStore(effects: PreviewEffects) {
       evict()
     },
 
-    /** Reads `shape`, replacing — and cancelling — any read in flight. */
-    read(key: string, shape: PreviewShape) {
+    /**
+     * The view went out of sight (another tab, a hidden workspace) while
+     * mounted. A read it started by itself is cancelled — hidden, it would
+     * keep the shared catalog session busy for the next object — and the
+     * entry goes back to `initial`, so showing it again reads once more.
+     * Its late answer is released on arrival, never shown. A read the user
+     * asked for, and every loaded result, stay as they are.
+     */
+    pause(key: string) {
+      const entry = store.state[key]
+      if (!entry?.running || !entry.automatic) return
+      effects.cancel(entry.running)
+      update(key, (current) => ({
+        ...current,
+        running: null,
+        automatic: false,
+        cancelling: false,
+        startedAt: null,
+        requested: current.applied,
+        state: { status: "initial" },
+      }))
+    },
+
+    /**
+     * Reads `shape`, replacing — and cancelling — any read in flight.
+     * `automatic` marks a read nobody asked for by a gesture.
+     */
+    read(key: string, shape: PreviewShape, automatic = false) {
       const entry = store.state[key]
       if (!entry) return
       if (entry.running) effects.cancel(entry.running)
@@ -275,6 +308,7 @@ export function createPreviewStore(effects: PreviewEffects) {
       update(key, (current) => ({
         ...current,
         running: id,
+        automatic,
         cancelling: false,
         startedAt: effects.now(),
         requested: shape,

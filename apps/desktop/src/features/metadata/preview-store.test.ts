@@ -336,3 +336,60 @@ describe("preview store", () => {
     })
   })
 })
+
+describe("an automatic read that goes out of sight", () => {
+  it("is cancelled, and its late answer is released, never shown", async () => {
+    const { previews, effects, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    previews.pause("k")
+
+    expect(effects.cancel).toHaveBeenCalledWith("cmd1")
+    expect(previews.store.state.k).toMatchObject({
+      running: null,
+      state: { status: "initial" },
+    })
+
+    // The server answered anyway, after the cancel: a timeout, then rows.
+    await answer("cmd1", { type: "denied", reason: "timeout30s" })
+    expect(previews.store.state.k?.state).toEqual({ status: "initial" })
+    await answer("cmd1", executed("late"))
+    expect(effects.forgetResult).toHaveBeenCalledWith("late")
+    expect(previews.store.state.k?.state).toEqual({ status: "initial" })
+  })
+
+  it("reads again when asked to, and shows only that second answer", async () => {
+    const { previews, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    previews.pause("k")
+    previews.read("k", PLAIN_SHAPE, true)
+
+    await answer("cmd1", executed("stale"))
+    expect(previews.store.state.k?.state.status).toBe("running")
+    await answer("cmd2", executed("fresh"))
+    expect(previews.store.state.k?.state).toMatchObject({ result: "fresh" })
+  })
+
+  it("leaves a loaded result cached", async () => {
+    const { previews, effects, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    await answer("cmd1", executed("r1"))
+    previews.pause("k")
+
+    expect(effects.cancel).not.toHaveBeenCalled()
+    expect(effects.forgetResult).not.toHaveBeenCalled()
+    expect(previews.store.state.k?.state).toMatchObject({ result: "r1" })
+  })
+
+  it("does not touch a read the user asked for", () => {
+    const { previews, effects } = harness()
+    previews.attach("k", target)
+    previews.read("k", { ...PLAIN_SHAPE, predicate: "id > 3" })
+    previews.pause("k")
+
+    expect(effects.cancel).not.toHaveBeenCalled()
+    expect(previews.store.state.k?.running).toBe("cmd1")
+  })
+})
