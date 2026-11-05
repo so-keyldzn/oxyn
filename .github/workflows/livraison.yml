@@ -204,6 +204,8 @@ jobs:
           archive="cargo-about-0.9.2-$target.tar.gz"
           curl -LsSf -o "$RUNNER_TEMP/$archive" "https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/$archive"
           echo "$checksum  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          # A fresh macOS runner has no ~/.cargo/bin yet: tar does not create it.
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
           tar xzf "$RUNNER_TEMP/$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$target/cargo-about"
 
       - name: Build Linux packages in release mode
