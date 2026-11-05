@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="bd9b5460c4af" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b1ba8505e64f" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -443,6 +443,14 @@ features par défaut.
 
 ## Ressources de l'interface Figma
 
+> **Historique (ère GPUI) — rien de cette section n'est plus livré.** La crate
+> `oxyn-ui`, `assets/ui` et `assets/fonts` ont été retirés les 2026-09-18 et
+> 2026-09-25 avec l'interface GPUI
+> ([ADR-0029](adr/0029-interface-tauri-shadcn.md)) ; les fichiers sont lisibles au
+> commit `8a1b7ff`. L'application prend désormais ses icônes et ses polices dans
+> des paquets npm, dont les licences sont consignées dans
+> [Paquets d'icônes et de polices](#paquets-dicônes-et-de-polices--vérifié-le-2026-11-05).
+
 Sources vérifiées le **2026-09-07** lors de l'intégration GPUI :
 
 | Ressource | Source figée | Usage |
@@ -572,9 +580,10 @@ serveur MCP Figma Dev Mode local (`get_metadata`, `get_variable_defs`), pas
 recopiés d'une capture. Les couleurs et les icônes ont leur propre provenance,
 plus détaillée, dans `assets/ui/provenance.json`, retiré du dépôt, lisible au commit `8a1b7ff`.
 
-Les dimensions, espacements et rayons sont publiés dans
+Les dimensions, espacements et rayons étaient publiés dans
 `crates/oxyn-ui/src/theme.rs` — `Metrics`, `Spacing`, `Radii` — où chaque champ
-cite son nœud. **La typographie ne l'est que partiellement** : `Typography` ne
+citait son nœud ; cette crate a été retirée le 2026-09-18, et les valeurs vivent
+désormais dans les jetons de l'interface (`apps/desktop/src/styles.css`). **La typographie ne l'est que partiellement** : `Typography` ne
 porte ni graisses ni styles nommés, et deux de ses valeurs restent sans source —
 voir la table des manques ci-dessous.
 
@@ -603,10 +612,16 @@ voir la table des manques ci-dessous.
 > pour une même mesure, dont une fausse et l'autre invisible au thème. La vue
 > lit désormais `Metrics::toolbar_height`.
 
-### Les binaires embarqués et leurs licences
+### Les binaires embarqués et leurs licences (ère GPUI, retirés)
 
-Ces fichiers sont liés au binaire par `include_bytes!` dans
-`crates/oxyn-ui/src/icons.rs`. Ils portent un commit amont exact, comme une
+> **Historique.** Rien ci-dessous ne décrit l'artefact livré : les fichiers ont
+> été retirés avec l'interface GPUI (voir la note sous *Ressources de l'interface
+> Figma*), et aucune release ne les a jamais liés. La question de cette section
+> est close par ce retrait ; la posture actuelle est dans
+> [Paquets d'icônes et de polices](#paquets-dicônes-et-de-polices--vérifié-le-2026-11-05).
+
+Ces fichiers étaient liés au binaire par `include_bytes!` dans
+`crates/oxyn-ui/src/icons.rs`. Ils portaient un commit amont exact, comme une
 dépendance de code.
 
 | Fait | Valeur | Source | Vérifié le |
@@ -616,10 +631,24 @@ dépendance de code.
 | Icônes | Hugeicons Stroke Rounded, 12 glyphes, commit `f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6` | [hugeicons/hugeicons-static](https://github.com/hugeicons/hugeicons-static) ; SHA-256 dans `assets/ui/provenance.json`, retiré du dépôt, lisible au commit `8a1b7ff` | 2026-09-07 |
 | Licence des icônes | **Aucune licence MIT attribuée** ; le README amont autorise l'usage tel quel, sans mention d'un droit de redistribution | `assets/ui/HUGEICONS-UPSTREAM-README.txt`, retiré du dépôt, lisible au commit `8a1b7ff` | 2026-09-07 |
 
-> **À trancher avant la première publication de binaire.** Oxyn redistribue ces
-> douze glyphes en les liant dans l'exécutable. Tant qu'aucune version n'est
-> publiée, la question ne se pose pas ; elle se posera d'un coup le jour de la
-> première release, et c'est une question de droit, pas de code.
+> **Close le 2026-09-18, par retrait.** La question était de savoir si Oxyn
+> pouvait redistribuer ces douze glyphes en les liant dans l'exécutable. Ils ont
+> été retirés avant toute release ; l'application dépend désormais des paquets MIT
+> consignés ci-après.
+
+### Paquets d'icônes et de polices — vérifié le 2026-11-05
+
+Ce dont l'interface dépend aujourd'hui (`apps/desktop/package.json`). La licence
+est le champ `license` de chaque version sur le registre npm, lu le **2026-11-05**.
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Icônes | `@hugeicons/react` 1.1.10 et `@hugeicons/core-free-icons` 4.3.3, licence **MIT** | registre npm, `npm view <paquet>@<version> license` | 2026-11-05 |
+| Polices | `@fontsource-variable/geist` 5.3.0 et `@fontsource-variable/geist-mono` 5.3.0, licence **OFL-1.1** | idem | 2026-11-05 |
+
+`script/licences-tierces` vérifie chaque dépendance npm livrée contre les licences
+que `deny.toml` accepte : un changement de licence lors d'une montée de version
+fait donc échouer la porte.
 
 ### Ce qui n'a pas pu être lu, et pourquoi
 
