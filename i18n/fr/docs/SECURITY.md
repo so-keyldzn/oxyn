@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="3d9e7dcc1148" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="488f46f5a743" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -47,9 +47,16 @@ en ajout seul ou un enregistrement d'appel d'outil de conversation, Oxyn
 remplace lexicalement les littéraux de mot de passe reconnus par
 `'<redacted>'` ; les requêtes enregistrées incluses dans le contexte IA reçoivent
 le même caviardage avant leur troncature ou leur rendu. Le driver reçoit toujours
-le texte d'origine. Cela couvre les clauses explicites de mot de passe, pas les
+le texte d'origine. Les formes reconnues sont `PASSWORD` / `IDENTIFIED BY` / `IDENTIFIED WITH … BY`
+des rôles et utilisateurs, `SET PASSWORD`, `CREATE`/`ALTER SUBSCRIPTION …
+CONNECTION '…'` (PostgreSQL, le littéral conninfo entier), `PASSWORD '…'` dans
+les `OPTIONS` de `CREATE`/`ALTER SERVER` (MySQL), et `SOURCE_PASSWORD` /
+`MASTER_PASSWORD` de `CHANGE REPLICATION SOURCE TO` / `CHANGE MASTER TO`
+(MySQL). Cela couvre les clauses explicites de mot de passe, pas les
 secrets arbitraires dans les commentaires, le SQL dynamique, les brouillons de
-l'éditeur ou le texte libre des conversations. Les lignes déjà présentes dans
+l'éditeur ou le texte libre des conversations ; les chaînes de connexion passées
+en argument de fonction (`dblink`, assistants `postgres_fdw`) et les
+identifiants de `START REPLICA` restent hors de la grammaire. Les lignes déjà présentes dans
 `audit_journal` ne sont pas réécrites, car le journal reste strictement en ajout
 seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
 renouveler le mot de passe et protéger ou remplacer les fichiers de workspace

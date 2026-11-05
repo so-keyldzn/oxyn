@@ -184,6 +184,20 @@ impl ContextBuilder<'_> {
                         resolved.ignored += 1;
                         continue;
                     };
+                    // The user points at a key, but its name stays home below
+                    // the tier that carries values: the line says so and
+                    // names nothing.
+                    if super::key_patterns::withholds_name(self.tier, kind) {
+                        let line = format!(
+                            "mentioned by the user: a {} whose name is withheld under privacy tier `{}`\n",
+                            kind.as_str(),
+                            self.tier
+                        );
+                        if !resolved.lines.contains(&line) {
+                            resolved.lines.push(line);
+                        }
+                        continue;
+                    }
                     let line = match field {
                         None => format!(
                             "mentioned by the user: {} {}\n",

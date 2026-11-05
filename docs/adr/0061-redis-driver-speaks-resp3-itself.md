@@ -259,15 +259,15 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
 * **−** A capture is a window, not a subscription that lives on: a message
   published after it closes is not seen. `MONITOR` slows a busy server for
   as long as the window lasts.
-* **−** **Known limit, open decision.** The catalog of decision 11 lists
-  *exact* keys, and the AI context writes every relation it keeps by its name,
-  whatever its kind ([AI-PROVIDERS](../AI-PROVIDERS.md)): under a tier that
-  carries names, the exact names of the keys selected for a question reach the
-  prompt, and a key name can embed data itself. This ADR does not decide
-  whether to keep sending them or to send key patterns instead: that choice is
-  the maintainer's, and issue
-  [#339](https://github.com/so-keyldzn/oxyn/issues/339) (opened on 2026-10-25)
-  poses it. Until it is taken, AI-PROVIDERS states what goes out.
+* **−** **Key names are patterns in an AI prompt.** The catalog of decision 11
+  lists *exact* keys, and a key name can embed data itself (`user:<email>`).
+  Decided for issue [#339](https://github.com/so-keyldzn/oxyn/issues/339): under
+  a tier that does not carry row values (`Local`, `Metadata`), the AI context
+  gateway sends no key name. It sends the prefix up to the first separator with
+  a count (`session:* — 12 keys`), and counts the keys whose prefix would read
+  as an identifier; exact names go out only under `Sampled`
+  ([AI-PROVIDERS](../AI-PROVIDERS.md)). The driver is not changed, and a model
+  that needs a precise key asks the user for it.
 
 **Exit cost:** moderate. Replacing the hand-written RESP layer with a library
 rewrites `resp.rs`, `connection.rs` and the cursor's reading loop, but not the

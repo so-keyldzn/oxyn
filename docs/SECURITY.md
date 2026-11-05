@@ -42,8 +42,15 @@ query history, the append-only audit journal, or a conversation tool-call
 record, Oxyn lexically replaces recognized password literals with
 `'<redacted>'`; saved queries included in AI context receive the same redaction
 before clipping or rendering. The driver still receives the original text.
-This covers explicit password clauses, not arbitrary secrets in comments,
-dynamic SQL, editor drafts, or free-form conversation text. Rows already present in
+The recognized forms are `PASSWORD` / `IDENTIFIED BY` / `IDENTIFIED WITH … BY`
+of roles and users, `SET PASSWORD`, `CREATE`/`ALTER SUBSCRIPTION … CONNECTION '…'`
+(PostgreSQL, the whole conninfo literal), `PASSWORD '…'` in the `OPTIONS` of
+`CREATE`/`ALTER SERVER` (MySQL), and `SOURCE_PASSWORD` / `MASTER_PASSWORD` of
+`CHANGE REPLICATION SOURCE TO` / `CHANGE MASTER TO` (MySQL). This covers
+explicit password clauses, not arbitrary secrets in comments, dynamic SQL,
+editor drafts, or free-form conversation text; connection strings passed as
+function arguments (`dblink`, `postgres_fdw` helpers) and the credentials of
+`START REPLICA` stay outside the grammar. Rows already present in
 `audit_journal` are not rewritten because the journal remains strictly
 append-only. A user who ran such SQL before this protection must rotate the
 credential and protect or replace affected workspace files

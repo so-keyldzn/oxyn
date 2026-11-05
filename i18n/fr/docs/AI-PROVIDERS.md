@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="234124eebda2" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="804284d8bba6" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -161,18 +161,26 @@ démarrer l'agent peut suffire à lui faire contacter son service.
 > un label de graphe s'y décrivent comme une table, dans le langage de requête de
 > la connexion ([ADR-0030 § 4 bis](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-la-structure-de-la-base--un-outil-pour-toutes-les-destinations)).
 >
-> **Une clé Redis part sous son nom exact.** Le catalogue Redis liste des clés
-> exactes — des relations de genre `key_pattern`, « une clé exacte est le motif
-> qui ne correspond qu'à elle-même » — au plus `TREE_KEYS` (1 000) par base, à
-> partir d'un `SCAN` borné (`drivers/oxyn-driver-redis/src/catalog.rs`), et
-> `ContextBuilder::render_relation` écrit chaque relation qu'il retient par son
-> genre et son nom, sans filtre sur le genre. Sous un niveau qui porte les noms
-> ([`Metadata` n'est pas « rien ne sort »](#metadata-par-défaut-nest-pas--rien-ne-sort-)),
-> les noms exacts des clés retenues pour la question atteignent donc l'invite, et
-> un nom de clé peut embarquer lui-même une donnée. Remplacer ces noms par des
-> motifs n'est **pas décidé** : voir l'issue
-> [#339](https://github.com/so-keyldzn/oxyn/issues/339), ouverte le 2026-10-25, et
-> l'[ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
+> **Un nom de clé Redis ne part jamais sous le niveau qui porte des valeurs.** Le
+> catalogue Redis liste des clés exactes — des relations de genre `key_pattern`,
+> « une clé exacte est le motif qui ne correspond qu'à elle-même » — au plus
+> `TREE_KEYS` (1 000) par base, et un nom de clé embarque souvent une donnée
+> (`user:<email>`, `session:<token>`). Sous `Local` et `Metadata`,
+> `ContextBuilder::build` n'écrit donc aucun nom de clé, que la clé soit
+> retenue par la question, mentionnée avec `@` ou laissée hors budget. Il écrit
+> des **motifs** : le préfixe jusqu'au premier séparateur (`:`, `/`, `|`, `.`,
+> `#`), suivi de `*`, avec le nombre de clés qui le partagent
+> (`session:* — 12 keys`). Un préfixe n'est envoyé que s'il se lit comme un
+> espace de noms — au plus 32 caractères de lettres, chiffres, `_` et `-`,
+> commençant par une lettre, avec au plus quatre chiffres, partagé par au moins
+> deux clés ; toute autre clé est seulement comptée (« N other keys »). Une clé
+> mentionnée est accusée sans son nom. Les noms exacts ne partent que sous
+> `Sampled`, le niveau qui porte déjà des valeurs. Le driver ne change pas : il
+> liste des clés, comme son contrat de catalogue le dit, et la porte filtre
+> ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md), décision de l'issue
+> [#339](https://github.com/so-keyldzn/oxyn/issues/339)). Qui veut que le modèle
+> voie un nom de clé précis relève le niveau de la connexion ou tape le nom dans
+> la question.
 
 > **Ce qu'Oxyn ne peut pas promettre ici**, et qu'il ne promet donc pas : ce que
 > l'agent fait de ce qu'il reçoit. La facturation, la rétention et le traitement

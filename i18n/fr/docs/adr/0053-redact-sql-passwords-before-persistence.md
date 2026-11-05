@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0053-redact-sql-passwords-before-persistence.md" sha256="3e487fd71024" -->
+<!-- oxyn-translation source="docs/adr/0053-redact-sql-passwords-before-persistence.md" sha256="dc7d96f2f99f" -->
 
 # ADR-0053 — Caviarder les littéraux de mot de passe SQL avant la persistance
 
@@ -26,6 +26,16 @@ journal et détruirait après coup les octets historiques exacts.
 sensible au dialecte pour remplacer par `'<redacted>'` le littéral chaîne des
 clauses `PASSWORD`, `IDENTIFIED BY` et `IDENTIFIED WITH … BY`. Tous les autres
 octets sont préservés, y compris la mise en forme et les commentaires.
+
+Trois formes de secret de connexion de l'administration courante sont aussi
+reconnues, dans les lectures PostgreSQL, MySQL et l'union ANSI : le littéral
+`CONNECTION '…'` de `CREATE`/`ALTER SUBSCRIPTION` (caviardé en entier : un
+conninfo peut porter `password=` sous plusieurs graphies, et garder l'hôte
+exigerait un analyseur de conninfo), `PASSWORD '…'` dans les `OPTIONS` de
+`CREATE`/`ALTER SERVER`, et `SOURCE_PASSWORD`/`MASTER_PASSWORD = '…'` de
+`CHANGE REPLICATION SOURCE TO` et `CHANGE MASTER TO` (issue #303). Les chaînes
+de connexion passées en argument de fonction (`dblink`, assistants
+`postgres_fdw`) et `START REPLICA … PASSWORD` restent hors de la grammaire.
 
 Le dialecte MySQL couvre aussi les modificateurs d'utilisateur MariaDB,
 l'authentification dans `GRANT` et les chaînes d'authentification par plugin.

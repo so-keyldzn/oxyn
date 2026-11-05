@@ -16,6 +16,15 @@ enum StatementKind {
     CreateOrAlter,
     RoleOrUser,
     Set,
+    /// `CREATE`/`ALTER SUBSCRIPTION`: the `CONNECTION` conninfo carries a password.
+    Subscription,
+    /// `CREATE`/`ALTER SERVER`: an `OPTIONS (PASSWORD '…')` entry.
+    Server,
+    /// `CHANGE` seen first in a statement; `REPLICATION` or `MASTER` makes it
+    /// [`Self::Replication`].
+    Change,
+    /// MySQL `CHANGE REPLICATION SOURCE TO` / `CHANGE MASTER TO`.
+    Replication,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -32,7 +41,12 @@ enum SecretClause {
 ///
 /// PostgreSQL `CREATE`/`ALTER ROLE` and `USER`, MySQL `CREATE`/`ALTER USER`,
 /// `IDENTIFIED WITH … BY`, and `SET PASSWORD` are recognized, along with MariaDB
-/// user modifiers and `GRANT` authentication. Text in ordinary comments,
+/// user modifiers and `GRANT` authentication. The connection secrets of routine
+/// administration are recognized too: the `CONNECTION '…'` conninfo of
+/// PostgreSQL `CREATE`/`ALTER SUBSCRIPTION` (redacted whole, since a conninfo
+/// can carry `password=` in several spellings), `PASSWORD '…'` in the `OPTIONS`
+/// of `CREATE`/`ALTER SERVER`, and `SOURCE_PASSWORD`/`MASTER_PASSWORD = '…'` of
+/// MySQL `CHANGE REPLICATION SOURCE TO` / `CHANGE MASTER TO`. Text in ordinary comments,
 /// quoted identifiers, and unrelated string literals is left unchanged. An
 /// unterminated password literal is redacted through the end of the text.
 /// ANSI (an unspecified dialect) conservatively combines PostgreSQL and MySQL
@@ -130,6 +144,7 @@ fn collect_with_profile(
     let mut kind = StatementKind::Other;
     let mut clause = SecretClause::None;
     let mut password_clause = false;
+    let mut first_word = true;
     let visible = if dialect == SqlDialect::MySql {
         executable_sql(statement, profile)
     } else {
@@ -141,6 +156,7 @@ fn collect_with_profile(
             kind = StatementKind::Other;
             clause = SecretClause::None;
             password_clause = false;
+            first_word = true;
         }
         Tok::Comment | Tok::UnreadableComment => {}
         Tok::Word => {
@@ -154,6 +170,18 @@ fn collect_with_profile(
                     StatementKind::CreateOrAlter
                 } else if word.eq_ignore_ascii_case("ROLE") || word.eq_ignore_ascii_case("USER") {
                     StatementKind::RoleOrUser
+                } else if word.eq_ignore_ascii_case("SUBSCRIPTION") {
+                    StatementKind::Subscription
+                } else if word.eq_ignore_ascii_case("SERVER") {
+                    StatementKind::Server
+                } else {
+                    StatementKind::Other
+                }
+            } else if first_word && word.eq_ignore_ascii_case("CHANGE") {
+                StatementKind::Change
+            } else if matches!(kind, StatementKind::Change) {
+                if word.eq_ignore_ascii_case("REPLICATION") || word.eq_ignore_ascii_case("MASTER") {
+                    StatementKind::Replication
                 } else {
                     StatementKind::Other
                 }
@@ -165,7 +193,25 @@ fn collect_with_profile(
                 kind
             };
 
+            first_word = false;
+
             clause = match clause {
+                _ if matches!(kind, StatementKind::Subscription)
+                    && word.eq_ignore_ascii_case("CONNECTION") =>
+                {
+                    SecretClause::AwaitingLiteral
+                }
+                _ if matches!(kind, StatementKind::Server)
+                    && word.eq_ignore_ascii_case("PASSWORD") =>
+                {
+                    SecretClause::AwaitingLiteral
+                }
+                _ if matches!(kind, StatementKind::Replication)
+                    && (word.eq_ignore_ascii_case("SOURCE_PASSWORD")
+                        || word.eq_ignore_ascii_case("MASTER_PASSWORD")) =>
+                {
+                    SecretClause::AwaitingLiteral
+                }
                 SecretClause::Identified if word.eq_ignore_ascii_case("BY") => {
                     SecretClause::AwaitingLiteral
                 }
@@ -326,6 +372,46 @@ mod tests {
     #[case(SqlDialect::Postgres, "ALTER ROLE app PASSWORD 'witness-secret")]
     #[case(SqlDialect::Postgres, "ALTER ROLE app PASSWORD U&'witness-secret'")]
     #[case(SqlDialect::Ansi, "Executed: ALTER ROLE app PASSWORD 'witness-secret'")]
+    #[case(
+        SqlDialect::Postgres,
+        "CREATE SUBSCRIPTION sub CONNECTION 'host=primary dbname=app user=repl password=witness-secret' PUBLICATION pub"
+    )]
+    #[case(
+        SqlDialect::Postgres,
+        "ALTER SUBSCRIPTION sub CONNECTION 'host=h password=witness-secret'"
+    )]
+    #[case(
+        SqlDialect::Postgres,
+        "CREATE SUBSCRIPTION sub CONNECTION $c$host=h password=witness-secret$c$ PUBLICATION pub"
+    )]
+    #[case(
+        SqlDialect::Ansi,
+        "create subscription sub connection E'host=h password=witness-secret' publication pub"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CREATE SERVER fed FOREIGN DATA WRAPPER mysql OPTIONS (USER 'u', PASSWORD 'witness-secret', HOST 'h')"
+    )]
+    #[case(
+        SqlDialect::Ansi,
+        "ALTER SERVER fed OPTIONS (SET password 'witness-secret')"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CHANGE REPLICATION SOURCE TO SOURCE_HOST='h', SOURCE_USER='repl', SOURCE_PASSWORD='witness-secret'"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CHANGE MASTER TO MASTER_HOST='h', MASTER_PASSWORD = 'witness-secret', MASTER_PORT=3306"
+    )]
+    #[case(
+        SqlDialect::Ansi,
+        "change replication source to source_password='witness-secret' for channel 'c'"
+    )]
+    #[case(
+        SqlDialect::Ansi,
+        "CHANGE MASTER TO MASTER_PASSWORD='witness-secret'; SELECT 1"
+    )]
     fn redacts_password_grammar(#[case] dialect: SqlDialect, #[case] sql: &str) {
         let redacted = redact_password_literals(sql, QueryLanguage::Sql(dialect));
         assert!(!redacted.contains("witness-secret"), "{redacted}");
@@ -337,6 +423,9 @@ mod tests {
     #[case("SELECT 'ALTER ROLE app PASSWORD ''visible''' AS example")]
     #[case("-- ALTER ROLE app PASSWORD 'visible'\nSELECT 1")]
     #[case("CREATE TABLE password (value TEXT DEFAULT 'visible')")]
+    #[case("CREATE SERVER fed FOREIGN DATA WRAPPER mysql OPTIONS (HOST 'visible')")]
+    #[case("CHANGE REPLICATION SOURCE TO SOURCE_HOST='visible'")]
+    #[case("SELECT change, master FROM t WHERE source_password = 'visible'")]
     fn leaves_unrelated_literals_unchanged(#[case] sql: &str) {
         assert_eq!(
             redact_password_literals(sql, QueryLanguage::Sql(SqlDialect::Postgres)),
