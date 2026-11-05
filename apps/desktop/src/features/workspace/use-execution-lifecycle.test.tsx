@@ -25,6 +25,7 @@ const executed: CommandOutcome = {
   columns: [],
   rows: 1,
   elapsedMs: 3,
+  latencyMs: 3,
   complete: true,
   cancelled: false,
   truncated: false,

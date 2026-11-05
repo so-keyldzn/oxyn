@@ -13,6 +13,7 @@ const ipc = vi.hoisted(() => {
     pending,
     next: 0,
     emit: (_signal: RefreshSignal): void => undefined,
+    cancelled: [] as Array<string>,
     reads: [] as Array<{
       id: string
       relation: string
@@ -48,7 +49,10 @@ vi.mock("@/lib/ipc/metadata", async (importOriginal) => {
 })
 vi.mock("@/lib/ipc/client", () => ({
   backend: {
-    cancel: () => Promise.resolve(),
+    cancel: (id: string) => {
+      ipc.cancelled.push(id)
+      return Promise.resolve()
+    },
     decide: () => Promise.resolve(),
   },
   newCommandId: () => `cmd${++ipc.next}`,
@@ -68,6 +72,7 @@ const executed = (result: string): CommandOutcome => ({
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows: 3,
   elapsedMs: 4,
+  latencyMs: 4,
   complete: true,
   cancelled: false,
   truncated: false,
@@ -140,6 +145,8 @@ const readsSince = (mark: number) => ipc.reads.slice(mark)
 
 beforeEach(() => {
   ipc.reads = []
+  ipc.cancelled = []
+  ipc.pending.clear()
 })
 
 afterEach(() => cleanup())
@@ -260,5 +267,85 @@ describe("after a DDL", () => {
     const mark = ipc.reads.length
     signal({ type: "rowsChanged", connection: "elsewhere" })
     expect(readsSince(mark)).toEqual([])
+  })
+})
+
+describe("an automatic read on a tab that is no longer shown", () => {
+  it("is cancelled, so the next object's read is not queued behind it", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["slow", "small"])
+    // Both tabs read on mount; only `slow` is meant to be on screen.
+    view.show(["slow"])
+    const slow = ipc.reads.find((read) => read.relation === "slow")
+    expect(slow).toBeDefined()
+    // `small` read on mount too, and was cancelled when `slow` took the screen.
+    ipc.cancelled = []
+
+    view.show(["small"])
+    expect(ipc.cancelled).toEqual([slow?.id])
+    expect(
+      Object.values(previews.store.state).find(
+        (entry) => entry.address.relation === "slow"
+      )
+    ).toMatchObject({ running: null, state: { status: "initial" } })
+  })
+
+  it("reads again on return, and never shows the answer that came late", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["slow", "small"])
+    view.show(["slow"])
+    const first = ipc.reads.find((read) => read.relation === "slow")?.id ?? ""
+
+    view.show(["small"])
+    const mark = ipc.reads.length
+    view.show(["slow"])
+    const second = readsSince(mark).find((read) => read.relation === "slow")
+    expect(second).toBeDefined()
+    expect(second?.id).not.toBe(first)
+
+    // The abandoned read answers last: its rows are released, not shown.
+    ipc.pending.get(first)?.(executed("late"))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    ipc.pending.get(second?.id ?? "")?.(executed("fresh"))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // `slow` is the first relation rendered.
+    expect(view.result.current[0]?.state).toMatchObject({
+      status: "populated",
+      result: "fresh",
+    })
+  })
+
+  it("keeps a loaded preview cached across the tab change", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["a", "b"])
+    view.show(["a", "b"])
+    await answerAll((id) => executed(`r-${id}`))
+
+    const mark = ipc.reads.length
+    view.show(["b"])
+    view.show(["a"])
+    expect(ipc.cancelled).toEqual([])
+    expect(readsSince(mark)).toEqual([])
+    expect(view.result.current[0]?.state).toMatchObject({
+      status: "populated",
+    })
+  })
+
+  it("leaves a read the user asked for running", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["a", "b"])
+    view.show(["a"])
+    await answerAll((id) => executed(`r-${id}`))
+    ipc.cancelled = []
+    act(() => view.result.current[0]?.applyPredicate("id > 3"))
+    expect(view.result.current[0]?.running).toBe(true)
+
+    view.show(["b"])
+    expect(ipc.cancelled).toEqual([])
+    expect(view.result.current[0]?.running).toBe(true)
   })
 })

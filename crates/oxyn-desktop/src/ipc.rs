@@ -339,7 +339,11 @@ pub enum CommandOutcome {
         result: String,
         columns: Vec<ResultColumn>,
         rows: u64,
+        /// The SQL duration, as the driver measured it.
         elapsed_ms: u64,
+        /// From the command's start to its outcome: the wait for the
+        /// session and the preparation included. What the user waited.
+        latency_ms: u64,
         /// Only an exhausted stream describes a whole result.
         complete: bool,
         cancelled: bool,

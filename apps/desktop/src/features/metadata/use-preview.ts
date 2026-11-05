@@ -59,7 +59,8 @@ export const previews = createPreviewStore({
  *
  * The preview lives in [`previews`], not in the view: coming back to an object
  * shows what was read, without reading it again, until something changes on
- * the connection. Leaving mid-read cancels the read.
+ * the connection. Leaving mid-read cancels the read, and so does hiding the
+ * view while it reads by itself: the read starts again when it shows.
  *
  * Reads again by itself only after a write or a DDL succeeded on this
  * connection, only while `visible`, never after its own error, and with the
@@ -102,7 +103,14 @@ export function usePreview({
   const state: ResultState = entry?.state ?? { status: "initial" }
   const status = previewStatus(state)
   const applied = entry?.applied ?? PLAIN_SHAPE
-  const read = (shape: PreviewShape) => previews.read(key, shape)
+  const read = (shape: PreviewShape, automatic = false) =>
+    previews.read(key, shape, automatic)
+
+  // Out of sight, an automatic read stops holding the shared session; the
+  // effect below reads again when the view shows. Loaded results stay.
+  React.useEffect(() => {
+    if (!visible) previews.pause(key)
+  }, [visible, key])
 
   // First visit, or back on a preview something changed since: read once,
   // with the shape in force. Never after an error, which a new read would hide.
@@ -110,8 +118,9 @@ export function usePreview({
     if (!entry || !visible || entry.running) return
     // The shape in force: plain on a first visit, kept across a reconnection.
     if (entry.state.status === "initial" && !entry.approvalRefused)
-      read(entry.applied)
-    else if (entry.stale && entry.state.status !== "error") read(entry.applied)
+      read(entry.applied, true)
+    else if (entry.stale && entry.state.status !== "error")
+      read(entry.applied, true)
   }, [entry?.state.status, entry?.stale, entry?.running, visible])
 
   useRefreshSignal(open.connection, (signal) => {

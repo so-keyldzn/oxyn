@@ -66,8 +66,9 @@ use std::time::{Duration, Instant};
 use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
     Actor, CancelToken, Capabilities, CatalogRefreshScope, Command, CommandId, ConnectionConfig,
-    ConnectionId, Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, OxynError,
-    PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    ConnectionId, Decision, DocumentId, Environment, Event, ExecLimits, ExecRequest, ExecStats,
+    ExecTimings, OxynError, PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle,
+    WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
@@ -155,6 +156,9 @@ pub enum Outcome {
         buffer: Arc<ResultBuffer>,
         /// What the execution cost.
         stats: ExecStats,
+        /// Where the time went, from the command's start: what the user
+        /// waited, which `stats` does not say.
+        timings: ExecTimings,
         /// Why the stream stopped. Only
         /// [`Exhausted`](SinkOutcome::Exhausted) describes a whole result.
         sink: SinkOutcome,
@@ -825,8 +829,15 @@ impl Executor {
                 session,
                 request,
             } => {
-                self.execute_statement(id, *connection, *session, (**request).clone(), cancel, None)
-                    .await
+                self.execute_statement(
+                    id,
+                    *connection,
+                    *session,
+                    (**request).clone(),
+                    cancel,
+                    Run::starting_now(None),
+                )
+                .await
             }
 
             Command::PreviewRelation {
@@ -838,6 +849,9 @@ impl Executor {
                 limit,
                 shape,
             } => {
+                // The one clock of the preview: preparing the request and
+                // executing it share the same budget (ADR-0075).
+                let started = tokio::time::Instant::now();
                 if !(1..=1000).contains(limit) {
                     return Err(OxynError::Config(
                         "preview limit must be in 1..=1000".into(),
@@ -876,7 +890,16 @@ impl Executor {
                         capability: "preview filter".to_owned(),
                     });
                 }
-                let request = slot.preview_request(&path, *limit, shape, cancel).await?;
+                let budget = ExecLimits::DEFAULT_TIMEOUT;
+                let request = Self::prepare_within(
+                    &slot,
+                    &path,
+                    *limit,
+                    shape,
+                    cancel,
+                    Deadline::starting_at(started, budget),
+                )
+                .await?;
                 let mut request = reclassified_request(request, Some(&slot));
                 if request.is_mutating() {
                     // Two distinct refusals, because they call for two different
@@ -899,6 +922,15 @@ impl Executor {
                 }
                 // Enforce the command contract even if a driver omitted its limits.
                 request.limits.read_only = true;
+                // The same budget bounds the execution, whatever the driver
+                // asked for: a preview is never unbounded, and never longer
+                // than the budget its preparation already drew on.
+                request.limits.timeout = Some(
+                    request
+                        .limits
+                        .timeout
+                        .map_or(budget, |asked| asked.min(budget)),
+                );
                 let row_limit = usize::try_from(*limit).map_err(|_| {
                     OxynError::Config("preview limit exceeds platform capacity".into())
                 })?;
@@ -906,8 +938,18 @@ impl Executor {
                 // cursor report its real end instead of a client-side truncation.
                 // The buffer still rejects every row beyond the requested limit.
                 request.limits.max_rows = Some(row_limit.saturating_add(1));
-                self.execute_statement(id, *connection, *session, request, cancel, Some(row_limit))
-                    .await
+                self.execute_statement(
+                    id,
+                    *connection,
+                    *session,
+                    request,
+                    cancel,
+                    Run {
+                        preview_limit: Some(row_limit),
+                        started,
+                    },
+                )
+                .await
             }
 
             Command::Cancel { statement, .. } => {
@@ -1635,8 +1677,12 @@ impl Executor {
         session: SessionId,
         request: ExecRequest,
         cancel: &CancelToken,
-        preview_limit: Option<usize>,
+        run: Run,
     ) -> Result<Outcome> {
+        let Run {
+            preview_limit,
+            started,
+        } = run;
         // Default `ExecLimits` forbids writing: a mutating request that did not
         // explicitly lift that bound is inconsistent, and inconsistency is
         // settled on the cautious side. It is the last barrier before the
@@ -1679,7 +1725,17 @@ impl Executor {
                 (ct.clone(), mutating),
             );
             let run = self
-                .run_statement(&slot, id, request, &ct, preview_limit, &mut guard)
+                .run_statement(
+                    &slot,
+                    id,
+                    request,
+                    &ct,
+                    Run {
+                        preview_limit,
+                        started,
+                    },
+                    &mut guard,
+                )
                 .await;
             // The single exit of every path that reached the driver — success,
             // drain failure, early failure of `slot.execute`, cancellation: a
@@ -1689,7 +1745,7 @@ impl Executor {
             // and no `.await` between `settle` and the terminal event.
             self.publish_transaction_state(id, &slot).await;
             guard.settle();
-            self.conclude(id, connection, intent, run)
+            self.conclude(id, connection, intent, run, started)
         };
         tokio::pin!(operation);
         tokio::select! {
@@ -1712,9 +1768,13 @@ impl Executor {
         id: CommandId,
         request: ExecRequest,
         ct: &CancelToken,
-        preview_limit: Option<usize>,
+        scope: Run,
         guard: &mut AbandonGuard<'_>,
     ) -> Result<Drained> {
+        let Run {
+            preview_limit,
+            started,
+        } = scope;
         let connection = slot.connection();
         let limits = request.limits.clone();
         // Probing for the end at the row limit makes the server produce one
@@ -1723,8 +1783,14 @@ impl Executor {
         // Armed before the driver is called: `execute` waits for the session,
         // prepares, and — SQLite — computes the whole first batch, an entire
         // aggregate. A clock started at the drain would let that run unbounded.
-        let deadline = limits.timeout.and_then(Deadline::from_now);
+        // `started` is when the command began: a preview that spent 20 s
+        // preparing its request has 10 s left, not 30 more.
+        let deadline = limits
+            .timeout
+            .and_then(|after| Deadline::starting_at(started, after));
+        let calling = tokio::time::Instant::now();
         let cursor = Self::execute_within(slot, request, ct, deadline).await?;
+        let streaming = tokio::time::Instant::now();
         let statement = cursor.handle();
         self.running.register(RunningStatement::new(
             statement,
@@ -1780,6 +1846,7 @@ impl Executor {
                 Err(OxynError::Timeout { .. } | OxynError::OutcomeUnknown(_))
             )
             || (confirm_end && matches!(outcome, Ok(SinkOutcome::RowLimitUnverified)));
+        let drained = tokio::time::Instant::now();
         if interrupted {
             self.running.cancel(&self.sessions, statement).await;
         }
@@ -1788,6 +1855,13 @@ impl Executor {
             statement,
             buffer,
             outcome,
+            timings: ExecTimings {
+                prepare: calling.saturating_duration_since(started),
+                start: streaming.saturating_duration_since(calling),
+                stream: drained.saturating_duration_since(streaming),
+                ..ExecTimings::default()
+            },
+            settled_from: drained,
         })
     }
 
@@ -1823,6 +1897,41 @@ impl Executor {
         }
     }
 
+    /// Composes a preview's request, within `deadline` if there is one.
+    ///
+    /// Waiting for the session and describing the relation happen here, before
+    /// the driver runs anything: unbounded, they let a blocked preparation hold
+    /// the shared session forever. On expiry the preparation is cancelled
+    /// through its token and **awaited** until it lets go, like
+    /// [`execute_within`](Self::execute_within): a driver that no longer
+    /// answers its cancellation keeps this call waiting — the known limit of
+    /// the budget, which bounds the work, not the cleanup (ADR-0075).
+    async fn prepare_within(
+        slot: &SessionSlot,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+        deadline: Option<Deadline>,
+    ) -> Result<ExecRequest> {
+        let Some(deadline) = deadline else {
+            return slot.preview_request(path, limit, shape, cancel).await;
+        };
+        let token = cancel.child();
+        let prepare = slot.preview_request(path, limit, shape, &token);
+        tokio::pin!(prepare);
+        tokio::select! {
+            biased;
+            prepared = &mut prepare => prepared,
+            () = tokio::time::sleep_until(deadline.at) => {
+                token.cancel();
+                // Whatever it answers, the budget is spent.
+                drop(prepare.await);
+                Err(OxynError::Timeout { after: deadline.after })
+            }
+        }
+    }
+
     /// Publishes the session's transaction state, for a session that has one.
     ///
     /// Before the terminal event, which promises nothing follows it for this
@@ -1852,13 +1961,18 @@ impl Executor {
         connection: ConnectionId,
         intent: oxyn_core::StatementIntent,
         run: Result<Drained>,
+        started: tokio::time::Instant,
     ) -> Result<Outcome> {
         let Drained {
             result,
             statement,
             buffer,
             outcome,
+            mut timings,
+            settled_from,
         } = run?;
+        timings.cleanup = settled_from.elapsed();
+        timings.total = started.elapsed();
         self.prune_results();
 
         match outcome {
@@ -1881,11 +1995,21 @@ impl Executor {
                     }
                 };
                 self.events.publish(id, Some(connection), event);
+                tracing::debug!(
+                    command = %id,
+                    prepare_ms = timings.prepare.as_millis(),
+                    start_ms = timings.start.as_millis(),
+                    stream_ms = timings.stream.as_millis(),
+                    cleanup_ms = timings.cleanup.as_millis(),
+                    total_ms = timings.total.as_millis(),
+                    "execution timings"
+                );
                 Ok(Outcome::Executed {
                     result,
                     statement,
                     buffer,
                     stats,
+                    timings,
                     sink,
                 })
             }
@@ -2606,6 +2730,24 @@ impl fmt::Debug for Executor {
     }
 }
 
+/// What a statement's run needs besides the request itself.
+#[derive(Clone, Copy)]
+struct Run {
+    /// The row bound of a preview, which also makes the end worth confirming.
+    preview_limit: Option<usize>,
+    /// When the command began: the origin of its deadline and of its timings.
+    started: tokio::time::Instant,
+}
+
+impl Run {
+    fn starting_now(preview_limit: Option<usize>) -> Self {
+        Self {
+            preview_limit,
+            started: tokio::time::Instant::now(),
+        }
+    }
+}
+
 /// The one deadline of an execution: [`ExecLimits::timeout`] counted from the
 /// moment the driver is first called, not from the first batch.
 #[derive(Debug, Clone, Copy)]
@@ -2618,8 +2760,8 @@ struct Deadline {
 impl Deadline {
     /// `None` for a limit beyond what the clock can count: unbounded in
     /// practice, and an `Instant` addition that overflows panics.
-    fn from_now(after: Duration) -> Option<Self> {
-        let at = tokio::time::Instant::now().checked_add(after)?;
+    fn starting_at(start: tokio::time::Instant, after: Duration) -> Option<Self> {
+        let at = start.checked_add(after)?;
         Some(Self { after, at })
     }
 }
@@ -2687,6 +2829,11 @@ struct Drained {
     buffer: Arc<ResultBuffer>,
     /// How the drain ended: `Err` for a failure, `Ok(Cancelled)` for a Stop.
     outcome: Result<SinkOutcome>,
+    /// The phases measured so far; `cleanup` and `total` are closed by
+    /// [`Executor::conclude`].
+    timings: ExecTimings,
+    /// When the drain and the abandonment were over: the cleanup starts here.
+    settled_from: tokio::time::Instant,
 }
 
 /// Reclassifies an execution command from its text alone.

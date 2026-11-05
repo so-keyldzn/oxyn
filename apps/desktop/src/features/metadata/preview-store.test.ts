@@ -12,12 +12,20 @@ const target = {
   serverCancel: true,
 }
 
-const executed = (result: string, rows = 3): CommandOutcome => ({
+const executed = (
+  result: string,
+  rows = 3,
+  timing: { elapsedMs: number; latencyMs: number } = {
+    elapsedMs: 12,
+    latencyMs: 12,
+  }
+): CommandOutcome => ({
   type: "executed",
   result,
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows,
-  elapsedMs: 12,
+  elapsedMs: timing.elapsedMs,
+  latencyMs: timing.latencyMs,
   complete: true,
   cancelled: false,
   truncated: false,
@@ -121,6 +129,18 @@ describe("preview store", () => {
 
     await answer("cmd1", executed("late"))
     expect(effects.forgetResult).toHaveBeenCalledWith("late")
+  })
+
+  it("shows the total latency, not the SQL time alone", async () => {
+    const { previews, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE)
+    // 3 ms of SQL, after 20 s behind another read on the shared session.
+    await answer("cmd1", executed("r1", 3, { elapsedMs: 3, latencyMs: 20_003 }))
+    expect(previews.store.state.k?.state).toMatchObject({
+      status: "populated",
+      elapsedMs: 20_003,
+    })
   })
 
   it("never shows the answer of a replaced read", async () => {
@@ -334,5 +354,60 @@ describe("preview store", () => {
       expect(effects.forgetResult).toHaveBeenCalledWith("late")
       expect(previews.store.state.shown).toBeUndefined()
     })
+  })
+})
+
+describe("an automatic read that goes out of sight", () => {
+  it("is cancelled, and its late answer is released, never shown", async () => {
+    const { previews, effects, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    previews.pause("k")
+
+    expect(effects.cancel).toHaveBeenCalledWith("cmd1")
+    expect(previews.store.state.k).toMatchObject({
+      running: null,
+      state: { status: "initial" },
+    })
+
+    // The server answered anyway, after the cancel.
+    await answer("cmd1", executed("late"))
+    expect(effects.forgetResult).toHaveBeenCalledWith("late")
+    expect(previews.store.state.k?.state).toEqual({ status: "initial" })
+  })
+
+  it("reads again when asked to, and shows only that second answer", async () => {
+    const { previews, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    previews.pause("k")
+    previews.read("k", PLAIN_SHAPE, true)
+
+    await answer("cmd1", executed("stale"))
+    expect(previews.store.state.k?.state.status).toBe("running")
+    await answer("cmd2", executed("fresh"))
+    expect(previews.store.state.k?.state).toMatchObject({ result: "fresh" })
+  })
+
+  it("leaves a loaded result cached", async () => {
+    const { previews, effects, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE, true)
+    await answer("cmd1", executed("r1"))
+    previews.pause("k")
+
+    expect(effects.cancel).not.toHaveBeenCalled()
+    expect(effects.forgetResult).not.toHaveBeenCalled()
+    expect(previews.store.state.k?.state).toMatchObject({ result: "r1" })
+  })
+
+  it("does not touch a read the user asked for", () => {
+    const { previews, effects } = harness()
+    previews.attach("k", target)
+    previews.read("k", { ...PLAIN_SHAPE, predicate: "id > 3" })
+    previews.pause("k")
+
+    expect(effects.cancel).not.toHaveBeenCalled()
+    expect(previews.store.state.k?.running).toBe("cmd1")
   })
 })

@@ -4,7 +4,6 @@ use super::*;
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use futures::executor::block_on;
 use oxyn_catalog::{CatalogPath, CatalogProvider, CatalogScope, Freshness};
 use oxyn_core::{
     AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage,
@@ -18,6 +17,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
+
+/// Runs `future` to completion on a runtime with a clock: preparing a preview
+/// is bounded by a timer, which `futures::executor::block_on` cannot drive.
+fn block_on<T>(future: impl Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("a current-thread runtime with a clock")
+        .block_on(future)
+}
 
 const HOSTILE: &str = "t\"; DROP TABLE audit; --";
 
@@ -422,6 +431,8 @@ struct Probe {
     shapes_previews: bool,
     waiting: bool,
     waiting_for_metadata: bool,
+    /// How long preparing the request takes, on the (paused) tokio clock.
+    prepare_takes: Option<Duration>,
     catalog: catalog_tests::Probe,
 }
 
@@ -447,6 +458,12 @@ impl Session for PreviewSession {
         if self.0.waiting_for_metadata {
             cancel.cancelled().await;
             return Err(OxynError::Cancelled);
+        }
+        if let Some(takes) = self.0.prepare_takes {
+            tokio::select! {
+                () = tokio::time::sleep(takes) => {}
+                () = cancel.cancelled() => return Err(OxynError::Cancelled),
+            }
         }
         // The predicate is inserted as a real driver does: it is what lets the
         // reclassification be exercised on the final text.
@@ -826,4 +843,96 @@ fn preview_tells_an_unreadable_filter_apart_from_a_write() {
         panic!("a write composed by the driver is refused");
     };
     assert!(reason.contains("read-only"), "{reason}");
+}
+
+/// Runs a preview on a paused clock and reports how much of it elapsed.
+async fn timed_preview(probe: Probe) -> (Result<Outcome>, Duration, Arc<Probe>) {
+    let probe = Arc::new(probe);
+    let (executor, connection, session) = fake(Arc::clone(&probe), None);
+    let started = tokio::time::Instant::now();
+    let outcome = executor
+        .dispatch(
+            Actor::Human,
+            preview(connection, session, 200),
+            &CancelToken::new(),
+        )
+        .await;
+    (outcome, started.elapsed(), probe)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_blocked_preparation_ends_at_the_budget_not_never() {
+    let (outcome, elapsed, probe) = timed_preview(Probe {
+        waiting_for_metadata: true,
+        ..Probe::default()
+    })
+    .await;
+
+    assert!(
+        matches!(outcome, Err(OxynError::Timeout { after }) if after == ExecLimits::DEFAULT_TIMEOUT),
+        "{outcome:?}"
+    );
+    assert_eq!(elapsed, ExecLimits::DEFAULT_TIMEOUT);
+    assert!(
+        probe.executed.lock().is_empty(),
+        "nothing reached the server"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_preparation_of_twenty_seconds_leaves_ten_to_the_execution() {
+    let (outcome, elapsed, probe) = timed_preview(Probe {
+        prepare_takes: Some(Duration::from_secs(20)),
+        waiting: true,
+        ..Probe::default()
+    })
+    .await;
+
+    assert!(
+        matches!(outcome, Err(OxynError::Timeout { .. })),
+        "{outcome:?}"
+    );
+    // Not 50 s: the 30 s budget is shared, and has not been raised.
+    assert_eq!(elapsed, ExecLimits::DEFAULT_TIMEOUT);
+    assert_eq!(probe.executed.lock().len(), 1);
+    assert!(
+        probe.cancelled.load(Ordering::SeqCst),
+        "the server was told"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_quick_preparation_leaves_the_whole_budget_to_the_execution() {
+    let (outcome, elapsed, _) = timed_preview(Probe {
+        prepare_takes: Some(Duration::from_secs(1)),
+        ..Probe::default()
+    })
+    .await;
+
+    assert!(
+        matches!(outcome, Ok(Outcome::Executed { .. })),
+        "{outcome:?}"
+    );
+    assert_eq!(elapsed, Duration::from_secs(1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_total_latency_counts_the_wait_the_sql_time_does_not() {
+    let (outcome, _, _) = timed_preview(Probe {
+        prepare_takes: Some(Duration::from_secs(7)),
+        ..Probe::default()
+    })
+    .await;
+
+    let Ok(Outcome::Executed { stats, timings, .. }) = outcome else {
+        panic!("expected rows, got {outcome:?}");
+    };
+    assert_eq!(timings.prepare, Duration::from_secs(7));
+    assert!(timings.total >= timings.prepare, "{timings:?}");
+    // The fake driver reports no SQL time at all: the footer used to say 0 ms.
+    assert_eq!(stats.total_time, Duration::ZERO);
+    assert_eq!(
+        timings.start + timings.stream + timings.cleanup,
+        timings.total - timings.prepare
+    );
 }

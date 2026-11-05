@@ -115,7 +115,7 @@ pub use preview::{PreviewShape, PreviewSort};
 pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
-pub use stats::ExecStats;
+pub use stats::{ExecStats, ExecTimings};
 pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};
 pub use window_layout::{WindowGeometry, WindowLayout, WindowLayoutChange};
@@ -143,7 +143,7 @@ pub mod prelude {
     pub use crate::query::{
         ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
     };
-    pub use crate::stats::ExecStats;
+    pub use crate::stats::{ExecStats, ExecTimings};
     pub use crate::transaction::TransactionState;
     pub use crate::value::{ParameterParseError, ParameterType, ScalarValue};
 }

@@ -195,7 +195,14 @@ export const CommandOutcome = z.discriminatedUnion("type", [
     result: z.string(),
     columns: z.array(ResultColumn),
     rows: z.number().int().nonnegative(),
+    /** The SQL duration, as the driver measured it. */
     elapsedMs: z.number().nonnegative(),
+    /**
+     * From the command's start to its end — waiting for the session,
+     * preparation and cleanup included. What the user waited, where
+     * `elapsedMs` is what the statement took.
+     */
+    latencyMs: z.number().nonnegative(),
     complete: z.boolean(),
     cancelled: z.boolean(),
     truncated: z.boolean(),
