@@ -191,3 +191,14 @@ fn an_unknown_type_stays_unknown_rather_than_approximated() {
     assert_eq!(logical_type("hstore"), LogicalType::Unknown);
     assert_eq!(logical_type("my_home_type"), LogicalType::Unknown);
 }
+
+#[test]
+fn only_key_columns_of_the_primary_index_count_as_primary_key_columns() {
+    // `indkey` also lists the `INCLUDE (...)` payload columns, after the key
+    // ones (#359). Both PostgreSQL queries cut it at `indnkeyatts`.
+    assert!(SQL_FIELDS_POSTGRES.contains("indnkeyatts"));
+    assert!(crate::preview::SQL_COLUMNS.contains("k.rank <= i.indnkeyatts"));
+    // Redshift descends from PostgreSQL 8 and has no `indnkeyatts`: its query
+    // stays what it was.
+    assert!(!SQL_FIELDS.contains("indnkeyatts"));
+}

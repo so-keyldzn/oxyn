@@ -2666,6 +2666,57 @@ async fn a_plain_preview_is_ordered_exactly_when_the_description_says_so() {
     session.close().await.expect("close");
 }
 
+/// `INCLUDE (...)` columns ride in the primary key's index (`indkey`) but are
+/// payload, not key: they must neither order the preview nor be reported as
+/// key columns (#359). A `jsonb` payload has no btree operator class, so
+/// ordering on it would also fail at execution.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server (11 or later): see the module documentation"]
+async fn included_columns_of_a_primary_key_index_are_not_key_columns() {
+    use oxyn_catalog::CatalogPath;
+
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_order_included (a int, b int, payload jsonb, \
+         CONSTRAINT oxyn_order_included_pk PRIMARY KEY (b, a) INCLUDE (payload))",
+    )
+    .await;
+    let token = CancelToken::new();
+    let path =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_order_included").expect("path");
+
+    let described = session
+        .catalog()
+        .describe_relation(&path, &token)
+        .await
+        .expect("describe");
+    let keys: Vec<_> = described
+        .fields
+        .iter()
+        .filter(|field| field.is_primary_key)
+        .map(|field| field.name.as_str())
+        .collect();
+    assert_eq!(keys, ["a", "b"], "the INCLUDE column is not a key column");
+
+    let request = session
+        .preview_request(&path, 200, &PreviewShape::unordered(), &token)
+        .await
+        .expect("compose");
+    assert!(
+        request.text.contains("ORDER BY \"b\" ASC, \"a\" ASC LIMIT"),
+        "the composite order (b, a) is kept and the payload is left out: {}",
+        request.text
+    );
+    let mut cursor = session.execute(request, &token).await.expect("execute");
+    let _ = drain(&mut cursor).await;
+
+    apply(&*session, "DROP TABLE oxyn_order_included").await;
+    session.close().await.expect("close");
+}
+
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement() {

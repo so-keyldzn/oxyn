@@ -167,6 +167,33 @@ LEFT JOIN pg_catalog.pg_index i \
 WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
 ORDER BY a.attnum";
 
+/// [`SQL_FIELDS`], where a column is a primary key column only if it is one of
+/// the index's **key** columns.
+///
+/// `indkey` also lists the `INCLUDE (...)` columns (PostgreSQL 11 and later),
+/// after the key ones: they are payload, not part of the key, and may have no
+/// btree operator class at all (`json`). `indnkeyatts` counts the key columns;
+/// Redshift, which descends from PostgreSQL 8, has no such column and keeps
+/// [`SQL_FIELDS`] unchanged. `indkey` is an `int2vector`, whose subscripts
+/// start at 0, and the cast to `int2[]` keeps that bound: hence `[0:n - 1]`.
+const SQL_FIELDS_POSTGRES: &str = "\
+SELECT a.attname::text, \
+       a.attnum, \
+       pg_catalog.format_type(a.atttypid, a.atttypmod), \
+       a.attnotnull, \
+       pg_catalog.pg_get_expr(ad.adbin, ad.adrelid), \
+       pg_catalog.col_description(c.oid, a.attnum), \
+       COALESCE(i.indisprimary, false) \
+FROM pg_catalog.pg_attribute a \
+JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum \
+LEFT JOIN pg_catalog.pg_index i \
+       ON i.indrelid = a.attrelid AND i.indisprimary \
+      AND a.attnum = ANY((i.indkey::int2[])[0:i.indnkeyatts - 1]) \
+WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
+ORDER BY a.attnum";
+
 /// The indexes of a relation, with their column expressions and their method.
 ///
 /// `pg_get_indexdef(oid, rank, true)` returns the expression of the column of
@@ -642,7 +669,12 @@ impl CatalogProvider for PostgresCatalog {
             described_relation = described_relation.with_estimated_rows(rounded);
         }
 
-        let columns = self.fetch(cancel, SQL_FIELDS, &[ns, name]).await?;
+        let fields_sql = if redshift {
+            SQL_FIELDS
+        } else {
+            SQL_FIELDS_POSTGRES
+        };
+        let columns = self.fetch(cancel, fields_sql, &[ns, name]).await?;
         let mut fields = Vec::with_capacity(columns.len());
         for row in &columns {
             let field_name: String = read_text(row, 0)?;
