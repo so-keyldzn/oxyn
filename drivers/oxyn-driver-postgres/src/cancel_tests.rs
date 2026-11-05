@@ -111,6 +111,13 @@ async fn idle(control: &mut PgConnection, pid: i32) {
 /// Waits until process `pid` has disappeared: its connection is closed.
 async fn gone(control: &mut PgConnection, pid: i32) {
     sleep_until_deadline(control, "the cancelled process closing", async |c| {
+        // `pg_stat_activity` is read from a snapshot the server keeps for the
+        // whole transaction. A control connection inside `BEGIN` (the lock the
+        // prepare test holds) would keep seeing the process it already saw.
+        sqlx::query("SELECT pg_catalog.pg_stat_clear_snapshot()")
+            .execute(&mut *c)
+            .await
+            .expect("clearing the statistics snapshot");
         let present: Option<i32> =
             sqlx::query_scalar("SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = $1")
                 .bind(pid)
