@@ -72,6 +72,7 @@ const executed = (result: string): CommandOutcome => ({
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows: 3,
   elapsedMs: 4,
+  latencyMs: 4,
   complete: true,
   cancelled: false,
   truncated: false,

@@ -138,6 +138,7 @@ describe("optional fields", () => {
       columns: [],
       rows: 10_000,
       elapsedMs: 40,
+      latencyMs: 40,
       complete: false,
       cancelled: false,
       truncated: true,

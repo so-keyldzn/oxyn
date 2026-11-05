@@ -36,6 +36,35 @@ pub struct ExecStats {
     pub truncated: bool,
 }
 
+/// Where the time of one execution went, as the executor saw it.
+///
+/// Distinct from [`ExecStats::total_time`], which a driver measures from the
+/// moment it sends the statement: that is the **SQL duration**. A read that
+/// waited twenty seconds for the shared session before its statement ran for
+/// three milliseconds has a `total_time` of 3 ms and a [`total`](Self::total)
+/// of twenty seconds — and `total` is what the user waited.
+///
+/// The phases are consecutive and do not overlap, so their sum is `total` up
+/// to the instants between them. The time to the first row is not a phase of
+/// its own: a driver that computes the first batch inside `execute` (SQLite)
+/// counts it in [`start`](Self::start), the others in [`stream`](Self::stream).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ExecTimings {
+    /// From the command's start to the call of the driver: composing a
+    /// preview's request, which includes waiting for the session.
+    pub prepare: Duration,
+    /// The driver's `execute`, up to the cursor: waiting for the session,
+    /// preparing the statement.
+    pub start: Duration,
+    /// From the cursor to the end of the stream: the rows arriving.
+    pub stream: Duration,
+    /// From the end of the stream to the outcome: the server-side cancel of an
+    /// interrupted statement, the transaction state read.
+    pub cleanup: Duration,
+    /// From the command's start to its outcome.
+    pub total: Duration,
+}
+
 impl ExecStats {
     /// Records a batch.
     pub fn record_batch(&mut self, rows: u64, bytes: u64) {

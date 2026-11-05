@@ -915,3 +915,24 @@ async fn a_quick_preparation_leaves_the_whole_budget_to_the_execution() {
     );
     assert_eq!(elapsed, Duration::from_secs(1));
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_total_latency_counts_the_wait_the_sql_time_does_not() {
+    let (outcome, _, _) = timed_preview(Probe {
+        prepare_takes: Some(Duration::from_secs(7)),
+        ..Probe::default()
+    })
+    .await;
+
+    let Ok(Outcome::Executed { stats, timings, .. }) = outcome else {
+        panic!("expected rows, got {outcome:?}");
+    };
+    assert_eq!(timings.prepare, Duration::from_secs(7));
+    assert!(timings.total >= timings.prepare, "{timings:?}");
+    // The fake driver reports no SQL time at all: the footer used to say 0 ms.
+    assert_eq!(stats.total_time, Duration::ZERO);
+    assert_eq!(
+        timings.start + timings.stream + timings.cleanup,
+        timings.total - timings.prepare
+    );
+}

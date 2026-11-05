@@ -139,7 +139,10 @@ export function createPreviewStore(effects: PreviewEffects) {
       startedAt: null,
       state:
         outcome.type === "executed" && state.status === "populated"
-          ? { ...state, elapsedMs: outcome.elapsedMs }
+          ? // The footer says what the user waited — the session wait and
+            // the preparation included — not the SQL time alone, which reads
+            // 0 ms after a long wait behind another read.
+            { ...state, elapsedMs: outcome.latencyMs }
           : state,
       // Only rows commit a shape: a refused read leaves the one in force.
       applied:

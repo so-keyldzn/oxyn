@@ -18,6 +18,7 @@ const executed = (result: string, rows = 3): CommandOutcome => ({
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows,
   elapsedMs: 12,
+  latencyMs: 12,
   complete: true,
   cancelled: false,
   truncated: false,
@@ -121,6 +122,18 @@ describe("preview store", () => {
 
     await answer("cmd1", executed("late"))
     expect(effects.forgetResult).toHaveBeenCalledWith("late")
+  })
+
+  it("shows the total latency, not the SQL time alone", async () => {
+    const { previews, answer } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE)
+    // 3 ms of SQL, after 20 s behind another read on the shared session.
+    await answer("cmd1", { ...executed("r1"), elapsedMs: 3, latencyMs: 20_003 })
+    expect(previews.store.state.k?.state).toMatchObject({
+      status: "populated",
+      elapsedMs: 20_003,
+    })
   })
 
   it("never shows the answer of a replaced read", async () => {

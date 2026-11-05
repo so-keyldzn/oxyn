@@ -1111,6 +1111,7 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
             result,
             buffer,
             stats,
+            timings,
             sink,
             ..
         } => CommandOutcome::Executed {
@@ -1127,6 +1128,7 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
                 .collect(),
             rows: stats.rows,
             elapsed_ms: ipc::millis(stats.total_time),
+            latency_ms: ipc::millis(timings.total),
             complete: matches!(sink, SinkOutcome::Exhausted),
             cancelled: matches!(sink, SinkOutcome::Cancelled),
             truncated: stats.truncated,

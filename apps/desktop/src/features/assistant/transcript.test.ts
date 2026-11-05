@@ -406,6 +406,7 @@ describe("what an answer touched", () => {
         columns: [],
         rows: 3,
         elapsedMs: 1,
+        latencyMs: 1,
         complete: true,
         cancelled,
         truncated: false,

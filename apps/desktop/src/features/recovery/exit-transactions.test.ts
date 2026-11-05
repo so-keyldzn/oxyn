@@ -43,6 +43,7 @@ vi.mock("@/lib/ipc/consoles", async () => {
           columns: [],
           rows: 0,
           elapsedMs: 1,
+          latencyMs: 1,
           complete: true,
           cancelled: false,
           truncated: false,

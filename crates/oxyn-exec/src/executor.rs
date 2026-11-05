@@ -67,7 +67,8 @@ use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
     Actor, CancelToken, Capabilities, CatalogRefreshScope, Command, CommandId, ConnectionConfig,
     ConnectionId, Decision, DocumentId, Environment, Event, ExecLimits, ExecRequest, ExecStats,
-    OxynError, PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    ExecTimings, OxynError, PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle,
+    WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
@@ -155,6 +156,9 @@ pub enum Outcome {
         buffer: Arc<ResultBuffer>,
         /// What the execution cost.
         stats: ExecStats,
+        /// Where the time went, from the command's start: what the user
+        /// waited, which `stats` does not say.
+        timings: ExecTimings,
         /// Why the stream stopped. Only
         /// [`Exhausted`](SinkOutcome::Exhausted) describes a whole result.
         sink: SinkOutcome,
@@ -1741,7 +1745,7 @@ impl Executor {
             // and no `.await` between `settle` and the terminal event.
             self.publish_transaction_state(id, &slot).await;
             guard.settle();
-            self.conclude(id, connection, intent, run)
+            self.conclude(id, connection, intent, run, started)
         };
         tokio::pin!(operation);
         tokio::select! {
@@ -1784,7 +1788,9 @@ impl Executor {
         let deadline = limits
             .timeout
             .and_then(|after| Deadline::starting_at(started, after));
+        let calling = tokio::time::Instant::now();
         let cursor = Self::execute_within(slot, request, ct, deadline).await?;
+        let streaming = tokio::time::Instant::now();
         let statement = cursor.handle();
         self.running.register(RunningStatement::new(
             statement,
@@ -1840,6 +1846,7 @@ impl Executor {
                 Err(OxynError::Timeout { .. } | OxynError::OutcomeUnknown(_))
             )
             || (confirm_end && matches!(outcome, Ok(SinkOutcome::RowLimitUnverified)));
+        let drained = tokio::time::Instant::now();
         if interrupted {
             self.running.cancel(&self.sessions, statement).await;
         }
@@ -1848,6 +1855,13 @@ impl Executor {
             statement,
             buffer,
             outcome,
+            timings: ExecTimings {
+                prepare: calling.saturating_duration_since(started),
+                start: streaming.saturating_duration_since(calling),
+                stream: drained.saturating_duration_since(streaming),
+                ..ExecTimings::default()
+            },
+            settled_from: drained,
         })
     }
 
@@ -1947,13 +1961,18 @@ impl Executor {
         connection: ConnectionId,
         intent: oxyn_core::StatementIntent,
         run: Result<Drained>,
+        started: tokio::time::Instant,
     ) -> Result<Outcome> {
         let Drained {
             result,
             statement,
             buffer,
             outcome,
+            mut timings,
+            settled_from,
         } = run?;
+        timings.cleanup = settled_from.elapsed();
+        timings.total = started.elapsed();
         self.prune_results();
 
         match outcome {
@@ -1976,11 +1995,21 @@ impl Executor {
                     }
                 };
                 self.events.publish(id, Some(connection), event);
+                tracing::debug!(
+                    command = %id,
+                    prepare_ms = timings.prepare.as_millis(),
+                    start_ms = timings.start.as_millis(),
+                    stream_ms = timings.stream.as_millis(),
+                    cleanup_ms = timings.cleanup.as_millis(),
+                    total_ms = timings.total.as_millis(),
+                    "execution timings"
+                );
                 Ok(Outcome::Executed {
                     result,
                     statement,
                     buffer,
                     stats,
+                    timings,
                     sink,
                 })
             }
@@ -2800,6 +2829,11 @@ struct Drained {
     buffer: Arc<ResultBuffer>,
     /// How the drain ended: `Err` for a failure, `Ok(Cancelled)` for a Stop.
     outcome: Result<SinkOutcome>,
+    /// The phases measured so far; `cleanup` and `total` are closed by
+    /// [`Executor::conclude`].
+    timings: ExecTimings,
+    /// When the drain and the abandonment were over: the cleanup starts here.
+    settled_from: tokio::time::Instant,
 }
 
 /// Reclassifies an execution command from its text alone.
