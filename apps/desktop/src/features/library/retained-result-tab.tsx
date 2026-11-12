@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import {
   RetainedResultView,
@@ -65,7 +65,7 @@ export function RetainedResultTab({
   )
   // The AI level is the workspace's connection's, which the result belongs
   // to; any other connection is not known here, and offers nothing (I-04).
-  const open = useStore(session, (state) =>
+  const open = useSelector(session, (state) =>
     state.open?.connection === connection ? state.open : null
   )
   // A retained result is a query's rows: copied, never filtered or sorted.

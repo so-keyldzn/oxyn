@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import { SemanticRankingSettings } from "@/components/oxyn/semantic-ranking-settings"
@@ -14,7 +14,7 @@ import {
 
 /** Settings ▸ Semantic ranking, wired to the backend (ADR-0056). */
 export function SemanticRankingSection() {
-  const view = useStore(semanticRankingStore)
+  const view = useSelector(semanticRankingStore)
 
   React.useEffect(() => {
     followSemanticRanking()

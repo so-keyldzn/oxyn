@@ -159,7 +159,13 @@ that dies instead of a process.
 Cell formatting is done in Rust by `oxyn_data::format_cell`. The front end does
 not reformat a date or a binary: the screen would diverge from the exported file.
 
-## No retry
+## Local IPC and no retry
+
+The router uses `createQueryClient` from `src/lib/query-client.ts`. Queries and
+mutations use `networkMode: "always"`: browser connectivity must not pause local
+IPC. Rust reports whether the actual server is reachable. Window focus and
+network reconnection do not refetch queries; domain signals and explicit user
+actions own refreshes.
 
 `QueryClient` is configured with `retry: false`. A failed backend call is an
 answer, not a flaky network; and an ambiguous write is not replayed

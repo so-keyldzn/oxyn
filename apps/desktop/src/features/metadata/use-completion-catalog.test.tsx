@@ -44,12 +44,13 @@ const send = (signal: RefreshSignal) => act(() => channel.emit(signal))
 
 function open(connection = "c1") {
   const client = new QueryClient()
-  const hook = renderHook(() => useCompletionCatalog(connection), {
+  const hook = renderHook(({ target }) => useCompletionCatalog(target), {
+    initialProps: { target: connection },
     wrapper: ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     ),
   })
-  return hook
+  return { ...hook, client }
 }
 
 const seen = (catalog: CompletionCatalog | null) =>
@@ -65,6 +66,29 @@ afterEach(() => {
 })
 
 describe("the completion snapshot of a connection", () => {
+  it("cancels a pending refresh when the connection changes", async () => {
+    const hook = open()
+    await waitFor(() => expect(seen(hook.result.current)).toBe("c1#1"))
+    const invalidate = vi.spyOn(hook.client, "invalidateQueries")
+    send({ type: "catalogChanged", connection: "c1" })
+    hook.rerender({ target: "c2" })
+    await waitFor(() => expect(seen(hook.result.current)).toBe("c2#2"))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(invalidate).not.toHaveBeenCalled()
+    send({ type: "catalogChanged", connection: "c2" })
+    await waitFor(() => expect(seen(hook.result.current)).toBe("c2#3"))
+  })
+
+  it("cancels a pending refresh when the consumer unmounts", async () => {
+    const hook = open()
+    await waitFor(() => expect(seen(hook.result.current)).toBe("c1#1"))
+    const invalidate = vi.spyOn(hook.client, "invalidateQueries")
+    send({ type: "catalogChanged", connection: "c1" })
+    hook.unmount()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+
   it("is read once when the editor opens", async () => {
     const hook = open()
     expect(hook.result.current).toBeNull()

@@ -6,7 +6,7 @@
 // shows the action only when the panel has a usable destination, and must read
 // the choice the panel made, not guess it again.
 
-import * as React from "react"
+import { createStore, useSelector } from "@tanstack/react-store"
 
 import { selectedDestination } from "./availability"
 import { useAssistantAvailable } from "./use-assistant-available"
@@ -40,8 +40,7 @@ export interface PinState {
   pin: ObjectPin | null
 }
 
-const states = new Map<string, PinState>()
-const listeners = new Map<string, Set<() => void>>()
+const stores = new Map<string, ReturnType<typeof createStore<PinState>>>()
 
 // Who answers is remembered per connection across restarts, in the webview's
 // own storage. Not in the workspace preferences, which the backend owns and
@@ -69,37 +68,29 @@ function rememberDestination(connection: string, key: string) {
 }
 
 function publish(connection: string, update: (state: PinState) => PinState) {
-  states.set(connection, update(getPinState(connection)))
-  for (const notify of listeners.get(connection) ?? []) notify()
+  pinStore(connection).setState(update)
 }
 
-export function getPinState(connection: string): PinState {
-  let found = states.get(connection)
+function pinStore(connection: string) {
+  let found = stores.get(connection)
   if (!found) {
-    // Read once per connection and window, then kept: `useSyncExternalStore`
-    // needs the same object back on every read.
-    found = { chosenKey: recalledDestination(connection), pin: null }
-    states.set(connection, found)
+    // Read lazily once per connection and window, as before: rendering the
+    // shell must not enumerate persisted destinations or require storage.
+    found = createStore<PinState>({
+      chosenKey: recalledDestination(connection),
+      pin: null,
+    })
+    stores.set(connection, found)
   }
   return found
 }
 
+export function getPinState(connection: string): PinState {
+  return pinStore(connection).state
+}
+
 export function usePinState(connection: string): PinState {
-  return React.useSyncExternalStore(
-    React.useCallback(
-      (notify: () => void) => {
-        const found = listeners.get(connection) ?? new Set()
-        listeners.set(connection, found)
-        found.add(notify)
-        return () => {
-          found.delete(notify)
-        }
-      },
-      [connection]
-    ),
-    () => getPinState(connection),
-    () => getPinState(connection)
-  )
+  return useSelector(pinStore(connection))
 }
 
 export function chooseDestination(connection: string, key: string) {

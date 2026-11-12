@@ -1,4 +1,4 @@
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { ExitTransactionsDialog } from "@/components/oxyn/exit-transactions-dialog"
 import { consoleLabels } from "@/features/consoles/console-labels"
@@ -17,12 +17,12 @@ import { transactionStates } from "@/lib/ipc/events"
  * transaction: once per window, on its own consoles (ADR-0043).
  */
 export function ExitTransactionsHost() {
-  const hold = useStore(exitHold)
-  const labels = useStore(consoleLabels)
-  const live = useStore(transactionStates)
+  const hold = useSelector(exitHold)
+  const labels = useSelector(consoleLabels)
+  const live = useSelector(transactionStates)
   const shown = hold ? shownTransactions(hold, labels, live) : null
   // What a `restart` installs (ADR-0051).
-  const update = useStore(updateStore, (view) => view.snapshot?.state)
+  const update = useSelector(updateStore, (view) => view.snapshot?.state)
   return (
     <ExitTransactionsDialog
       rows={shown}

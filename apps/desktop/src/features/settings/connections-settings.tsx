@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { createStore, useStore } from "@tanstack/react-store"
+import { createStore, useSelector } from "@tanstack/react-store"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
 
@@ -228,7 +228,7 @@ export function ConnectionsSettings({
   // A request from another screen — the start screen's context menu — goes
   // through the same form and dialogs as a click here. An edit with typed
   // values is never replaced by it.
-  const request = useStore(connectionRequest)
+  const request = useSelector(connectionRequest)
   React.useEffect(() => {
     if (request === null || connections.data === undefined) return
     connectionRequest.setState(() => null)

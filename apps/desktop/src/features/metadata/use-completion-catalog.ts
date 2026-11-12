@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useDebouncer } from "@tanstack/react-pacer"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
@@ -37,7 +38,12 @@ export function useCompletionCatalog(
     retry: false,
   })
 
-  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refresh = useDebouncer(
+    (target: string) => {
+      void queryClient.invalidateQueries({ queryKey: ["completion", target] })
+    },
+    { wait: COALESCE_MS }
+  )
   useRefreshSignal(connection, (signal) => {
     if (
       signal.type !== "catalogChanged" &&
@@ -45,19 +51,12 @@ export function useCompletionCatalog(
       signal.type !== "lagged"
     )
       return
-    if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      timer.current = null
-      void queryClient.invalidateQueries({
-        queryKey: ["completion", connection],
-      })
-    }, COALESCE_MS)
+    refresh.maybeExecute(connection)
   })
   React.useEffect(
-    () => () => {
-      if (timer.current !== null) clearTimeout(timer.current)
-    },
-    []
+    // A burst belongs to the connection that emitted it, not the next tab.
+    () => () => refresh.cancel(),
+    [connection, refresh]
   )
 
   return query.data ?? null

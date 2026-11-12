@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import {
   changePreferencesFromView,
@@ -17,11 +17,11 @@ import {
  * demand; the compact sidebar is the layout's own.
  */
 export function usePanelPreferences(compact: boolean) {
-  const sidebarCollapsed = useStore(
+  const sidebarCollapsed = useSelector(
     preferencesStore,
     (state) => state.preferences.sidebarCollapsed
   )
-  const inspectorOpen = useStore(
+  const inspectorOpen = useSelector(
     preferencesStore,
     (state) => state.preferences.inspectorOpen
   )

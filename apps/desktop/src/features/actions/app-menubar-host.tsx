@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { AppMenubar, FOLDED_MENU } from "@/components/oxyn/app-menubar"
 import { useCompact } from "@/features/workspace/use-compact"
@@ -22,9 +22,9 @@ const MENUS = menuBar(manifest, "other")
  */
 export function AppMenubarHost() {
   const compact = useCompact()
-  const mnemonics = useStore(mnemonicsShown)
-  const sources = useStore(actionSources, (state) => state.sources)
-  const focus = useStore(focusStore)
+  const mnemonics = useSelector(mnemonicsShown)
+  const sources = useSelector(actionSources, (state) => state.sources)
+  const focus = useSelector(focusStore)
   const [openMenu, setOpenMenu] = React.useState<string | null>(null)
   const bar = React.useRef<HTMLDivElement>(null)
 

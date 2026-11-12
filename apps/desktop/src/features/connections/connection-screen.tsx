@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
@@ -100,8 +100,8 @@ export function ConnectionScreen() {
   // Keeps the entered secrets out of `connect`'s variables, so neither the
   // MutationCache nor the React Query Devtools ever retain them (I-03).
   const typedSecrets = useTypedSecrets()
-  const leftOpen = useStore(session, (state) => state.open)
-  const workspaces = useStore(session, (state) => state.workspaces)
+  const leftOpen = useSelector(session, (state) => state.open)
+  const workspaces = useSelector(session, (state) => state.workspaces)
   const openIds = React.useMemo(
     () => workspaces.map((open) => open.connection),
     [workspaces]
@@ -140,7 +140,7 @@ export function ConnectionScreen() {
   } | null>(null)
   // A dropped database file: its driver's form, the file already in it.
   // Taken once, so coming back to this screen later does not replay it.
-  const offer = useStore(connectionOffer)
+  const offer = useSelector(connectionOffer)
   const [prefill, setPrefill] = React.useState<{
     key: number
     values: Record<string, string>

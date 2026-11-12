@@ -1,6 +1,6 @@
 import * as React from "react"
 import type { QueryClient } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { RESULT_PAGE_QUERY } from "@/components/oxyn/result-grid"
 import { preferencesStore } from "@/features/settings/preferences"
@@ -14,7 +14,10 @@ import { preferencesStore } from "@/features/settings/preferences"
  * runs again (ADR-0012) — and the others when they are next shown.
  */
 export function useResultFormatRefresh(queryClient: QueryClient) {
-  const revision = useStore(preferencesStore, (state) => state.formatRevision)
+  const revision = useSelector(
+    preferencesStore,
+    (state) => state.formatRevision
+  )
   const seen = React.useRef(revision)
   React.useEffect(() => {
     if (seen.current === revision) return

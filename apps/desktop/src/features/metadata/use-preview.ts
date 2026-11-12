@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import { sameShape } from "@/components/oxyn/preview-controls"
@@ -89,7 +89,7 @@ export function usePreview({
   described: string | null
 }) {
   const key = previewKey(open.connection, addressKey(address))
-  const entry = useStore(previews.store, (all) => all[key])
+  const entry = useSelector(previews.store, (all) => all[key])
   const addressRef = React.useRef(address)
   addressRef.current = address
 
@@ -146,7 +146,7 @@ export function usePreview({
 
   // Rows while the read streams: the result id is known from the schema on,
   // so the grid can page it before the end.
-  const progress = useStore(executionProgress, (all) =>
+  const progress = useSelector(executionProgress, (all) =>
     entry?.running ? all[entry.running] : undefined
   )
   const streaming = progress?.result ?? null

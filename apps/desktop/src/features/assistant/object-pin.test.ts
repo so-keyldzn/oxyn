@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest"
+import { act, cleanup, renderHook } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { chooseDestination, getPinState, pinObject, unpin } from "./object-pin"
+import {
+  chooseDestination,
+  getPinState,
+  pinObject,
+  unpin,
+  usePinState,
+} from "./object-pin"
 import { pinOffer } from "@/components/oxyn/catalog-tree"
 import type { PinToQuestion } from "@/components/oxyn/catalog-tree"
 import type { CatalogNode } from "@/lib/ipc/types"
@@ -27,7 +34,40 @@ const offered: PinToQuestion = {
   onPin: () => undefined,
 }
 
+afterEach(() => cleanup())
+
 describe("pinning an object to the question", () => {
+  it("updates both consumers while leaving other connections untouched", () => {
+    const first = renderHook(() => usePinState("subscribed"))
+    const second = renderHook(() => usePinState("subscribed"))
+    const other = renderHook(() => usePinState("unrelated"))
+    const untouched = other.result.current
+    act(() => pinObject("subscribed", relation("orders")))
+    expect(first.result.current.pin?.address.relation).toBe("orders")
+    expect(second.result.current).toBe(first.result.current)
+    expect(other.result.current).toBe(untouched)
+    act(() => chooseDestination("subscribed", "provider:synthetic"))
+    expect(second.result.current.chosenKey).toBe("provider:synthetic")
+    act(() => unpin("subscribed"))
+    expect(first.result.current.pin).toBeNull()
+  })
+
+  it("follows a connection change and keeps state across consumer unmounts", () => {
+    const hook = renderHook(({ connection }) => usePinState(connection), {
+      initialProps: { connection: "before-switch" },
+    })
+    hook.rerender({ connection: "after-switch" })
+    const switched = hook.result.current
+    act(() => pinObject("before-switch", relation("old")))
+    expect(hook.result.current).toBe(switched)
+    act(() => pinObject("after-switch", relation("current")))
+    expect(hook.result.current.pin?.address.relation).toBe("current")
+    hook.unmount()
+    act(() => pinObject("after-switch", relation("later")))
+    const reopened = renderHook(() => usePinState("after-switch"))
+    expect(reopened.result.current.pin?.address.relation).toBe("later")
+  })
+
   it("keeps one object: a question carries one sample", () => {
     pinObject("pins-1", relation("customers"))
     pinObject("pins-1", relation("invoices"))

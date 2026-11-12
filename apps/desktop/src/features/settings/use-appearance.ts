@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import {
   changePreferencesFromView,
@@ -37,8 +37,11 @@ export function applyAppearance(
 
 /** Reads the preferences at startup and keeps `<html>` in step with them. */
 export function useAppearance() {
-  const theme = useStore(preferencesStore, (state) => state.preferences.theme)
-  const density = useStore(
+  const theme = useSelector(
+    preferencesStore,
+    (state) => state.preferences.theme
+  )
+  const density = useSelector(
     preferencesStore,
     (state) => state.preferences.readingDensity
   )

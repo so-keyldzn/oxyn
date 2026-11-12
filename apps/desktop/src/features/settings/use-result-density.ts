@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import {
   changePreferencesFromView,
@@ -13,7 +13,7 @@ import type { DensityChoice } from "@/lib/ipc/settings"
  * Nothing is rerun: `<html>` takes the preset, and the rows are redrawn.
  */
 export function useResultDensity() {
-  const value = useStore(
+  const value = useSelector(
     preferencesStore,
     (state) => state.preferences.readingDensity
   )

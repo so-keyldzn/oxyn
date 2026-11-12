@@ -8,7 +8,7 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { Toaster } from "@/components/ui/toast"
 import { ActionOverlays } from "@/features/actions/action-overlays"
@@ -89,7 +89,7 @@ function RootComponent() {
   useAppearance()
   // Result pages already held follow a saved change of cell format.
   useResultFormatRefresh(queryClient)
-  const workspaces = useStore(session, (state) => state.workspaces)
+  const workspaces = useSelector(session, (state) => state.workspaces)
   // Keyboard, focus zones and the macOS menu bar, for every screen (ADR-0041).
   useActionRuntime()
   // Files dropped from the system, classified by Rust (ADR-0041, point 9).

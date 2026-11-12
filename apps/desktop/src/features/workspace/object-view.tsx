@@ -1,7 +1,7 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
@@ -301,7 +301,7 @@ export function ObjectView({
 
   // The row selected in this preview, when there is one: its key values are
   // read in Rust from the result buffer, never from the formatted cells.
-  const selected = useStore(inspection, (inspected) =>
+  const selected = useSelector(inspection, (inspected) =>
     inspected.selectedRow?.source === source ? inspected.selectedRow : null
   )
   const reviewRelatedRows = onOpenInConsole

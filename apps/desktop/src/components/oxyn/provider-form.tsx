@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useForm, useStore } from "@tanstack/react-form"
+import { useForm, useSelector } from "@tanstack/react-form"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CheckmarkCircle02Icon } from "@hugeicons/core-free-icons"
 
@@ -279,9 +279,9 @@ export function ProviderForm({
   const editing = target?.kind === "provider" ? target.provider : null
   // What the model list depends on, read above the fields: a hook cannot run
   // inside a field's render.
-  const listedKind = useStore(form.store, (state) => state.values.kind)
-  const endpoint = useStore(form.store, (state) => state.values.endpoint)
-  const key = useStore(form.store, (state) => state.values.key)
+  const listedKind = useSelector(form.store, (state) => state.values.kind)
+  const endpoint = useSelector(form.store, (state) => state.values.endpoint)
+  const key = useSelector(form.store, (state) => state.values.key)
   const stored = React.useMemo(
     () =>
       editing

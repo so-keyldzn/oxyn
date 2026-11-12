@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="eb56b4285f06" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b04352f54883" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3503,3 +3503,21 @@ Le contrôle UI utilise `sequence.groupOrder` de Vitest 4.1.12 (sources install�
 La compatibilité a été vérifiée contre l’[introduction de PIT en 2.4](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) et les sources taguées : `ShardDocSortBuilder.java` est absent d’OpenSearch 2.19.7, 3.0.0 et 3.2.0, et présent en [3.3.0](https://github.com/opensearch-project/OpenSearch/blob/3.3.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java). Les versions 2.0–2.3 conservent donc l’aperçu borné existant, 2.4–3.2 parcourent les partitions index/shard et 3.3+ utilisent l’ordre complété `_index`/`_shard_doc`. La première page triée reste disponible sur les anciennes versions ; seule la continuation triée est refusée. Aucune fonction existante d’aperçu ou de tri n’est retirée.
 
 Le contrôle natif PostgreSQL a révélé un écart entre description et aperçu sur la clé composite `(tenant_id, id)` : la page commençait correctement à l’ID 401 pour l’offset 50, mais l’aide indiquait `(id, tenant_id)`. `describe_relation` transporte désormais les mêmes rangs de clé primaire issus de `WITH ORDINALITY` que la préparation de l’aperçu, en excluant toujours les colonnes INCLUDE. Le test réel INCLUDE vérifie l’ordre d’index décrit et la matrice backend multi-moteurs compare l’ordre annoncé à l’interface à celui de sa clé composite.
+
+## TanStack : IPC local et abonnements — vérifié le 2026-11-12
+
+La documentation a été interrogée avec le CLI Context7 et comparée aux paquets
+installés : Query 5.102.8, Store 0.11.2, Form 1.33.5 et Pacer 0.23.0.
+Aucune version de dépendance ne change dans cette correction.
+
+| Comportement vérifié | Source et conséquence locale |
+|---|---|
+| Le mode réseau par défaut de Query peut suspendre queries et mutations hors ligne ; `always` ignore la connectivité du navigateur | [Mode réseau](https://tanstack.com/query/latest/docs/framework/react/guides/network-mode). Reproduit avec le paquet Query installé et des promesses synthétiques. `createQueryClient` utilise `always` pour l’IPC local, désactive les retries et laisse les rafraîchissements aux événements du domaine ou aux actions explicites, plutôt qu’au focus ou à la reconnexion. |
+| `useStore` est un alias déprécié de `useSelector` ; ce dernier accepte `{ compare }` en troisième argument | [Démarrage React Store](https://tanstack.com/store/latest/docs/framework/react/quick-start), fichiers installés `react-store/src/useStore.ts` et `useSelector.ts`. Form réexporte les deux hooks de Store. Les consommateurs de l’application utilisent `useSelector` ; le store des objets épinglés reste isolé par connexion. |
+| `useDebouncer` annule le travail différé au démontage ; il conserve les arguments d’exécution dans son état | [React useDebouncer](https://tanstack.com/pacer/latest/docs/framework/react/reference/functions/useDebouncer), sources installées du hook React et du debouncer central. Les changements de contexte annulent aussi explicitement le travail différé. Le debounce des modèles reçoit uniquement un numéro de génération, jamais une sonde contenant une clé de fournisseur. |
+
+La grille des résultats utilise Query pour les pages bornées et Virtual pour
+les lignes et colonnes ; Table est utilisé par `RelationStructure`. Il s’agit
+d’une inspection des sources, pas d’une mesure mémoire : le `gcTime` du cache
+de pages expire les entrées inactives et ne constitue pas un budget en octets.
+Aucune performance de rendu ni borne mémoire totale n’est annoncée ici.

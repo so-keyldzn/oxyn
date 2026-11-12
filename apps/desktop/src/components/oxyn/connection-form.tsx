@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useForm, useStore } from "@tanstack/react-form"
+import { useForm, useSelector } from "@tanstack/react-form"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { FolderOpenIcon } from "@hugeicons/core-free-icons"
 
@@ -270,8 +270,8 @@ export function ConnectionForm({
     defaultValues: initialValues(driver, existing, prefill, dropped),
     onSubmit: ({ value }) => onSubmit(draftFrom(driver, value)),
   })
-  const values = useStore(form.store, (state) => state.values)
-  const dirty = useStore(form.store, (state) => state.isDirty)
+  const values = useSelector(form.store, (state) => state.values)
+  const dirty = useSelector(form.store, (state) => state.isDirty)
   React.useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
