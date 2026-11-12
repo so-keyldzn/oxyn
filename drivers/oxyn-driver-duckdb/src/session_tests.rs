@@ -774,6 +774,74 @@ async fn the_catalog_lists_databases_schemas_relations_and_constraints() {
 }
 
 #[tokio::test]
+async fn a_composite_key_is_read_in_its_constraint_order() {
+    let dir = tempfile::tempdir().expect("temporary database");
+    let session = open_file(dir.path(), "composite.duckdb").await;
+    run_ok(session.as_ref(),
+        "CREATE TABLE ranked (id INTEGER NOT NULL, tenant INTEGER NOT NULL, payload VARCHAR, PRIMARY KEY (tenant,id)); \
+         INSERT INTO ranked SELECT id, (id-1)%3+1, 'synthetic' FROM range(1,202) AS generated(id)").await;
+    let path =
+        CatalogPath::for_relation(Some("composite"), Some("main"), "ranked").expect("table path");
+    let cancel = CancelToken::new();
+    let described = session
+        .catalog()
+        .describe_relation(&path, &cancel)
+        .await
+        .expect("description");
+    let keys: Vec<_> = described
+        .primary_key()
+        .iter()
+        .map(|field| field.name.clone())
+        .collect();
+    assert_eq!(
+        keys,
+        ["tenant", "id"],
+        "the table declares id before tenant"
+    );
+    let mut expected: Vec<i32> = (1..=201).collect();
+    expected.sort_by_key(|id| ((id - 1) % 3, *id));
+    for size in [50_u32, 100, 200] {
+        for offset in [0, size] {
+            let shape = PreviewShape {
+                offset: u64::from(offset),
+                ..PreviewShape::default()
+            };
+            let request = session
+                .preview_request(&path, size, &shape, &cancel)
+                .await
+                .expect("ordered preview");
+            assert!(
+                request.text.contains("ORDER BY \"tenant\" ASC, \"id\" ASC"),
+                "{}",
+                request.text
+            );
+            let batches = run(session.as_ref(), request).await.expect("page");
+            let ids: Vec<i32> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<arrow::datatypes::Int32Type>()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            assert_eq!(
+                ids,
+                expected
+                    .iter()
+                    .copied()
+                    .skip(usize::try_from(offset).expect("small offset"))
+                    .take(usize::try_from(size).expect("small page"))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_preview_of_a_hostile_name_reads_that_table_only() {
     let session = memory().await;
     run_ok(

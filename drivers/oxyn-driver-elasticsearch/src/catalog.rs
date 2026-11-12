@@ -35,6 +35,7 @@ pub(crate) struct Product {
 }
 
 /// The flat catalog of a cluster.
+#[derive(Clone)]
 pub(crate) struct ElasticsearchCatalog {
     http: Arc<Http>,
     product: Product,
@@ -74,6 +75,10 @@ struct BackingIndex {
 }
 
 impl ElasticsearchCatalog {
+    pub(crate) fn product(&self) -> &Product {
+        &self.product
+    }
+
     pub(crate) const fn new(http: Arc<Http>, product: Product, capabilities: Capabilities) -> Self {
         Self {
             http,
@@ -268,6 +273,9 @@ impl CatalogProvider for ElasticsearchCatalog {
         let kind = self.kind_of(name, &answer, cancel).await?;
         let (rows, size) = self.volume(name, cancel).await?;
         let mut described = Relation::new(name, kind).with_fields(fields);
+        if crate::preview::pit_available(&self.product) {
+            described = described.with_retained_preview(crate::preview::shard_doc(&self.product));
+        }
         described.estimated_rows = rows;
         described.size_bytes = size;
         Ok(described)

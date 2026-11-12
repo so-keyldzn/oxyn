@@ -204,6 +204,31 @@ pub trait Session: Send + Sync {
         })
     }
 
+    /// Prepares either a bounded independent read or a retained native stream.
+    /// The executor reclassifies the request and enforces read-only in both cases.
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<PreparedPreview> {
+        Ok(PreparedPreview {
+            request: self.preview_request(path, limit, shape, cancel).await?,
+            retained: false,
+        })
+    }
+
+    /// Executes a retained preview. Only the executor's preview path calls
+    /// this, after the same policy and read-only checks as ordinary execution.
+    async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.execute(request, cancel).await
+    }
+
     /// Declares where this session resolves the names a statement does not
     /// qualify, and waits for the server's confirmation.
     ///
@@ -429,6 +454,13 @@ pub trait Session: Send + Sync {
         self.capabilities().require(Capabilities::TRANSACTIONS)?;
         Err(unimplemented_transaction("rollback"))
     }
+}
+
+/// A composed preview and whether its cursor must survive a page boundary.
+#[derive(Debug)]
+pub struct PreparedPreview {
+    pub request: ExecRequest,
+    pub retained: bool,
 }
 
 /// A stream of Arrow batches.

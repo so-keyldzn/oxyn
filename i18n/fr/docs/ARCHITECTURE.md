@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6081af021f77" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b518f6cefd2d" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -268,16 +268,19 @@ Fenêtre, Mission Control et VoiceOver, pas dans la fenêtre elle-même.
 
 L'aperçu d'une table utilise `Command::PreviewRelation` avec connexion, session,
 niveaux d'identifiant et limite explicites. Le `PolicyGate` décide avant la
-préparation ; le driver compose un `SELECT` qualifié et borné après une lecture
+préparation ; le driver compose une requête qualifiée pour une page bornée après une lecture
 annulable des métadonnées si nécessaire, puis
 l'exécuteur impose la lecture seule et réutilise le flux Arrow d'`Execute` sous
-le même identifiant de commande. L'interface demande 200 lignes ; le contrat du
+le même identifiant de commande. L'interface demande 50, 100 ou 200 lignes,
+avec 200 par défaut ; le contrat du
 bus accepte de 1 à 1 000. PostgreSQL qualifie schéma et table dans la base de
 la session ; SQLite conserve la convention du catalogue pour ses bases
 attachées. La grille de l'aperçu et son annulation sont distinctes de celles de
 l'éditeur SQL.
 
-La borne de réception de l'aperçu réserve une ligne supplémentaire pour
+Les aperçus de collections natives utilisent aussi `Session::prepare_preview` et `execute_preview` ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). Leurs valeurs par défaut conservent l’exécution bornée existante. Une requête conservée utilise la même politique, reclassification, lecture seule, les mêmes événements et le même collecteur de page bornée. `preview_stream::Registry` détient un curseur et un historique Arrow derrière les identités de résultats ; chaque continuation est vérifiée contre connexion, session, relation, taille, filtre, tri et projection. La page est lue à la demande, Previous lit l’historique. Celui-ci est borné à 8 Mio en mémoire, 128 Mio de débordement et 8192 lots par flux ; au plus 16 identités de pages sont détenues, pendant au plus cinq minutes. Dépassement et expiration sont explicites. Fermer une session, oublier sa dernière page ou abandonner une lecture annule et libère le flux. Un garde détient l’annulation dès avant le premier schéma. Les ressources natives restent en Rust ; leurs tâches de nettoyage sont détenues et bornées en temps. Actualiser ou changer la forme depuis l’interface démarre un nouveau flux à la première page.
+
+Pour les aperçus indépendants, la borne de réception de l'aperçu réserve une ligne supplémentaire pour
 confirmer l'épuisement du curseur de la requête déjà limitée. Le `ResultBuffer`
 conserve strictement la limite demandée : un lot supplémentaire non vide est
 jeté et laisse le résultat tronqué ; seule une fin réelle du flux permet
@@ -486,6 +489,10 @@ pub trait Session: Send + Sync {
     // sans transactions ne les redéfinit pas.
     async fn preview_request(&self, path: &CatalogPath, limit: u32,
         shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
+    async fn prepare_preview(&self, path: &CatalogPath, limit: u32,
+        shape: &PreviewShape, cancel: &CancelToken) -> Result<PreparedPreview>;
+    async fn execute_preview(&self, request: ExecRequest, cancel: &CancelToken)
+        -> Result<Box<dyn Cursor>>;
     async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)
         -> Result<()>;                               // SESSION_CONTEXT ; le driver cite
     fn context(&self) -> Option<SessionContext>;     // confirmé par le serveur ; None par défaut

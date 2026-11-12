@@ -203,7 +203,12 @@ export function createPreviewStore(effects: PreviewEffects) {
             ...all,
             [key]: { ...entry, views: entry.views + 1, shownAt: effects.now() },
           }
-        const applied = entry?.applied ?? PLAIN_SHAPE
+        const oldShape = entry?.applied ?? PLAIN_SHAPE
+        const applied = {
+          ...oldShape,
+          continuation: null,
+          offset: oldShape.continuation ? 0 : oldShape.offset,
+        }
         return {
           ...all,
           [key]: {
@@ -305,7 +310,11 @@ export function createPreviewStore(effects: PreviewEffects) {
       if (!entry) return
       if (entry.running) effects.cancel(entry.running)
       const previous = resultOf(entry)
-      if (previous) effects.forgetResult(previous)
+      // A retained read resolves its previous result through the bus. Keep
+      // that identity alive until the new page has acquired the stream.
+      const releasePrevious = () => {
+        if (previous) effects.forgetResult(previous)
+      }
       const id = effects.newId()
       effects.watch(id)
       update(key, (current) => ({
@@ -325,8 +334,11 @@ export function createPreviewStore(effects: PreviewEffects) {
         },
       }))
       effects.read(id, entry, shape).then(
-        (outcome) => settle(key, id, outcome),
-        (error: unknown) =>
+        (outcome) => {
+          settle(key, id, outcome)
+          releasePrevious()
+        },
+        (error: unknown) => {
           fail(
             key,
             id,
@@ -342,6 +354,8 @@ export function createPreviewStore(effects: PreviewEffects) {
               ? error.missingModule
               : null
           )
+          releasePrevious()
+        }
       )
     },
 

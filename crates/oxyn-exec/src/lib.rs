@@ -138,4 +138,5 @@ pub mod prelude {
     pub use crate::sink::{DispatchReport, ExecutorSink};
 }
 
+mod preview_stream;
 mod retained;

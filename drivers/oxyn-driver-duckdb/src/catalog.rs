@@ -449,8 +449,20 @@ impl CatalogProvider for DuckDbCatalog {
             if let Some(comment) = row.text(5) {
                 field = field.with_comment(comment);
             }
-            if keys.contains(&column) {
+            if let Some(index) = keys.iter().position(|key| key == &column) {
                 field = field.primary_key();
+                // The constraint's order can differ from the table's column
+                // order. Both the preview SQL and its notice read this rank.
+                field.primary_key_rank = Some(
+                    index
+                        .checked_add(1)
+                        .and_then(|rank| u32::try_from(rank).ok())
+                        .ok_or_else(|| {
+                            OxynError::CatalogUnavailable(
+                                "DuckDB primary-key rank exceeds the supported range".into(),
+                            )
+                        })?,
+                );
             }
             fields.push(field);
         }

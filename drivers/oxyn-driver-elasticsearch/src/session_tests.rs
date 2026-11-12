@@ -562,3 +562,32 @@ async fn a_write_stopped_without_the_right_to_list_tasks_is_unproven_not_cancell
     assert!(message.contains("not proven"), "{message}");
     assert_eq!(outcome.class(), ErrorClass::Ambiguous);
 }
+
+#[tokio::test]
+async fn a_native_pit_is_closed_with_its_latest_identity_after_a_partial_page() {
+    let (port, bodies) = scripted(vec![
+        r#"{"id":"initial-pit"}"#,
+        r#"{"pit_id":"renewed-pit","timed_out":true,"hits":{"hits":[]}}"#,
+        r#"{"succeeded":true,"num_freed":1}"#,
+    ])
+    .await;
+    let session = session_to(port);
+    let request = request(
+        "POST /qa/_search\n{\"size\":50,\"track_total_hits\":false,\"sort\":[\"_shard_doc\"]}",
+    );
+    assert!(
+        session
+            .execute_preview(request, &CancelToken::new())
+            .await
+            .is_err()
+    );
+    session.registry.finish_cleanup().await;
+    let bodies = bodies.lock().unwrap_or_else(PoisonError::into_inner);
+    assert_eq!(bodies.len(), 3);
+    let deleted: serde_json::Value =
+        serde_json::from_str(bodies.last().expect("cleanup")).expect("JSON");
+    assert_eq!(deleted, serde_json::json!({"id":"renewed-pit"}));
+}
+
+#[path = "native_preview_tests.rs"]
+mod native_preview;

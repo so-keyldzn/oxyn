@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ed54b4fda70a" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="eb56b4285f06" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3274,6 +3274,16 @@ Source : `gh run view 40211362379` (heures de début et de fin des jobs) et
 `Cargo.toml` (`[profile.release]`) et `.github/workflows/livraison.yml`
 (`timeout-minutes`, runners).
 
+## Logo Turso — vérifié le 2026-11-12
+
+Le registre shadcn `@svgl` configuré fournit `TursoLight` et `TursoDark`, des
+composants SVG React avec `viewBox="0 0 201 170"`, ainsi que deux variantes avec
+le nom. Vérifié avec `pnpm dlx shadcn@latest view @svgl/turso`, puis généré avec
+`pnpm dlx shadcn@latest add @svgl/turso`. Oxyn conserve les deux symboles, sans
+modifier leurs tracés ni leurs couleurs ; `DriverLogo` choisit la variante
+claire ou sombre comme pour les autres moteurs. Aucun paquet d'exécution ajouté.
+Source : [l'entrée du registre](https://svgl.app/r/turso.json).
+
 ## Marques récupérées en amont — relevé le 2026-10-26
 
 Les deux lignes `svgl` ci-dessus n'ont trouvé aucune marque pour DuckDB,
@@ -3477,3 +3487,19 @@ jamais présentée comme échouée. Ce comportement suit les sources installées
 `InnerConnection::set_clientdata` dans `rusqlite` 0.41.1 et de
 `sqlite3_set_clientdata` dans SQLite 3.54.1, lues le 2026-11-12. Aucune
 injection de panne d'allocation n'a été effectuée.
+
+## Continuation native des aperçus — vérifiée le 2026-11-12
+
+L’[API de pagination Elasticsearch](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results) et l’[API PIT OpenSearch](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) fournissent PIT/search_after. Scroll refuse le comptage désactivé, vérifié dans les validateurs de requêtes des deux serveurs. `_shard_doc` est vérifié sur le vrai serveur OpenSearch 3.9 et dans les sources taguées depuis 3.3 ; les versions antérieures à 3.3 utilisent `_search_shards`, la création de PIT avec préférence `_shards`, un filtre `_index` et `_doc` dans un seul shard. Le routage personnalisé peut dupliquer `_id` entre shards : `_index`/`_id` ne suffit donc pas à départager toutes les égalités. Aucun paramètre serveur n’est modifié pour activer les fielddata des IDs.
+
+Redis [SCAN](https://redis.io/docs/latest/commands/scan/) peut renvoyer des pages répétées ou vides non terminales, COUNT n’étant qu’une indication. [XRANGE](https://redis.io/docs/latest/commands/xrange/) et [VRANGE](https://github.com/redis/docs/blob/main/content/commands/vrange.md) acceptent des bornes exclusives ; [TS.RANGE](https://redis.io/docs/latest/commands/ts.range/) poursuit après le dernier timestamp entier. L’implémentation conserve les restes des réponses et toutes les lignes de champs des entrées de stream.
+
+Les images Docker jetables supplémentaires ont été vérifiées dans le registre Docker Hub : MariaDB 11.8.9, OpenSearch 2.19.7 et OpenSearch 3.9.0. Le Compose QA fixe leurs empreintes de manifeste et lie leurs ports uniquement à 127.0.0.1. Les données fictives de recherche couvrent deux index de trois shards chacun, avec le même ID dans un index sur plusieurs shards de routage.
+
+Le jeu réel d’alias OpenSearch 3.9.0 a révélé une distinction supplémentaire : `_shard_doc` seul a renvoyé 12 001 des 12 004 documents, avec seulement 6 004 tuples de tri distincts. Son [constructeur de tri](https://github.com/opensearch-project/OpenSearch/blob/3.9.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java#L97) prend le numéro de shard local à l’index ; le [comparateur](https://github.com/opensearch-project/OpenSearch/blob/3.9.0/server/src/main/java/org/opensearch/search/sort/ShardDocFieldComparatorSource.java#L89) le combine avec la position Lucene du document, sans l’index. Préfixer `_index` a produit 12 004 tuples et documents distincts lors de la vérification directe du protocole. L’ordinal Elasticsearch, global au PIT, distinguait déjà les 12 004. Le jeu backend multi-index avec routage personnalisé couvre ce cas.
+
+Le contrôle UI utilise `sequence.groupOrder` de Vitest 4.1.12 (sources installées `cli-api` et résolution de configuration) : jsdom passe avant les stories Chromium. Pendant cette vérification, les tests inchangés des secrets de connexion ont réussi seuls, mais dépassé leur borne existante de cinq secondes lorsqu’ils partageaient les démarrages du navigateur sur un poste chargé. L’ordre des projets sépare ces besoins en ressources ; assertions, délais par test, accessibilité et ensemble complet des tests restent identiques. La validation locale fixe aussi `VITEST_MAX_WORKERS=2`, pris en charge par le résolveur installé, pour borner le nombre de workers simultanés.
+
+La compatibilité a été vérifiée contre l’[introduction de PIT en 2.4](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) et les sources taguées : `ShardDocSortBuilder.java` est absent d’OpenSearch 2.19.7, 3.0.0 et 3.2.0, et présent en [3.3.0](https://github.com/opensearch-project/OpenSearch/blob/3.3.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java). Les versions 2.0–2.3 conservent donc l’aperçu borné existant, 2.4–3.2 parcourent les partitions index/shard et 3.3+ utilisent l’ordre complété `_index`/`_shard_doc`. La première page triée reste disponible sur les anciennes versions ; seule la continuation triée est refusée. Aucune fonction existante d’aperçu ou de tri n’est retirée.
+
+Le contrôle natif PostgreSQL a révélé un écart entre description et aperçu sur la clé composite `(tenant_id, id)` : la page commençait correctement à l’ID 401 pour l’offset 50, mais l’aide indiquait `(id, tenant_id)`. `describe_relation` transporte désormais les mêmes rangs de clé primaire issus de `WITH ORDINALITY` que la préparation de l’aperçu, en excluant toujours les colonnes INCLUDE. Le test réel INCLUDE vérifie l’ordre d’index décrit et la matrice backend multi-moteurs compare l’ordre annoncé à l’interface à celui de sa clé composite.

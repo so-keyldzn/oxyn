@@ -200,12 +200,14 @@ describe("preview store", () => {
     expect(previews.store.state.k?.cancelling).toBe(true)
   })
 
-  it("releases the previous result when reading again", async () => {
+  it("keeps the continuation alive until its replacement settles", async () => {
     const { previews, effects, answer } = harness()
     previews.attach("k", target)
     previews.read("k", PLAIN_SHAPE)
     await answer("cmd1", executed("r1"))
-    previews.read("k", PLAIN_SHAPE)
+    previews.read("k", { ...PLAIN_SHAPE, offset: 200, continuation: "r1" })
+    expect(effects.forgetResult).not.toHaveBeenCalled()
+    await answer("cmd2", executed("r2"))
     expect(effects.forgetResult).toHaveBeenCalledWith("r1")
   })
 

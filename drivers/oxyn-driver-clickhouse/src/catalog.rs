@@ -203,6 +203,22 @@ impl ClickhouseCatalog {
             .collect();
         preview::request(path, limit, shape, &columns)
     }
+    pub(crate) async fn stream_preview_request(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<ExecRequest> {
+        let (database, table) = relation_of(path)?;
+        let columns: Vec<PreviewColumn> = self
+            .columns(database, table, cancel)
+            .await?
+            .into_iter()
+            .map(|(_, column)| column)
+            .collect();
+        preview::stream_request(path, limit, shape, &columns)
+    }
 }
 
 fn relation_params(database: &str, table: &str) -> Vec<(&'static str, String)> {
@@ -386,7 +402,8 @@ impl CatalogProvider for ClickhouseCatalog {
             .collect();
         let mut described =
             Relation::new(table, relation_kind(engine.as_deref().unwrap_or_default()))
-                .with_fields(fields);
+                .with_fields(fields)
+                .with_retained_preview(true);
         if let Some(comment) = comment.filter(|comment| !comment.is_empty()) {
             described = described.with_comment(comment);
         }

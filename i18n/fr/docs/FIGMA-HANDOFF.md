@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/FIGMA-HANDOFF.md" sha256="edde89485af1" -->
+<!-- oxyn-translation source="docs/FIGMA-HANDOFF.md" sha256="2f4bda99572a" -->
 
 > Traduction française de [docs/FIGMA-HANDOFF.md](../../../docs/FIGMA-HANDOFF.md). **La version anglaise fait foi.**
 
@@ -109,8 +109,10 @@ l'utilisateur écrit, non un constructeur de conditions — arbitrage consigné 
 **Écart assumé** : la maquette ne dessine **aucun** contrôle de page. Son
 `Result status` (`190:1860`) n'affiche que « 200 rows loaded · 284 ms · Total
 count not requested ». La pagination décidée par l'ADR-0020 n'a donc pas de
-place dessinée ; elle rejoint cette ligne d'état, à côté du compteur, faute de
-frame qui la situe. À reprendre si la maquette la tranche plus tard.
+place dessinée. Depuis le 2026-11-12, elle dispose d'une barre sous le panneau
+de résultat, avec 50/100/200 lignes par page, la page courante et sa plage réelle,
+et Previous/Next visibles même sur une seule page (UX-SPEC). À reprendre si la
+maquette la tranche plus tard.
 
 ### Le pied de l'aperçu, mot à mot
 
@@ -222,7 +224,7 @@ Absent, et **non ajouté** — chacun de ces points est une fonctionnalité :
 | Onglet `Plugins` et sa table (`47:8480`) | l'hôte wasmtime, que [ADR-0005](adr/0005-wasm-plugins.md) place en phase 4 et dont la condition d'entrée — six drivers natifs livrés — n'est pas remplie. Un onglet vide serait pire que pas d'onglet |
 | Onglet `Diagnostics` et `Preview diagnostics` | un rapport de diagnostic dont rien ne décrit le contenu ni la destination — or un rapport de plantage est l'un des six canaux d'[I-03](../CLAUDE.md#i-03) |
 | Champ `Interface font` | le choix de la police d'interface ; le thème porte `ui_family`, mais rien ne l'expose ni ne le persiste |
-| Champ `Result page size` | un réglage de taille de page ; Oxyn fige aujourd'hui l'aperçu à 200 lignes (`PREVIEW_ROWS`) |
+| Champ `Result page size` | un réglage global ; l'onglet Data dispose plutôt d'un sélecteur 50/100/200 par aperçu, initialement 200 (2026-11-12) |
 
 Écart assumé : la maquette porte `Save settings` et `Cancel`. Oxyn **enregistre
 au fil de l'eau** et l'annonce (« Preferences saved locally. »). Un bouton

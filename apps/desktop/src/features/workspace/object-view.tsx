@@ -20,6 +20,7 @@ import {
   previewFooterNote,
 } from "@/components/oxyn/preview-controls"
 import { RelationConstraints } from "@/components/oxyn/relation-constraints"
+import { PreviewPagination } from "@/components/oxyn/preview-pagination"
 import {
   DefinitionActions,
   RelationDefinition,
@@ -449,7 +450,6 @@ export function ObjectView({
                 loadingColumns={detailLoad.status === "loading"}
                 onApplyPredicate={preview.applyPredicate}
                 onApplySort={preview.applySort}
-                onPage={preview.page}
                 onCancel={preview.cancel}
                 onLoadColumns={() => void facets.refresh("detail")}
                 filterRef={filterRef}
@@ -522,6 +522,16 @@ export function ObjectView({
                 />
               )}
             </div>
+            {!moduleMissing ? (
+              <PreviewPagination
+                applied={preview.applied}
+                pagination={preview.pagination}
+                status={preview.status}
+                rows={state.status === "populated" ? state.rows : null}
+                onPage={preview.page}
+                onPageSize={preview.resizePage}
+              />
+            ) : null}
             <ValueInspectionDialog source={source} />
           </>
         ) : null,

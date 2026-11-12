@@ -814,7 +814,10 @@ that review, Enter alone never validates a write; Escape declines.
 ## Data of a selected table
 
 Selecting a table or a SQL view opens the **Data** tab and reads at most
-**200 rows**. The driver builds and quotes the qualified identifier; the bus
+**200 rows**. The page size can be **50, 100 or 200**, initially 200, and stays
+with that relation's retained preview during the session. Changing it starts
+at the first page, keeping the applied filter and sort; a typed, unapplied
+filter is not submitted by this gesture. The driver builds and quotes the qualified identifier; the bus
 applies the connection's policy and enforces a read-only query. On PostgreSQL,
 the catalog designates the session's database, while only the schema and the
 table join the qualified SQL name.
@@ -896,8 +899,9 @@ already received never triggers a query. It is only offered if the order is
 total — the requested sort completed by a unique key that the catalog
 declares, or, with no sort, the primary key's order where the driver vouches
 for it ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)). The Data tab
-loads the relation's description once when it opens; until it is read, neither
-a notice nor a pager is shown. Then the line under the bar says which case
+loads the relation's description once when it opens; until it is read,
+navigation is disabled and says it is waiting for that description.
+Then the line under the filter bar says which case
 holds:
 
 * **default order** — the rows come in key order and pages are offered at
@@ -910,13 +914,28 @@ holds:
   A `Sort to browse pages` link, among the footer actions on the right rather
   than inside the footer note, opens the same Sort menu. Once the user sorts, pages are offered, and the cost is theirs to
   choose;
-* **no known unique key** — the preview stays on its first page and says why:
+* **no known unique key and no native continuation** — the preview stays on its first page and says why:
   an `OFFSET` on an uncertain order would show the same row twice and omit
   another one, without signaling anything.
 
-On a later page, the line reads "Rows 1,201–1,400 of this order. Each page is
-a new read: the server may have changed between two of them.", and the footer
-"Preview · rows 1,201–1,400 · total row count not requested" — numbers grouped
+The page bar stays below the result panel, outside the grid's scroll area,
+including on a single page, an empty result, a loading read or an error.
+It carries `Rows per page`, `Page N`, the actual received range (`Rows 1–2`
+for two rows), and `Previous page` / `Next page`. Zero rows say `No rows`;
+loading or failed reads claim no range. The controls are disabled while a
+read is pending; navigation is also disabled after an error or without a
+total order or native continuation. The size selector can start a new read after an error.
+A short page disables Next; a full page permits it without a total count.
+If that next page is empty, Previous still returns to the preceding page.
+There is no page count or Last action: neither can be known without counting
+the table. The bar wraps on narrow windows and remains reachable by keyboard.
+
+For ClickHouse, Elasticsearch/OpenSearch and iterable Redis collections, pages instead follow one retained read ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). The footer says "Pages follow one read. Refresh starts a new read." Previous returns the same rows; refresh, filter, sort, size change and reconnection discard continuation and start at page one. Expiry or the history budget produces an explicit error with refresh available. Redis strings and JSON documents have one value; probabilistic structure summaries are not member collections. Older OpenSearch without `_shard_doc` visits index/shard partitions successively; sorting keeps the bounded first-page preview; the footer asks to clear the sort to browse native pages. Future partitions may reflect concurrent changes. OpenSearch 2.0–2.3 keeps its original first-page preview because PIT was introduced in 2.4. No preview issues a total-hit or row count.
+
+For independent SQL/key-order previews, on a later page, the line under the filter reads "Page 7 of this order. Each
+page is a new read: the server may have changed between two of them.", and
+the result footer names the actual range, such as
+"Preview · rows 1,201–1,250 · total row count not requested" — numbers grouped
 the en-US way. The preview does not
 claim to be a snapshot
 ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).

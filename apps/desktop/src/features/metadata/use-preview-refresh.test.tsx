@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, cleanup, renderHook } from "@testing-library/react"
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { PreviewShape, RefreshSignal } from "@/lib/ipc/metadata"
@@ -11,6 +11,7 @@ const ipc = vi.hoisted(() => {
   const pending = new Map<string, (outcome: CommandOutcome) => void>()
   const state = {
     pending,
+    retained: false,
     next: 0,
     emit: (_signal: RefreshSignal): void => undefined,
     cancelled: [] as Array<string>,
@@ -39,7 +40,15 @@ vi.mock("@/lib/ipc/metadata", async (importOriginal) => {
         ipc.reads.push({ id, relation: address.relation, session, shape })
         return new Promise((resolve) => ipc.pending.set(id, resolve))
       },
-      previewPagination: () => new Promise(() => undefined),
+      previewPagination: () =>
+        ipc.retained
+          ? Promise.resolve({
+              type: "retained",
+              previous: true,
+              next: true,
+              firstRow: 1,
+            })
+          : new Promise(() => undefined),
       subscribeRefreshSignals: (onSignal: (signal: RefreshSignal) => void) => {
         ipc.emit = onSignal
         return Promise.resolve()
@@ -66,7 +75,9 @@ vi.mock("@/lib/ipc/results", () => ({
 
 const { usePreview, previews } = await import("./use-preview")
 
-const executed = (result: string): CommandOutcome => ({
+const executed = (
+  result: string
+): Extract<CommandOutcome, { type: "executed" }> => ({
   type: "executed",
   result,
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
@@ -144,12 +155,89 @@ function signal(value: RefreshSignal) {
 const readsSince = (mark: number) => ipc.reads.slice(mark)
 
 beforeEach(() => {
+  ipc.retained = false
   ipc.reads = []
   ipc.cancelled = []
   ipc.pending.clear()
 })
 
 afterEach(() => cleanup())
+
+describe("the size of a preview page", () => {
+  it.each(["sqlite", "postgres", "mysql", "duckdb", "mongodb", "turso"])(
+    "uses the same page controls for %s",
+    async (driver) => {
+      const open = { ...opened(), driver }
+      const view = renderPreviews(open, ["paged"])
+      await answerAll(executed)
+      act(() => view.result.current.at(0)?.resizePage(50))
+      await answerAll((id) => ({ ...executed(id), rows: 50 }))
+      act(() => view.result.current.at(0)?.page(true))
+      expect(ipc.reads.at(-1)).toMatchObject({
+        session: open.session,
+        shape: { pageSize: 50, offset: 50 },
+      })
+      await answerAll(executed)
+    }
+  )
+
+  it("pages by the selected size and keeps the applied filter and sort", async () => {
+    const view = renderPreviews(opened(), ["sized"])
+    await answerAll((id) => ({ ...executed(id), rows: 200 }))
+    const preview = () => {
+      const value = view.result.current.at(0)
+      if (!value) throw new Error("one preview is mounted")
+      return value
+    }
+    act(() => preview().resizePage(50))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 0 })
+    await answerAll((id) => ({ ...executed(id), rows: 50 }))
+    act(() => preview().page(true))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 50 })
+    await answerAll((id) => ({ ...executed(id), rows: 1 }))
+    act(() => preview().page(false))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 0 })
+    await answerAll((id) => ({ ...executed(id), rows: 50 }))
+    act(() => preview().applyPredicate(" id >= 2 "))
+    await answerAll(executed)
+    const sort = [{ column: "id", descending: true }]
+    act(() => preview().applySort(sort))
+    await answerAll(executed)
+    act(() => preview().resizePage(100))
+    expect(ipc.reads.at(-1)?.shape).toEqual({
+      pageSize: 100,
+      continuation: null,
+      offset: 0,
+      predicate: " id >= 2 ",
+      sort,
+    })
+    await answerAll(executed)
+    view.show([])
+    const count = ipc.reads.length
+    view.show(["sized"])
+    expect(ipc.reads).toHaveLength(count)
+    expect(preview().applied.pageSize).toBe(100)
+  })
+
+  it("ignores a late page of another size and keeps connections independent", async () => {
+    const first = renderPreviews(opened(), ["sized"])
+    await answerAll(executed)
+    act(() => first.result.current.at(0)?.resizePage(50))
+    const old = [...ipc.pending.values()]
+    ipc.pending.clear()
+    act(() => first.result.current.at(0)?.resizePage(100))
+    await answerAll(executed)
+    await act(async () => {
+      for (const resolve of old) resolve({ ...executed("late"), rows: 50 })
+    })
+    expect(first.result.current.at(0)?.applied.pageSize).toBe(100)
+    const second = renderPreviews(opened(), ["sized"])
+    expect(ipc.reads.at(-1)?.shape.pageSize).toBe(200)
+    await answerAll(executed)
+    expect(second.result.current.at(0)?.applied.pageSize).toBe(200)
+    expect(first.result.current.at(0)?.applied.pageSize).toBe(100)
+  })
+})
 
 describe("after a write, only the preview on screen reads again", () => {
   it("counts one read for the visible tab, none for the hidden ones", async () => {
@@ -349,3 +437,46 @@ describe("an automatic read on a tab that is no longer shown", () => {
     expect(view.result.current[0]?.running).toBe(true)
   })
 })
+
+it.each(["clickhouse", "elasticsearch", "redis"])(
+  "keeps only %s navigation on its retained read",
+  async (driver) => {
+    ipc.retained = true
+    const open = { ...opened(), driver }
+    const view = renderPreviews(open, ["native"])
+    const preview = () => {
+      const value = view.result.current.at(0)
+      if (!value) throw new Error("one preview is mounted")
+      return value
+    }
+    await answerAll(() => ({ ...executed("first"), rows: 200 }))
+    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+    act(() => preview().page(true))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({
+      offset: 200,
+      continuation: "first",
+    })
+    await answerAll(() => ({ ...executed("second"), rows: 200 }))
+    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+    act(() => preview().page(false))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({
+      offset: 0,
+      continuation: "second",
+    })
+    await answerAll(() => ({ ...executed("back"), rows: 200 }))
+    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+    act(() => preview().refresh())
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({
+      offset: 0,
+      continuation: null,
+    })
+    await answerAll(executed)
+    act(() => preview().resizePage(50))
+    expect(ipc.reads.at(-1)?.shape).toMatchObject({
+      offset: 0,
+      pageSize: 50,
+      continuation: null,
+    })
+    await answerAll(executed)
+  }
+)

@@ -13,7 +13,7 @@
 //!   with `{`, one Query DSL clause sent as the query. Either way the request
 //!   stays a `_search`: a filter cannot turn it into a write.
 //!
-//! # No page past the first
+//! # Independent reads have no OFFSET
 //!
 //! A total order needs a unique sort key. `_id` is not sortable by default,
 //! and a sort on `_doc` or `_shard_doc` is stable only inside one point in
@@ -21,8 +21,11 @@
 //! repeat a document and skip another without saying so. Like ClickHouse, the
 //! `NoUniqueKey` case of
 //! [ADR-0028](../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md):
-//! the preview stays on its first page, and deep reading goes through a
-//! point in time in the console.
+//! an independent preview stays on its first page. Native pages use a PIT
+//! whose ownership spans the entire retained read.
+
+//! Native UI pagination instead retains one execution (ADR-0077). The
+//! bounded `request` remains available to callers needing only a sample.
 
 use oxyn_catalog::CatalogPath;
 use oxyn_catalog::model::{LogicalType, Relation};
@@ -114,6 +117,80 @@ pub(crate) fn request(
         .with_limits(ExecLimits::default().with_max_rows(Some(rows))))
 }
 
+/// A total PIT order with no hit count. Older OpenSearch releases do not
+/// expose `_shard_doc`; they traverse one index/shard at a time using `_doc`.
+pub(crate) fn stream_request(
+    path: &CatalogPath,
+    relation: &Relation,
+    limit: u32,
+    shape: &PreviewShape,
+    product: &crate::catalog::Product,
+) -> Result<ExecRequest> {
+    let mut request = request(path, relation, limit, shape)?;
+    let (line, body) = request
+        .text
+        .split_once('\n')
+        .ok_or_else(|| OxynError::Internal("preview search has no body".into()))?;
+    let mut body: Value = serde_json::from_str(body)
+        .map_err(|_| OxynError::Internal("preview search body is invalid".into()))?;
+    let mut sort = body
+        .get("sort")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if shard_doc(product) {
+        // OpenSearch encodes the shard number, not the PIT-wide shard ordinal.
+        // Across alias indices it therefore also needs the concrete index.
+        if product.name == "OpenSearch" {
+            sort.push(json!({"_index": "asc"}));
+        }
+        sort.push(json!({"_shard_doc": "asc"}));
+    } else {
+        if !sort.is_empty() {
+            return Err(OxynError::NotSupported { capability: "sorting a native preview across shards on this older OpenSearch version; use a console or upgrade the server".into() });
+        }
+        sort.push(json!({"_doc": "asc"}));
+    }
+    body["sort"] = Value::Array(sort);
+    request.text = format!("{line}\n{body}");
+    Ok(request)
+}
+
+pub(crate) fn pit_available(product: &crate::catalog::Product) -> bool {
+    product.name != "OpenSearch" || opensearch_at_least(product, (2, 4))
+}
+
+pub(crate) fn shard_doc(product: &crate::catalog::Product) -> bool {
+    product.name != "OpenSearch" || opensearch_at_least(product, (3, 3))
+}
+
+fn opensearch_at_least(product: &crate::catalog::Product, minimum: (u32, u32)) -> bool {
+    let mut parts = product.version.split('.');
+    let version = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .zip(parts.next().and_then(|part| part.parse::<u32>().ok()));
+    version.is_some_and(|version| version >= minimum)
+}
+
+pub(crate) fn prepare_request(
+    path: &CatalogPath,
+    relation: &Relation,
+    limit: u32,
+    shape: &PreviewShape,
+    product: &crate::catalog::Product,
+) -> Result<oxyn_driver::PreparedPreview> {
+    let retained = pit_available(product) && (shape.sort.is_empty() || shard_doc(product));
+    Ok(oxyn_driver::PreparedPreview {
+        request: if retained {
+            stream_request(path, relation, limit, shape, product)?
+        } else {
+            request(path, relation, limit, shape)?
+        },
+        retained,
+    })
+}
+
 /// The query of a filter the user wrote.
 fn filter(predicate: &str) -> Result<Value> {
     if predicate.trim_start().starts_with('{') {
@@ -177,6 +254,72 @@ mod tests {
     use oxyn_core::PreviewSort;
 
     use super::*;
+
+    #[test]
+    fn native_search_tie_breakers_cover_alias_indices_and_do_not_count() {
+        for (name, version, expected) in [
+            ("Elasticsearch", "9.5.5", json!([{"_shard_doc":"asc"}])),
+            (
+                "OpenSearch",
+                "3.9.0",
+                json!([{"_index":"asc"},{"_shard_doc":"asc"}]),
+            ),
+            ("OpenSearch", "2.19.7", json!([{"_doc":"asc"}])),
+        ] {
+            let product = crate::catalog::Product {
+                name,
+                version: version.into(),
+            };
+            let request = stream_request(
+                &path("alias"),
+                &relation(),
+                50,
+                &PreviewShape::default(),
+                &product,
+            )
+            .expect("native preview");
+            let (_, body) = request.text.split_once('\n').expect("body");
+            let body: Value = serde_json::from_str(body).expect("composed JSON");
+            assert_eq!(body.get("sort"), Some(&expected));
+            assert_eq!(body.get("track_total_hits"), Some(&json!(false)));
+        }
+    }
+
+    #[test]
+    fn old_servers_keep_their_bounded_preview_and_their_first_page_sort() {
+        for (version, pit, shard) in [
+            ("2.0.0", false, false),
+            ("2.3.0", false, false),
+            ("2.4.0", true, false),
+            ("2.19.7", true, false),
+            ("3.2.0", true, false),
+            ("3.3.0", true, true),
+            ("3.9.0", true, true),
+        ] {
+            let product = crate::catalog::Product {
+                name: "OpenSearch",
+                version: version.into(),
+            };
+            assert_eq!(pit_available(&product), pit);
+            assert_eq!(shard_doc(&product), shard);
+            let plain = prepare_request(
+                &path("alias"),
+                &relation(),
+                50,
+                &PreviewShape::default(),
+                &product,
+            )
+            .expect("first page");
+            assert_eq!(plain.retained, pit);
+            let sorted = PreviewShape {
+                sort: vec![PreviewSort::ascending("message.keyword")],
+                ..PreviewShape::default()
+            };
+            let prepared = prepare_request(&path("alias"), &relation(), 50, &sorted, &product)
+                .expect("sorting remains available");
+            assert_eq!(prepared.retained, shard);
+        }
+    }
 
     fn relation() -> Relation {
         Relation::new("logs", RelationKind::Index).with_fields(vec![

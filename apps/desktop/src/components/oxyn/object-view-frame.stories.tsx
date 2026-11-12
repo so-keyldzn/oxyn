@@ -1,3 +1,4 @@
+import { PreviewPagination } from "./preview-pagination"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
@@ -205,7 +206,6 @@ function Harness({
                 pagination={pagination}
                 onApplyPredicate={() => undefined}
                 onApplySort={() => undefined}
-                onPage={() => undefined}
                 onCancel={onCancel}
                 onLoadColumns={() => undefined}
                 sortOpen={sortOpen}
@@ -254,6 +254,20 @@ function Harness({
                   }
                 />
               </div>
+              <PreviewPagination
+                applied={PLAIN_SHAPE}
+                pagination={pagination}
+                status={
+                  running
+                    ? "loading"
+                    : state.status === "error"
+                      ? "failed"
+                      : "loaded"
+                }
+                rows={state.status === "populated" ? state.rows : null}
+                onPage={() => undefined}
+                onPageSize={() => undefined}
+              />
             </>
           ) : null,
         structure: (
@@ -363,7 +377,9 @@ export const PreviewSecondPage: Story = {
 export const PreviewWithoutOrder: Story = {
   args: { pagination: { type: "needsOrder" } },
   play: async ({ canvas }) => {
-    await expect(canvas.queryByRole("button", { name: /Next page/ })).toBeNull()
+    await expect(
+      canvas.getByRole("button", { name: /Next page/ })
+    ).toBeDisabled()
     await expect(
       canvas.getByText("Preview · total row count not requested")
     ).toBeVisible()

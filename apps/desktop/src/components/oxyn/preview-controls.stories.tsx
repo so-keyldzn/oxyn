@@ -25,7 +25,6 @@ const meta = {
     pagination: { type: "needsOrder" },
     onApplyPredicate: fn(),
     onApplySort: fn(),
-    onPage: fn(),
     onCancel: fn(),
     onLoadColumns: fn(),
   },
@@ -85,16 +84,12 @@ export const KeyOrderFirstPage: Story = {
       orderedBy: ["tenant_id", "<b>id</b>"],
     },
   },
-  play: async ({ canvas, args, canvasElement }) => {
+  play: async ({ canvas, canvasElement }) => {
     await expect(canvas.getByRole("status")).toHaveTextContent(
       "Rows come in the order of the primary key (tenant_id, <b>id</b>). Sort the preview to choose another order."
     )
     await expect(canvasElement.querySelector("b")).toBeNull()
-    await expect(
-      canvas.getByRole("button", { name: /Previous page/ })
-    ).toBeDisabled()
-    await userEvent.click(canvas.getByRole("button", { name: /Next page/ }))
-    await expect(args.onPage).toHaveBeenCalledWith(true)
+    await expect(canvas.queryByRole("button", { name: /Next page/ })).toBeNull()
   },
 }
 
@@ -110,10 +105,8 @@ export const KeyOrderSecondPage: Story = {
       orderedBy: ["id"],
     },
   },
-  play: async ({ canvas, args }) => {
-    await expect(canvas.getByText(/Rows 201–400 of this order/)).toBeVisible()
-    await userEvent.click(canvas.getByRole("button", { name: /Previous page/ }))
-    await expect(args.onPage).toHaveBeenCalledWith(false)
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText(/Page 2 of this order/)).toBeVisible()
   },
 }
 
@@ -164,6 +157,7 @@ export const NoUniqueKey: Story = {
 export const SecondPageOfATotalOrder: Story = {
   args: {
     applied: {
+      ...PLAIN_SHAPE,
       sort: [{ column: "amount", descending: true }],
       predicate: null,
       offset: 200,
@@ -176,10 +170,8 @@ export const SecondPageOfATotalOrder: Story = {
       orderedBy: null,
     },
   },
-  play: async ({ canvas, args }) => {
-    await expect(canvas.getByText(/Rows 201–400 of this order/)).toBeVisible()
-    await userEvent.click(canvas.getByRole("button", { name: /Next page/ }))
-    await expect(args.onPage).toHaveBeenCalledWith(true)
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText(/Page 2 of this order/)).toBeVisible()
   },
 }
 

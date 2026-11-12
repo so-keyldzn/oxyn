@@ -30,6 +30,7 @@ fn preview_is_a_remote_read_with_its_own_audit_name() {
             sort: vec![crate::preview::PreviewSort::descending("id")],
             predicate: Some("note LIKE '100%'".into()),
             offset: 200,
+            continuation: Some(crate::ResultId::new()),
             columns: Some(vec!["id".into(), "note".into()]),
         },
     };

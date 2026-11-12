@@ -739,6 +739,14 @@ pub struct Relation {
     /// ordered behind its back. Read through [`Self::previews_in_key_order`].
     #[serde(default)]
     pub key_order_preview: bool,
+    /// Pages traverse one retained driver cursor, rather than independent
+    /// queries requiring a unique key (ADR-0077).
+    #[serde(default)]
+    pub retained_preview: bool,
+    /// Requested sorts can also traverse this native cursor. Otherwise a
+    /// sorted first page remains available, but cannot be continued.
+    #[serde(default)]
+    pub retained_preview_sort: bool,
 }
 
 impl Relation {
@@ -753,6 +761,8 @@ impl Relation {
             size_bytes: None,
             fields: Vec::new(),
             key_order_preview: false,
+            retained_preview: false,
+            retained_preview_sort: false,
         }
     }
 
@@ -761,6 +771,14 @@ impl Relation {
     #[must_use]
     pub fn with_key_order_preview(mut self) -> Self {
         self.key_order_preview = true;
+        self
+    }
+
+    /// Declares native traversal through a retained cursor.
+    #[must_use]
+    pub fn with_retained_preview(mut self, supports_sort: bool) -> Self {
+        self.retained_preview = true;
+        self.retained_preview_sort = supports_sort;
         self
     }
 

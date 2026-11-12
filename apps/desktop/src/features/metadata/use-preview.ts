@@ -13,8 +13,12 @@ import {
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { backend, newCommandId } from "@/lib/ipc/client"
 import { executionProgress, forget, watch } from "@/lib/ipc/events"
-import { PLAIN_SHAPE, PREVIEW_ROWS, metadata } from "@/lib/ipc/metadata"
-import type { PreviewShape, PreviewSortKey } from "@/lib/ipc/metadata"
+import { PLAIN_SHAPE, metadata } from "@/lib/ipc/metadata"
+import type {
+  PreviewPageSize,
+  PreviewShape,
+  PreviewSortKey,
+} from "@/lib/ipc/metadata"
 import { results } from "@/lib/ipc/results"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
 
@@ -104,7 +108,17 @@ export function usePreview({
   const status = previewStatus(state)
   const applied = entry?.applied ?? PLAIN_SHAPE
   const read = (shape: PreviewShape, automatic = false) =>
-    previews.read(key, shape, automatic)
+    previews.read(
+      key,
+      automatic
+        ? {
+            ...shape,
+            continuation: null,
+            offset: shape.continuation ? 0 : shape.offset,
+          }
+        : shape,
+      automatic
+    )
 
   // Out of sight, an automatic read stops holding the shared session; the
   // effect below reads again when the view shows. Loaded results stay.
@@ -181,23 +195,38 @@ export function usePreview({
     startedAt: entry?.startedAt ?? null,
     approvalRefused: entry?.approvalRefused ?? false,
     pagination: pagination.data ?? null,
-    refresh: () => read(applied),
+    refresh: () =>
+      read({
+        ...applied,
+        continuation: null,
+        offset:
+          pagination.data?.type === "retained" || applied.continuation
+            ? 0
+            : applied.offset,
+      }),
     applyPredicate: (predicate: string) =>
       read({
-        sort: applied.sort,
+        ...applied,
         predicate: predicate.trim() === "" ? null : predicate,
         offset: 0,
+        continuation: null,
       }),
     applySort: (sort: Array<PreviewSortKey>) =>
       // The predicate in force, not the one being typed: a sort must not
       // apply a filter nobody pressed Apply for.
-      read({ sort, predicate: applied.predicate, offset: 0 }),
+      read({ ...applied, sort, offset: 0, continuation: null }),
+    resizePage: (pageSize: PreviewPageSize) =>
+      read({ ...applied, pageSize, offset: 0, continuation: null }),
     page: (forward: boolean) =>
       read({
         ...applied,
+        continuation:
+          pagination.data?.type === "retained" && state.status === "populated"
+            ? state.result
+            : null,
         offset: Math.max(
           0,
-          applied.offset + (forward ? PREVIEW_ROWS : -PREVIEW_ROWS)
+          applied.offset + (forward ? applied.pageSize : -applied.pageSize)
         ),
       }),
     cancel: () => previews.cancel(key),
