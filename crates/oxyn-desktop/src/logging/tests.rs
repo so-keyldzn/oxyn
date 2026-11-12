@@ -101,9 +101,8 @@ fn the_journal_on_disk_goes_through_the_same_cap() {
 #[test]
 fn a_password_literal_never_reaches_the_journal_through_the_parser() {
     // #178: `sqlparser` logs through `log`, which `start` bridges into
-    // `tracing`; a scoped subscriber receives it once the bridge is there.
-    // Another test may have installed it already: then this one is a no-op.
-    let _ = tracing_subscriber::registry().try_init();
+    // `tracing`. `set_default` installs that bridge without claiming the
+    // global subscriber needed by the cross-thread journal sentinel test.
     let terminal = Journal::default();
     let directory = tempfile::tempdir().expect("a temporary directory");
     let file = FileJournal::open(directory.path(), file::LIMITS).expect("the journal opens");
@@ -126,11 +125,12 @@ fn a_password_literal_never_reaches_the_journal_through_the_parser() {
             oxyn_core::SqlDialect::Postgres,
         ),
     ];
-    tracing::subscriber::with_default(subscriber, || {
+    {
+        let _subscriber = subscriber.set_default();
         for (sql, dialect) in sent {
             let _ = oxyn_query::classify(sql, dialect);
         }
-    });
+    }
     file.flush(std::time::Duration::from_secs(5));
 
     let on_disk = std::fs::read_to_string(directory.path().join("oxyn.log"))

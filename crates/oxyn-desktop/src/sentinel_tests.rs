@@ -666,16 +666,16 @@ impl<S> tracing_subscriber::layer::Filter<S> for Gate {
 /// Why process-wide and not `tracing::subscriber::with_default`, scoped to
 /// this test's thread: see [`Gate`]'s doc. Why `std::sync::Once` rather than
 /// once per test: `tracing::subscriber::set_global_default` accepts exactly
-/// one subscriber per process, and a second call is a silent no-op — trying
-/// to install a fresh one per test would only ever install the first.
+/// one subscriber per process, and a second call returns an error. Check that
+/// result so another test cannot silently leave this journal disconnected.
 ///
 /// # Under `cargo test` versus `cargo-nextest`
-/// `make qualite` runs `cargo-nextest`, which gives every test its own
-/// process: [`JOURNAL`] then only ever holds this test's own run. Run
-/// directly with plain `cargo test`, every test in this binary shares one
-/// process and this one static journal — verify by hand with
-/// `--test-threads=1`, so a pass or a fail never depends on what else in the
-/// binary happened to be capturing, or writing to stderr, at the same moment.
+/// When available, `make qualite` runs `cargo-nextest`, which gives every test
+/// its own process: [`JOURNAL`] then only ever holds this test's own run. With
+/// the plain `cargo test` fallback, every test in this binary shares one
+/// process, so concurrent events can reach [`JOURNAL`] while capture is on.
+/// Other logging tests use scoped subscribers and leave the global slot to
+/// this sentinel, which must also capture the backend's worker threads.
 fn install_journal_once() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
@@ -685,7 +685,8 @@ fn install_journal_once() {
             crate::logging::layer(tracing_subscriber::EnvFilter::new("trace"), Recorder, true)
                 .with_filter(Gate),
         );
-        let _ = tracing::subscriber::set_global_default(subscriber);
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("the journal sentinel test owns the process-wide tracing subscriber");
     });
     // A callsite reached before this subscriber existed keeps whatever
     // interest it cached then — the cache is global to the process, not to a
