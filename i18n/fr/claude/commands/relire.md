@@ -4,7 +4,7 @@ argument-hint: "[chemin ou plage de commits, défaut : le travail en cours]"
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
-<!-- oxyn-translation source=".claude/commands/relire.md" sha256="814f8da55d33" -->
+<!-- oxyn-translation source=".claude/commands/relire.md" sha256="0bde89321cc2" -->
 
 > Traduction française de [.claude/commands/relire.md](../../../../.claude/commands/relire.md). **La version anglaise fait foi.**
 
@@ -29,6 +29,15 @@ seule, et c'est ce qui rend leur verdict crédible :
 | `detecteur-divergence` | ce que le code fait et que `docs/` dit autrement |
 
 Les lancer en parallèle quand le changement touche plusieurs frontières.
+
+Relire aussi le changement selon la [liste de vérification du raisonnement d'ingénierie](../checklists/conception.md)
+et les [règles d'organisation du code](../../CLAUDE.md#organisation-du-code),
+localement ou avec le spécialiste pertinent. Cette passe est distincte de
+`relecteur-invariants`, dont le périmètre reste les treize invariants. Vérifier
+les frontières des responsabilités, le couplage et les preuves concernant les
+cas d'échec du domaine. Un constat structurel nomme les responsabilités mêlées
+et une conséquence concrète sur la maintenance ou le comportement ; le nombre
+de lignes seul n'est pas un constat.
 
 ## L'ordre de gravité
 

@@ -8,6 +8,11 @@ Purpose: implement **$ARGUMENTS**.
 
 ## Before writing
 
+Apply the [engineering judgment checklist](../checklists/conception.md),
+including for a specialized move below. Identify which responsibility owns the
+change and apply [code organization](../../CLAUDE.md#code-organization) before
+extending a file.
+
 If the move has its own command, use it rather than this one — it loads the
 precise contract:
 

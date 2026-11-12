@@ -16,6 +16,10 @@ authoritative ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
 The documents of `docs/` are authoritative on the domain; report any
 contradiction with the code.
 
+Apply the shared [engineering judgment checklist](.claude/checklists/conception.md)
+and [code organization rules](CLAUDE.md#code-organization) to every change,
+including work carried out through a specialized procedure or a subagent.
+
 ## Start of task
 
 Read `git status --short`, then the relevant manifests and implementation plan

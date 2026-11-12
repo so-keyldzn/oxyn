@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="2b8bdba4d89a" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="24db38f6c13d" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -172,6 +172,9 @@ l'utilisateur, sans message d'erreur nulle part.
 
 ## Organisation du code
 
+Avant toute modification, appliquer la [liste de vérification du raisonnement d'ingénierie](claude/checklists/conception.md).
+S'appuyer sur les contraintes et les preuves propres au domaine, même sans plan formel.
+
 L'arborescence et le sens des dépendances font autorité dans
 [ARCHITECTURE](docs/ARCHITECTURE.md#le-découpage). Ce qui vaut partout :
 
@@ -186,8 +189,20 @@ L'arborescence et le sens des dépendances font autorité dans
   implémentation qui n'est pas une frontière est une indirection, pas un
   découplage ;
 - **un commentaire dit *pourquoi*.** Ce que fait le code, le code le dit ;
-- **seuil de vigilance** : au-delà d'environ 400 lignes, un fichier porte
-  probablement deux sujets. C'est un signal à regarder, pas une règle mécanique.
+- **aucun fichier ni module monolithique.** Garder une responsabilité cohérente
+  par fichier. Séparer règles métier, entrées-sorties, coordination d'état et
+  présentation lorsqu'elles évoluent indépendamment ; les points d'entrée
+  composent ces parties, ils ne les absorbent pas ;
+- **découper par responsabilité, pas par nombre de lignes.** Utiliser des
+  interfaces explicites et une visibilité restreinte. Fragments arbitraires,
+  fonctions fourre-tout et abstractions spéculatives ne font que déplacer le
+  couplage ;
+- **seuil de vigilance** : lorsqu'un fichier maintenu à la main approche ou
+  dépasse environ 400 lignes, examiner ses responsabilités avant de l'étendre.
+  Extraire la responsabilité modifiée, ou expliquer dans le compte rendu pourquoi
+  la conserver dans ce fichier reste cohérent. Un fichier plus court peut aussi
+  être monolithique. Les fichiers générés se modifient par leur générateur ;
+  garder toute refactorisation dans le périmètre de la tâche.
 
 ## Règles chargées à la demande
 

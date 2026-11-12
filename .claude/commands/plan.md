@@ -13,14 +13,18 @@ Purpose: plan **$ARGUMENTS**. Write nothing in `crates/` during this command.
 2. The authoritative documents concerned by the boundary touched
    (`docs/README.md` gives the mapping).
 3. `ls docs/adr/` — does an existing decision already constrain this work?
+4. Apply the [engineering judgment checklist](../checklists/conception.md)
+   using the relevant specialty profiles.
 
 ## What the plan must settle
 
 | Question | Why it comes before the code |
 |---|---|
 | Which **crate**? | the direction of dependencies forbids some answers; finding out while coding costs a move |
+| Which **responsibility owns each behavior**, and what crosses its boundary? | apply [code organization](../../CLAUDE.md#code-organization) before adding to an existing file |
 | Is a new bus **command** needed? | a feature starts with a command, not with a view |
 | Which **invariants** are at stake? | name them now, not discover them in review |
+| Which **domain failure cases** matter, and how will they be checked? | assumptions, error handling and recovery affect the design, not just the tests |
 | What is **not** settled? | an unsettled point is resolved by an ADR, not along the way during implementation |
 | How will we know it is **done**? | without a written criterion, "done" means "I have no more ideas" |
 
@@ -45,7 +49,8 @@ everything is already settled. The plan is there to find what is not.
 ## Deliverable
 
 A short note: the target crate, the bus commands concerned, the invariants at
-stake, the unsettled points, the completion criterion. No code.
+stake, the responsibility boundaries, the relevant failure cases and their
+validation, the unsettled points, the completion criterion. No code.
 
 For a broad exploration of the repository, delegate to an agent rather than
 filling the context with reads — but the plan itself is decided here.

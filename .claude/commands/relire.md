@@ -26,6 +26,14 @@ read-only, and that is what makes their verdict credible:
 
 Run them in parallel when the change touches several boundaries.
 
+Also review the change against the [engineering judgment checklist](../checklists/conception.md)
+and [code organization](../../CLAUDE.md#code-organization), locally or with the
+relevant specialist. This is separate from `relecteur-invariants`, whose scope
+stays the thirteen invariants. Check responsibility boundaries, coupling and
+evidence for the domain's failure cases. A structural finding names the mixed
+responsibilities and a concrete maintenance or behavioral consequence; line
+count alone is not a finding.
+
 ## The order of severity
 
 1. **Invariant broken** — blocking, no discussion.

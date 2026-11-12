@@ -163,6 +163,9 @@ anywhere.
 
 ## Code organization
 
+Before changing anything, apply the [engineering judgment checklist](.claude/checklists/conception.md).
+Use the relevant domain's constraints and evidence, even when no formal plan is needed.
+
 The tree and the direction of dependencies are authoritative in
 [ARCHITECTURE](docs/ARCHITECTURE.md#le-découpage). What holds everywhere:
 
@@ -176,8 +179,17 @@ The tree and the direction of dependencies are authoritative in
 - **no abstraction for a single caller** — a trait with a single implementation
   that is not a boundary is an indirection, not a decoupling;
 - **a comment says *why*.** What the code does, the code says;
-- **vigilance threshold**: beyond about 400 lines, a file probably carries two
-  subjects. It is a signal to look at, not a mechanical rule.
+- **no monolithic files or modules.** Keep one coherent responsibility per file.
+  Separate domain rules, I/O, state coordination and presentation when they
+  change independently; entry points compose these parts, not absorb them;
+- **split by responsibility, not by line count.** Use explicit interfaces and
+  narrow visibility. Arbitrary fragments, catch-all helpers and speculative
+  abstractions only move the coupling elsewhere;
+- **vigilance threshold**: when a hand-maintained file approaches or exceeds
+  about 400 lines, inspect its responsibilities before extending it. Extract the
+  responsibility being changed, or explain in the change report why keeping it
+  together remains cohesive. A smaller file can also be monolithic. Generated
+  files are changed through their generator; keep any refactor within the task's scope.
 
 ## On-demand rules
 

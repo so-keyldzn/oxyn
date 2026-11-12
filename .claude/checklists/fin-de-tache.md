@@ -33,6 +33,10 @@ claim full success. Read its output rather than its exit code.
 
 ## Hygiene
 
+- [ ] The [engineering judgment checklist](conception.md) is satisfied for the
+      task's scope; relevant failure cases have validation evidence or a stated limit
+- [ ] Changed files follow [code organization](../../CLAUDE.md#code-organization);
+      any retained large file has its cohesion explained in the change report
 - [ ] No dead code, no code commented out "just in case"
 - [ ] No `TODO` without a date and without what unblocks it
 - [ ] No abstraction for a single caller

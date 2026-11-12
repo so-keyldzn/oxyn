@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="AGENTS.md" sha256="6693c0599fbc" -->
+<!-- oxyn-translation source="AGENTS.md" sha256="cca4bf4238aa" -->
 
 > Traduction française de [AGENTS.md](../../AGENTS.md). **La version anglaise fait foi.**
 
@@ -20,6 +20,11 @@ l'anglais faisant foi
 ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
 Les documents de `docs/` font autorité sur le domaine ; signaler toute
 contradiction avec le code.
+
+Appliquer la [liste commune de vérification du raisonnement d'ingénierie](claude/checklists/conception.md)
+et les [règles d'organisation du code](CLAUDE.md#organisation-du-code) à chaque
+modification, y compris celles réalisées par une procédure spécialisée ou un
+sous-agent.
 
 ## Début de tâche
 

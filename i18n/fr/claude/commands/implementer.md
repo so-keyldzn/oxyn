@@ -4,13 +4,18 @@ argument-hint: "<ce qu'il faut implémenter>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 ---
 
-<!-- oxyn-translation source=".claude/commands/implementer.md" sha256="d9d03adc0007" -->
+<!-- oxyn-translation source=".claude/commands/implementer.md" sha256="632101980b35" -->
 
 > Traduction française de [.claude/commands/implementer.md](../../../../.claude/commands/implementer.md). **La version anglaise fait foi.**
 
 Objet : implémenter **$ARGUMENTS**.
 
 ## Avant d'écrire
+
+Appliquer la [liste de vérification du raisonnement d'ingénierie](../checklists/conception.md),
+y compris pour un geste spécialisé ci-dessous. Identifier la responsabilité qui
+porte le changement et appliquer les [règles d'organisation du code](../../CLAUDE.md#organisation-du-code)
+avant d'étendre un fichier.
 
 Si le geste a sa propre commande, l'utiliser plutôt que celle-ci — elle charge
 le contrat précis :
