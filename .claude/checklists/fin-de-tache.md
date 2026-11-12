@@ -37,7 +37,11 @@ claim full success. Read its output rather than its exit code.
       task's scope; relevant failure cases have validation evidence or a stated limit
 - [ ] Changed files follow [code organization](../../CLAUDE.md#code-organization);
       any retained large file has its cohesion explained in the change report
-- [ ] No dead code, no code commented out "just in case"
+- [ ] Reuse and removal decisions satisfy [code organization](../../CLAUDE.md#code-organization):
+      no duplicate domain rule or obsolete leftover introduced or retained by the change
+- [ ] Consequences and hard-to-detect failures identified in the
+      [engineering judgment checklist](conception.md) have explicit validation evidence
+      or a stated gap; no sensitive data exposed by diagnostics
 - [ ] No `TODO` without a date and without what unblocks it
 - [ ] No abstraction for a single caller
 - [ ] No module or crate with a catch-all name

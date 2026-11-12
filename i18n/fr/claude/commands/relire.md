@@ -4,7 +4,7 @@ argument-hint: "[chemin ou plage de commits, défaut : le travail en cours]"
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
-<!-- oxyn-translation source=".claude/commands/relire.md" sha256="0bde89321cc2" -->
+<!-- oxyn-translation source=".claude/commands/relire.md" sha256="d65f1345b4ff" -->
 
 > Traduction française de [.claude/commands/relire.md](../../../../.claude/commands/relire.md). **La version anglaise fait foi.**
 
@@ -38,6 +38,13 @@ les frontières des responsabilités, le couplage et les preuves concernant les
 cas d'échec du domaine. Un constat structurel nomme les responsabilités mêlées
 et une conséquence concrète sur la maintenance ou le comportement ; le nombre
 de lignes seul n'est pas un constat.
+
+Vérifier les règles métier dupliquées et le code obsolète selon les mêmes règles
+d'organisation, avec des preuves de leurs appelants ou de leur absence d'usage.
+Évaluer les conséquences identifiées dans la liste de vérification : divulgation,
+perte ou corruption de données, échec silencieux et effort de récupération. Dans
+chaque niveau de gravité ci-dessous, prioriser les impacts élevés et les échecs
+difficiles à détecter ; des tests qui passent n'excluent pas un échec non testé.
 
 ## L'ordre de gravité
 

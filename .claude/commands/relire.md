@@ -34,6 +34,12 @@ evidence for the domain's failure cases. A structural finding names the mixed
 responsibilities and a concrete maintenance or behavioral consequence; line
 count alone is not a finding.
 
+Check duplicated domain rules and obsolete code against the same organization
+rules, with evidence of their callers or lack of use. Assess the consequences
+identified in the checklist: disclosure, loss or corruption of data, silent
+failure and recovery effort. Within each severity level below, prioritize high
+impact and poor detectability; passing tests do not rule out an untested failure.
+
 ## The order of severity
 
 1. **Invariant broken** — blocking, no discussion.

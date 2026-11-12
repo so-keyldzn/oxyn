@@ -174,7 +174,16 @@ The tree and the direction of dependencies are authoritative in
   coupling point;
 - **one driver per protocol, not per product** — Redshift ≡ PostgreSQL
   ([ADR-0003](docs/adr/0003-driver-capabilities.md));
-- **no dead code, no code commented out "just in case"**: git remembers it;
+- **one source for each domain rule.** Search for an existing implementation
+  before adding one. Reuse or extract shared behavior when its meaning and
+  reasons to change are the same; similar-looking code alone does not justify
+  an abstraction. Share domain definitions, policies and constants; retain
+  independent validation at each trust boundary;
+- **no dead code or obsolete leftovers.** Remove code, imports, dependencies,
+  configuration and comments made unused by the change, within its scope.
+  Verify callers, dynamic registrations and public contracts before declaring
+  something unused; a search with no match is not sufficient for every entry point.
+  Keep no disabled implementation "just in case": git remembers it;
 - **no `TODO` without a date** and without naming what unblocks it;
 - **no abstraction for a single caller** — a trait with a single implementation
   that is not a boundary is an indirection, not a decoupling;

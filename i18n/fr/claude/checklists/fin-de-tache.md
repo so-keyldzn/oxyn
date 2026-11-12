@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/checklists/fin-de-tache.md" sha256="502386beb27f" -->
+<!-- oxyn-translation source=".claude/checklists/fin-de-tache.md" sha256="ca6841e0feb4" -->
 
 > Traduction française de [.claude/checklists/fin-de-tache.md](../../../../.claude/checklists/fin-de-tache.md). **La version anglaise fait foi.**
 
@@ -42,7 +42,13 @@ au succès complet. Lire sa sortie plutôt que son code de retour.
       des preuves de validation ou une limite déclarée
 - [ ] Les fichiers modifiés respectent les [règles d'organisation du code](../../CLAUDE.md#organisation-du-code) ;
       tout fichier volumineux conservé a sa cohésion expliquée dans le compte rendu
-- [ ] Aucun code mort, aucun code commenté « au cas où »
+- [ ] Les décisions de réutilisation et de suppression respectent les [règles d'organisation du code](../../CLAUDE.md#organisation-du-code) :
+      aucune règle métier dupliquée ni aucun reste obsolète introduit ou conservé
+      par le changement
+- [ ] Les conséquences et les échecs difficiles à détecter identifiés dans la
+      [liste de vérification du raisonnement d'ingénierie](conception.md) ont des
+      preuves explicites de validation ou une lacune déclarée ; aucune donnée
+      sensible exposée par les diagnostics
 - [ ] Aucun `TODO` sans date ni sans ce qui le débloque
 - [ ] Aucune abstraction pour un seul appelant
 - [ ] Aucun module ou crate au nom fourre-tout

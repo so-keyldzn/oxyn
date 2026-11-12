@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="24db38f6c13d" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="eb94ea46c9fe" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -183,7 +183,18 @@ L'arborescence et le sens des dépendances font autorité dans
   couplage universel ;
 - **un driver par protocole, pas par produit** — Redshift ≡ PostgreSQL
   ([ADR-0003](docs/adr/0003-driver-capabilities.md)) ;
-- **pas de code mort, pas de code commenté « au cas où »** : git s'en souvient ;
+- **une seule source pour chaque règle métier.** Chercher une implémentation
+  existante avant d'en ajouter une. Réutiliser ou extraire un comportement partagé
+  lorsque son sens et ses raisons d'évoluer sont les mêmes ; une simple
+  ressemblance de code ne justifie pas une abstraction. Partager les définitions
+  métier, les politiques et les constantes ; conserver une validation indépendante
+  à chaque frontière de confiance ;
+- **aucun code mort ni reste obsolète.** Supprimer le code, les imports, les
+  dépendances, la configuration et les commentaires rendus inutiles par le
+  changement, dans son périmètre. Vérifier les appelants, les enregistrements
+  dynamiques et les contrats publics avant de déclarer quelque chose inutilisé ;
+  une recherche sans résultat ne suffit pas pour tous les points d'entrée.
+  Ne garder aucune implémentation désactivée « au cas où » : git s'en souvient ;
 - **pas de `TODO` sans date** ni sans nom de ce qui le débloque ;
 - **pas d'abstraction pour un seul appelant** — un trait à une seule
   implémentation qui n'est pas une frontière est une indirection, pas un
