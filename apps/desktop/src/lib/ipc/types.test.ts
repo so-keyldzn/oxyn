@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
 
+import { RetainedResult } from "./library"
+import { HandedResult } from "./windows"
+
 import {
   Cell,
   CommandOutcome,
@@ -206,4 +209,46 @@ describe("connection tests", () => {
       }).success
     ).toBe(false)
   })
+})
+
+describe("server-reported affected-row counts", () => {
+  const completed = {
+    result: "write",
+    columns: [],
+    rows: 0,
+    complete: true,
+    cancelled: false,
+    truncated: false,
+    rowLimitUnverified: false,
+    elapsedMs: 1,
+    latencyMs: 1,
+  }
+
+  it.each([null, 0, 1, Number.MAX_SAFE_INTEGER + 1])(
+    "accepts %s in executions, retained results and window handoffs",
+    (affectedRows) => {
+      const result = { ...completed, affectedRows }
+      expect(
+        CommandOutcome.safeParse({ ...result, type: "executed" }).success
+      ).toBe(true)
+      expect(
+        RetainedResult.safeParse({ ...result, type: "open" }).success
+      ).toBe(true)
+      expect(HandedResult.safeParse(result).success).toBe(true)
+    }
+  )
+
+  it.each([-1, Infinity, NaN, "1"])(
+    "rejects an invalid count: %s",
+    (affectedRows) => {
+      const result = { ...completed, affectedRows }
+      expect(
+        CommandOutcome.safeParse({ ...result, type: "executed" }).success
+      ).toBe(false)
+      expect(
+        RetainedResult.safeParse({ ...result, type: "open" }).success
+      ).toBe(false)
+      expect(HandedResult.safeParse(result).success).toBe(false)
+    }
+  )
 })
