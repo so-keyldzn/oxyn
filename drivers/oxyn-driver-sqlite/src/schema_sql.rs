@@ -21,8 +21,9 @@ pub(crate) fn stored_sql(
         "SELECT type, CASE WHEN length(CAST(sql AS BLOB)) <= ?2 THEN sql END \
          FROM {database}.sqlite_schema WHERE name = ?1 AND type IN ('table', 'view')"
     );
+    let max_bytes = i64::try_from(MAX_SCHEMA_SQL_BYTES).map_err(|_| invalid_sql())?;
     let row = connection
-        .query_row(&query, (name, MAX_SCHEMA_SQL_BYTES), |row| {
+        .query_row(&query, (name, max_bytes), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })
         .optional()

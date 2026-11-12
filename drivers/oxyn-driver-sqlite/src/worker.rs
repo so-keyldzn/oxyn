@@ -324,7 +324,7 @@ pub(crate) async fn spawn(
     let thread = std::thread::Builder::new()
         .name("oxyn-sqlite".to_owned())
         .spawn(move || {
-            let connection = match open(&spec) {
+            let mut connection = match open(&spec) {
                 Ok(connection) => connection,
                 Err(err) => {
                     let _ = ready.send(Err(err));
@@ -332,7 +332,18 @@ pub(crate) async fn spawn(
                 }
             };
             let interrupter = Arc::new(Interrupter::new(connection.get_interrupt_handle()));
-            interrupter.watch(&connection);
+            if let Err(error) = interrupter.watch(&mut connection) {
+                // rusqlite registers the callback before storing its owner;
+                // clear it before closing if that allocation failed.
+                if connection
+                    .progress_handler(0, None::<fn() -> bool>)
+                    .is_err()
+                {
+                    tracing::warn!("failed to clear SQLite cancellation handler metadata");
+                }
+                let _ = ready.send(Err(error::open(error)));
+                return;
+            }
             if ready.send(Ok(Arc::clone(&interrupter))).is_err() {
                 // The caller gave up during the opening.
                 let _ = connection.close();

@@ -8,7 +8,7 @@
 //! vec0`. The extension is compiled into the binary, never loaded from a file
 //! the user — or the database — names: that would be arbitrary native code.
 //!
-//! This is the only `unsafe` of the crate. `rusqlite` 0.37 offers no safe way
+//! This is the only `unsafe` of the crate. `rusqlite` 0.41 offers no safe way
 //! to register a statically linked extension: `Connection::handle` and the call
 //! of the C entry point are both `unsafe`. The rest of the crate goes through
 //! [`register`], which is safe to call.

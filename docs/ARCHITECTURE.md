@@ -404,13 +404,14 @@ Five facts that only a real resolution then compilation reveal, all
 recorded as comments in the root `Cargo.toml`:
 
 * **`reqwest` 0.13 renamed the `rustls-tls` feature to `rustls`.**
-* **`rusqlite` is pinned at 0.37, not 0.40.** `sqlx` brings `sqlx-sqlite` into
-  the resolution graph even when the feature is disabled — Cargo locks
-  optional dependencies — and both `sqlx-sqlite` and `rusqlite` declare
-  `links = "sqlite3"`. Only one version of `libsqlite3-sys` can therefore exist.
-  `sqlx` 0.9 accepts `>=0.30.1, <0.38`, `rusqlite` 0.40 requires `^0.38`: no intersection.
-  `rusqlite` 0.37 (which asks for `^0.35`) is the meeting point. To be raised when `sqlx` follows.
-  See [ADR-0010](adr/0010-contraintes-natives-sqlite.md).
+* **One SQLite native library, with PostgreSQL features on its own crate.**
+  SQLx 0.9's umbrella `chrono`, `uuid` and `json` features resolve its optional
+  SQLite driver, whose native-library range conflicts with the patched SQLite.
+  Those features are enabled on `sqlx-postgres` instead; the unified SQLx core
+  and PostgreSQL feature sets stay the same. `rusqlite` 0.41.1 resolves the
+  single bundled `libsqlite3-sys` 0.39.1 and SQLite 3.54.1.
+  [ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md) refines the old
+  pin in [ADR-0010](adr/0010-contraintes-natives-sqlite.md).
 * **`rusqlite` needs the `column_decltype` feature.** SQLite has no column
   type: the type declared in `CREATE TABLE` is the only indication available
   before reading a row, and the driver uses it to propose an Arrow schema
@@ -1337,7 +1338,7 @@ guided this split remains this one: **each phase delivers a tool that is complet
 | Frame and startup budgets no longer guaranteed by construction in the webview | not assessed | Measurement campaign in the webview, recorded in the plan; the 8 ms p99 frame while scrolling is the other reconsideration condition of ADR-0029 |
 | Grid + editor at the level of a professional tool | High | Assembled since ADR-0029 — TanStack Table + Virtual, CodeMirror 6 — instead of being written; do not start a third driver before they hold |
 | 30 systems to maintain | High | One driver per protocol (~14 real ones); drivers as WASM plugins from phase 4 |
-| `rusqlite` stuck at 0.37 by `sqlx` | Low | Documented in §3.1 and ADR-0010; to be raised when `sqlx` widens its `libsqlite3-sys` bound |
+| SQLx feature wiring can reintroduce a second SQLite link constraint | Medium | Keep PostgreSQL type features on `sqlx-postgres`; check the resolved graph and feature sets on SQLx upgrades ([ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md)) |
 | MSRV pulled up by dependencies, one of them invisible | Low | §3.1; `rust-version = "1.95"` covers `wasm-host` even disabled, and RESEARCH-NOTES keeps the table of recorded MSRVs |
 | Code written without compiler feedback | **High** | Happened: ~55,000 lines were written before the first compilation. Three defects no review would have seen came out of it — a deadlock of the SQLite thread, a `[]` accepted as a credential set, a file path leaked in an error message. Do not do it again: compile crate by crate as you go |
 | Oracle / Couchbase: C dependencies | Medium | Sidecar §4.4; postponed to phase 4 |

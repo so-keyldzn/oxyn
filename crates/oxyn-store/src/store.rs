@@ -279,20 +279,40 @@ impl Store {
         cancel: &oxyn_core::CancelToken,
         f: impl FnOnce(&Connection) -> Result<T>,
     ) -> Result<T> {
-        let connection = self.conn.lock();
+        let mut connection = self.conn.lock();
         if cancel.is_cancelled() {
             return Err(StoreError::Cancelled);
         }
-        struct ResetProgress<'a>(&'a Connection);
+        struct ResetProgress<'a>(&'a mut Connection);
         impl Drop for ResetProgress<'_> {
             fn drop(&mut self) {
-                self.0.progress_handler(0, None::<fn() -> bool>);
+                // rusqlite disables the callback before fallible client-data
+                // cleanup. Do not turn an already committed write into an error.
+                if self.0.progress_handler(0, None::<fn() -> bool>).is_err() {
+                    tracing::warn!("failed to clear SQLite cancellation handler metadata");
+                }
             }
         }
         let token = cancel.clone();
-        connection.progress_handler(1000, Some(move || token.is_cancelled()));
-        let _reset = ResetProgress(&connection);
-        let result = f(&connection);
+        if let Err(error) = connection.progress_handler(1000, Some(move || token.is_cancelled())) {
+            // A failed client-data allocation follows callback registration;
+            // remove that callback before leaving the connection usable.
+            if connection
+                .progress_handler(0, None::<fn() -> bool>)
+                .is_err()
+            {
+                tracing::warn!("failed to clear SQLite cancellation handler metadata");
+            }
+            let error = match error {
+                rusqlite::Error::SqliteFailure(code, _) => {
+                    rusqlite::Error::SqliteFailure(code, None)
+                }
+                other => other,
+            };
+            return Err(error.into());
+        }
+        let reset = ResetProgress(&mut connection);
+        let result = f(&*reset.0);
         // A successful commit remains successful even if cancellation arrives later.
         if result.is_err() && cancel.is_cancelled() {
             Err(StoreError::Cancelled)

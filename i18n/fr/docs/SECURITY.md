@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="488f46f5a743" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="bdcdc5c198d4" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -755,13 +755,16 @@ ce qui le maintiendra valide.
   fonction C l'adresse d'un pointeur de chaîne nul à travers une référence
   partagée, le compilateur peut ignorer l'écriture, et `CStr::from_ptr` reçoit
   alors NULL. Il se trouve dans cinq méthodes (`next`, `nth`, `last`,
-  `next_back`, `nth_back`), dont aucune n'est atteignable dans ce qui est
-  livré : `Variant::array_iter_str` (`glib-0.18.5/src/variant.rs`, lignes
-  843-855) est la seule fonction qui construit un `VariantStrIter`, dont le
-  constructeur est `pub(crate)` (`src/variant_iter.rs`, ligne 109), et rien ne
-  l'appelle — ni les 634 crates externes des dépendances normales et de build
-  d'`oxyn-desktop` sur les deux cibles Linux, ni le workspace. Vérifié le
-  2026-10-20 ([I-12](../CLAUDE.md#i-12)). La vérification est refaite à chaque
+  `next_back`, `nth_back`). `Variant::array_iter_str`
+  (`glib-0.18.5/src/variant.rs`, lignes 843-855) est la seule fonction qui
+  construit un `VariantStrIter` ; son constructeur est `pub(crate)`. Le
+  2026-11-12, une recherche littérale dans les sources du workspace et des
+  753 crates du registre x86_64 et 750 aarch64 des graphes Linux toutes
+  fonctionnalités, dépendances normales et de build, ne trouve aucune référence
+  externe à ces noms. Toutes les sources du registre étaient présentes.
+  Cette recherche n'examine pas l'expansion des macros et ne prouve pas
+  l'inaccessibilité à l'exécution. L'exception et ses limites sont dans
+  `deny.toml`. La vérification est refaite à chaque
   montée de `tauri`, `gtk`, `wry`, `muda`, `tao` ou `webkit2gtk`, puisqu'une
   nouvelle version pourrait ajouter un appelant ; l'entrée est retirée dès que
   la chaîne atteint `glib` 0.20 ou plus. `deny.toml` porte la commande, à côté

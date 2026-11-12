@@ -91,6 +91,8 @@ mod preview;
 mod schema_sql;
 pub mod session;
 #[cfg(test)]
+mod sqlite_security_tests;
+#[cfg(test)]
 mod stopped_write_tests;
 pub mod stream;
 mod vector_extension;

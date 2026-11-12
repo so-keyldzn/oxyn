@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="f21a4e1e2f91" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6081af021f77" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -422,13 +422,15 @@ Cinq faits que seules une résolution puis une compilation réelles révèlent, 
 consignés en commentaire dans le `Cargo.toml` racine :
 
 * **`reqwest` 0.13 a renommé la feature `rustls-tls` en `rustls`.**
-* **`rusqlite` est épinglé en 0.37, pas en 0.40.** `sqlx` fait entrer `sqlx-sqlite` dans
-  le graphe de résolution même lorsque la feature est désactivée — Cargo verrouille les
-  dépendances optionnelles — et `sqlx-sqlite` comme `rusqlite` déclarent
-  `links = "sqlite3"`. Une seule version de `libsqlite3-sys` peut donc exister.
-  `sqlx` 0.9 accepte `>=0.30.1, <0.38`, `rusqlite` 0.40 exige `^0.38` : aucune intersection.
-  `rusqlite` 0.37 (qui demande `^0.35`) est le point de rencontre. À relever quand `sqlx` suivra.
-  Voir [ADR-0010](adr/0010-contraintes-natives-sqlite.md).
+* **Une seule bibliothèque SQLite native, avec les fonctionnalités PostgreSQL
+  sur sa propre crate.** Les fonctionnalités `chrono`, `uuid` et `json` de la
+  façade SQLx 0.9 résolvent son pilote SQLite optionnel, dont la plage de
+  bibliothèque native entre en conflit avec le SQLite corrigé. Ces fonctionnalités
+  sont activées sur `sqlx-postgres` ; les ensembles unifiés de SQLx core et
+  PostgreSQL restent identiques. `rusqlite` 0.41.1 résout l'unique
+  `libsqlite3-sys` 0.39.1 embarqué et SQLite 3.54.1.
+  [ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md) précise l'ancien
+  épinglage d'[ADR-0010](adr/0010-contraintes-natives-sqlite.md).
 * **`rusqlite` a besoin de la feature `column_decltype`.** SQLite n'a pas de type
   de colonne : le type déclaré au `CREATE TABLE` est la seule indication disponible
   avant d'avoir lu une ligne, et le driver s'en sert pour proposer un schéma Arrow
@@ -1363,7 +1365,7 @@ guidait ce découpage reste celui-ci : **chaque phase livre un outil complet en 
 | Budgets de trame et de démarrage plus acquis par construction dans la webview | non évaluée | Campagne de mesure dans la webview, inscrite au plan ; la trame à 8 ms p99 au défilement est l'autre condition de reconsidération d'ADR-0029 |
 | Grille + éditeur au niveau d'un outil professionnel | Élevée | Assemblés depuis ADR-0029 — TanStack Table + Virtual, CodeMirror 6 — au lieu d'être écrits ; ne pas commencer un troisième driver avant qu'ils tiennent |
 | 30 systèmes à maintenir | Élevée | Un driver par protocole (~14 réels) ; drivers en plugins WASM dès la phase 4 |
-| `rusqlite` bloqué en 0.37 par `sqlx` | Faible | Documenté §3.1 et ADR-0010 ; à relever quand `sqlx` élargira sa borne `libsqlite3-sys` |
+| Le câblage des fonctionnalités SQLx peut réintroduire une contrainte SQLite native | Moyenne | Garder les fonctionnalités de types PostgreSQL sur `sqlx-postgres` ; vérifier le graphe résolu et les fonctionnalités à chaque montée de SQLx ([ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md)) |
 | MSRV tiré vers le haut par les dépendances, dont une invisible | Faible | §3.1 ; `rust-version = "1.95"` couvre `wasm-host` même désactivée, et RESEARCH-NOTES tient la table des MSRV relevés |
 | Code écrit sans retour du compilateur | **Élevée** | Réalisé : ~55 000 lignes ont été écrites avant la première compilation. Trois défauts qu'aucune relecture n'aurait vus en sont sortis — un interblocage du fil SQLite, un `[]` accepté comme jeu d'identifiants, un chemin de fichier fuité dans un message d'erreur. Ne pas recommencer : compiler par crate au fur et à mesure |
 | Oracle / Couchbase : dépendances C | Moyenne | Sidecar §4.4 ; reportés en phase 4 |

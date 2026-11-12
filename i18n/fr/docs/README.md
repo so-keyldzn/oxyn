@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="926035fbc163" -->
+<!-- oxyn-translation source="docs/README.md" sha256="84188518b2ff" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -106,6 +106,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0068](adr/0068-a-preview-comes-in-key-order.md) | Un aperçu arrive dans l'ordre de la clé, et offre des pages, partout où le driver se porte garant que cet ordre est une lecture bornée (`Relation::key_order_preview`) ; tables virtuelles, Redshift et relations sans clé restent sans ordre (remplace les points 1 et 2 de 0028, précise 0063) | accepté |
 | [0069](adr/0069-turso-driver-hrana-over-http.md) | Le driver Turso Cloud parle lui-même Hrana sur HTTP (sans `libsql`), ne garde aucun flux entre deux instructions, lit une réponse entière sous un budget de 32 Mio, et s'arrête en abandonnant la requête | proposé |
 | [0075](adr/0075-a-preview-has-one-time-budget-and-reports-its-latency.md) | Un aperçu tire sa préparation et son exécution sur un seul budget de 30 s, et rapporte la latence totale attendue à côté de la durée SQL (`ExecTimings`) | accepté |
+| [0076](adr/0076-unify-sqlite-with-postgres-features.md) | Activer directement les types PostgreSQL tout en gardant un seul SQLite embarqué (précise 0010) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

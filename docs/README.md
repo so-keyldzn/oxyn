@@ -102,6 +102,7 @@ To locate the boards and their states before implementation, see
 | [0068](adr/0068-a-preview-comes-in-key-order.md) | A preview comes in key order, and offers pages, wherever the driver vouches that this order is a bounded read (`Relation::key_order_preview`); virtual tables, Redshift and keyless relations stay unordered (supersedes 0028 points 1 and 2, refines 0063) | accepted |
 | [0069](adr/0069-turso-driver-hrana-over-http.md) | The Turso Cloud driver speaks Hrana over HTTP itself (no `libsql`), keeps no stream between statements, reads a whole answer under a 32 MiB budget, and stops by dropping the request | proposed |
 | [0075](adr/0075-a-preview-has-one-time-budget-and-reports-its-latency.md) | A preview draws its preparation and its execution on one 30 s budget, and reports the total latency the user waited next to the SQL duration (`ExecTimings`) | accepted |
+| [0076](adr/0076-unify-sqlite-with-postgres-features.md) | Enable PostgreSQL type features directly while keeping one bundled SQLite (refines 0010) | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

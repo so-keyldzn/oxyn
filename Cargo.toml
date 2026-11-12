@@ -88,11 +88,10 @@ sqlparser     = "0.62.0"
 # --- storage & secrets -------------------------------------------------------
 directories   = "6.0.0"
 keyring       = "4.2.0"
-# rusqlite is pinned to 0.37 ON PURPOSE: sqlx pulls `sqlx-sqlite` into the
-# resolution graph (even when disabled by feature), and both declare
-# `links = "sqlite3"`. Only one version of libsqlite3-sys can therefore exist.
-# sqlx 0.9 accepts >=0.30.1,<0.38; rusqlite 0.37 requires ^0.35 — that is the
-# intersection. Raise it when sqlx follows.
+# SQLite 3.54.1 fixes RUSTSEC-2026-0459. SQLx's umbrella chrono/uuid/json
+# features also resolve its optional SQLite driver, whose native-library range
+# conflicts with this release. Enable those features on sqlx-postgres instead;
+# Cargo unifies them into the same SQLx core and PostgreSQL implementation.
 #
 # `column_decltype` exposes `Statement::columns()` and `Column::decl_type()`.
 # SQLite has no column type: the type declared in CREATE TABLE is the only hint
@@ -100,7 +99,7 @@ keyring       = "4.2.0"
 # schema it then corrects on probing. Without this feature, the method simply
 # does not exist — the error is an E0599 on `columns`, which never names the
 # missing feature.
-rusqlite      = { version = "0.37.0", features = [
+rusqlite      = { version = "0.41.1", features = [
     "bundled", "chrono", "serde_json", "column_decltype" ] }
 # The sqlite-vec extension, compiled from its C amalgamation with `SQLITE_CORE`:
 # it calls the SQLite that `rusqlite`'s `bundled` links, there is no second
@@ -116,7 +115,10 @@ zeroize       = "1.9.0"
 # aws-lc-rs and not ring: reqwest 0.13 imposes aws-lc-rs through its `rustls`
 # feature. Unifying avoids compiling and shipping two crypto providers.
 sqlx          = { version = "0.9.0", default-features = false, features = [
-    "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "chrono", "uuid", "json",
+    "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres",
+] }
+sqlx-postgres = { version = "=0.9.0", default-features = false, features = [
+    "chrono", "uuid", "json",
 ] }
 # MySQL and MariaDB (ADR-0050): `sqlx-mysql` fails a whole result on a `VECTOR`
 # column and drops a `DECIMAL`'s scale. `default-rustls` is `rustls` on

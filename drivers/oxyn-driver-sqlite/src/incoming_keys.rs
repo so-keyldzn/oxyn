@@ -65,7 +65,8 @@ pub(crate) fn read(
         }
         let source = text(row, 0)?;
         let id: i64 = row.get(1).map_err(engine)?;
-        let sequence: usize = row.get(2).map_err(engine)?;
+        let sequence: i64 = row.get(2).map_err(engine)?;
+        let sequence = usize::try_from(sequence).map_err(|_| invalid())?;
         if sequence >= 128 {
             return Err(invalid());
         }

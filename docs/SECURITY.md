@@ -704,13 +704,14 @@ what will keep it valid.
   NULL dereference: the iterator passes the address of a null string pointer to
   a C function through a shared reference, the compiler may ignore the write,
   and `CStr::from_ptr` then receives NULL. It sits in five methods (`next`,
-  `nth`, `last`, `next_back`, `nth_back`), and none of them is reachable in
-  what ships: `Variant::array_iter_str` (`glib-0.18.5/src/variant.rs`, lines
-  843-855) is the only function that builds a `VariantStrIter`, whose
-  constructor is `pub(crate)` (`src/variant_iter.rs`, line 109), and nothing
-  calls it — neither the 634 external crates of the normal and build
-  dependencies of `oxyn-desktop` on the two Linux targets, nor the workspace.
-  Checked on 2026-10-20 ([I-12](../CLAUDE.md#i-12)). The check is redone at
+  `nth`, `last`, `next_back`, `nth_back`). `Variant::array_iter_str`
+  (`glib-0.18.5/src/variant.rs`, lines 843-855) is the only function that
+  builds a `VariantStrIter`; its constructor is `pub(crate)`. On 2026-11-12,
+  a literal source scan of the workspace and all 753 x86_64 and 750 aarch64
+  registry crates in the all-features Linux normal/build graphs found no
+  external reference to either name. All registry sources were available.
+  This scan does not inspect macro expansion or prove runtime unreachability.
+  The exception and its limits are in `deny.toml`. The check is redone at
   every bump of `tauri`, `gtk`, `wry`, `muda`, `tao` or `webkit2gtk`, since a
   new release could add a caller; the entry is dropped once the chain reaches
   `glib` 0.20 or later. `deny.toml` holds the command, next to the entry. The

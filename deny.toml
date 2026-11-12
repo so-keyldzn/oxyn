@@ -48,15 +48,16 @@ ignore = [
     # `gtk 0.18` refuses (`glib = "0.18"`): nothing to bump until Tauri moves
     # to another GTK.
     #
-    # Why the entry stands: the five methods are unreachable.
+    # Why the entry stands: no external source reference to the only entry
+    # point was found. This static search does not inspect macro expansion.
     # `Variant::array_iter_str` (`src/variant.rs`, lines 843-855) is the only
     # function that builds a `VariantStrIter`, because `VariantStrIter::new` is
     # `pub(crate)` (`src/variant_iter.rs`, line 109); every other call site is
     # under `#[cfg(test)]` (`variant.rs:2191`, `variant_iter.rs:203`). On
-    # 2026-10-20, none of the 634 external crates of the two Linux dependency
-    # graphs (`-e normal,build`, x86_64 and aarch64) other than `glib` itself,
-    # and nothing in `crates/`, `drivers/` or `apps/`, calls `array_iter_str`
-    # or names `VariantStrIter`.
+    # 2026-11-12, none of the 753 x86_64 and 750 aarch64 registry crates in
+    # the workspace's all-features Linux graphs (`-e normal,build`), other than
+    # `glib` itself, and nothing in `crates/`, `drivers/` or `apps/`, calls
+    # `array_iter_str` or names `VariantStrIter`. All registry sources were present.
     #
     # Re-check at every bump of `tauri`, `gtk`, `wry`, `muda`, `tao` or
     # `webkit2gtk`: list the crates with
@@ -65,7 +66,7 @@ ignore = [
     # grep their registry sources for `array_iter_str` and `VariantStrIter`.
     # Only `glib` itself may match. Drop this entry once the chain reaches
     # `glib` >= 0.20.
-    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 via Tauri's gtk 0.18, compiled into the Linux packages; fixed in 0.20, which gtk 0.18 refuses; VariantStrIter unreachable: nothing calls Variant::array_iter_str (checked 2026-10-20)" },
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 via Tauri's gtk 0.18, compiled into the Linux packages; fixed in 0.20, which gtk 0.18 refuses; no external source reference to Variant::array_iter_str found (all-features Linux static scan 2026-11-12; macro expansion not checked)" },
     # `paste` is transitive through the local embeddings stack. `burn` 0.22
     # does not provide a release without it; the advisory has no safe upgrade.
     { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is transitive through burn 0.22 and tokenizers in oxyn-embed; the advisory offers no safe upgrade (checked 2026-10-22)" },

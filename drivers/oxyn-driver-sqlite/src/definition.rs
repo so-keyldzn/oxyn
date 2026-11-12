@@ -32,9 +32,8 @@ pub(crate) fn read(
         quote_identifier(database, QuoteStyle::Double)
     );
     let mut statement = connection.prepare(&query).map_err(engine)?;
-    let mut rows = statement
-        .query((name, RelationDefinition::MAX_BYTES))
-        .map_err(engine)?;
+    let max_bytes = i64::try_from(RelationDefinition::MAX_BYTES).map_err(|_| invalid_sql())?;
+    let mut rows = statement.query((name, max_bytes)).map_err(engine)?;
     let mut sql = String::new();
     let mut count = 0usize;
     while let Some(row) = rows.next().map_err(engine)? {

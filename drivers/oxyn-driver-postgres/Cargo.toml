@@ -23,6 +23,8 @@ chrono.workspace = true
 futures.workspace = true
 secrecy.workspace = true
 sqlx.workspace = true
+# Unifies PostgreSQL type features without resolving SQLx's optional SQLite driver.
+sqlx-postgres.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

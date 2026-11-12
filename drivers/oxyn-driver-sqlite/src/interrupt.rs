@@ -94,12 +94,12 @@ impl Interrupter {
     /// vanish and an endless statement would run for nobody. The progress
     /// handler runs **during** the step and reads the task's `tripped` flag, which only
     /// `begin` resets: the interruption is observed whatever the order.
-    pub(crate) fn watch(&self, connection: &Connection) {
+    pub(crate) fn watch(&self, connection: &mut Connection) -> rusqlite::Result<()> {
         let tripped = Arc::clone(&self.tripped);
         connection.progress_handler(
             WATCH_EVERY_OPS,
             Some(move || tripped.load(Ordering::SeqCst)),
-        );
+        )
     }
 
     /// Reserves a task's identity **before** it goes into the queue.

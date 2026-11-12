@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="1f4411520a45" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ed54b4fda70a" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -199,14 +199,14 @@ ou de `rfd`** :
 | `@tanstack/react-query` · `react-virtual` · `react-form` | `5.102.8` · `3.14.13` · `1.33.5` | idem | — |
 | `@tanstack/react-store` · `react-pacer` | `0.11.1` · `0.23.0` | idem | `react-hotkeys` (`0.10.0`, qui se déclarait **alpha** dans son README) est retiré le 2026-09-25 : le répartiteur du registre d'actions le remplace ([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md), point 3) |
 | `@tanstack/react-table` | `8.21.3` | `9.2.4` | les composants et exemples shadcn supposent l'API v8 |
-| `shadcn` (CLI) · `@base-ui/react` | `4.21.0` · `1.8.0` | idem | style `base-nova` |
+| `shadcn` (CLI) · `@base-ui/react` | `4.22.2` · `1.8.0` | `4.23.0` · `1.9.0` | style `base-nova` ; `4.22.2` utilise Zod 4 sans le changement du SDK MCP vers la v2 de `4.23.0` (registre npm et [notes de version](https://github.com/shadcn-ui/ui/releases), 2026-11-12) |
 | `@hugeicons/react` · `@hugeicons/core-free-icons` | `1.1.10` · `4.3.3` | idem | UX-SPEC impose Hugeicons |
 | `react` · `react-dom` | `19.3.0` | idem | — |
 | `vite` · `@vitejs/plugin-react` | `8.3.0` · `6.1.1` | idem | — |
 | `tailwindcss` · `@tailwindcss/vite` | `4.3.3` | idem | — |
 | `typescript` | `6.0.3` | `7.0.2` | voir ADR-0029, alternatives écartées |
 | `storybook` · `@storybook/react-vite` · addons · `eslint-plugin-storybook` | `10.6.2` | `10.6.3` | lu le 2026-10-21 (`pnpm view`) : `10.6.2`, publiée le 2026-10-12, est la première version corrigée de [GHSA-f2ph-cmg5-wxc8](https://github.com/advisories/GHSA-f2ph-cmg5-wxc8) (critique, développement seulement) ; `10.6.3` a été publiée le 2026-10-20 |
-| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` exigeait `vitest ^3 \|\| ^4` ; `10.6.2` accepte aussi `^5` (lu le 2026-10-21), le passage à Vitest 5 n'est pas encore fait |
+| `vitest` · `@vitest/browser-playwright` | `4.1.12` | `5.1.0` | La famille 4.1.12 corrige les deux avis du mocker ; les paquets navigateur, couverture et runner restent alignés. Registre et [notes de version](https://github.com/vitest-dev/vitest/releases/tag/v4.1.12), 2026-11-12. |
 | `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
 | `@codemirror/lang-json` | `6.0.2` | idem | relevé le 2026-10-23 (publié le 2025-06-19, MIT) ; la grammaire de la console MongoDB, dont la commande est un document Extended JSON ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)). Amène `@lezer/json` 1.0.3 (publié le 2024-12-29, MIT) |
@@ -229,7 +229,7 @@ versions --json` ; les plages de dépendances et les licences avec
 | `source-map-js` | `1.2.2` | Première version corrigée pour [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) ; BSD-3-Clause. Les [notes de version](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirment la correction du déni de service lié aux source maps indexées. Même Vite `8.3.3` autorise PostCSS `8.5.28`, dont la plage `source-map-js` est `^1.2.1` ; une montée de Vite seule n'impose pas la correction. |
 | `katex` | `0.18.2` | Première version corrigée pour [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7) ; MIT. Les [notes de version](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirment la correction de la pollution du prototype des paramètres. Mermaid `11.17.2` reste la dernière 11.x ; même `12.1.0` exige encore `katex ^0.16.47`, qui exclut la correction. Garder la cible navigateur existante de Mermaid et imposer KaTeX par override. |
 | `seroval`, `seroval-plugins` | `1.6.12` | **Livré dans le bundle de production** : `@tanstack/react-router` > `@tanstack/router-core` (`seroval ^1.6.2`, `seroval-plugins ^1.6.2`) sérialise l'état du routeur, et son code `seroval/plugins/web/ReadableStream` est dans `dist/client/assets/index-*.js` (vérifié le 2026-10-07 après `pnpm build`). Le chemin de développement `@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js` est celui qui exige l'override ; les devtools elles-mêmes sont absentes du bundle de production depuis le 2026-10-07 (chargées seulement sous `import.meta.env.DEV`). Couvre [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (corrigé en `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) et [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw) et [GHSA-9wx9-5pv9-3349](https://github.com/advisories/GHSA-9wx9-5pv9-3349) (`>=1.5.5 <1.6.10`, corrigé en `1.6.10`), ainsi que l'alerte modérée de `pnpm audit` sur `>=1.6.0 <1.6.11`, corrigée en `1.6.11` ; MIT ; `1.6.12` publiée le 2026-10-21 (plus ancienne que le délai minimal de publication de pnpm 11). Ajouté le 2026-10-06 : `solid-js 1.9.15` fige `seroval ~1.5.4`, et le `solid-js 1.9.16` qui exige `~1.6.8` a été publié ce jour-là à 19:11 UTC, ce que le délai minimal de publication de pnpm 11 refuse encore — l'override évite de contourner ce garde-fou. `seroval-plugins 1.6.12` a pour pair `seroval ^1.0`. À retirer dès que le lockfile résout `solid-js >= 1.9.16`. |
-| `zod@^4` | `4.6.7` | Ajouté le 2026-10-23. La première version corrigée est `4.6.6` pour [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (CVE-2023-54404, élevée, publiée le 2026-10-01) : valider un grand tableau avec un schéma de tableau sans contrainte de longueur accumule une erreur par élément en échec, sans plafond, et épuise la mémoire dans `zod <= 4.6.5`. Relevé dans le registre npm le 2026-10-23 : `4.6.6` publiée le 2026-10-11, `4.6.7` le 2026-10-12 (la dernière, et acceptée par le délai minimal de publication de pnpm 11) ; MIT. Le `zod` de l'application (validation des réponses IPC, [ADR-0031](adr/0031-validation-des-reponses-ipc.md)) est épinglé à `4.6.7` dans `package.json` ; l'override sert aux 17 chemins de l'audit par `@tanstack/react-start` > `@tanstack/start-plugin-core` > `@tanstack/router-generator` et `router-plugin`, qui déclarent `zod ^4.5.4` et gardaient `4.6.5` dans le lockfile. Limité à `^4` : `shadcn` > `@modelcontextprotocol/sdk` a besoin de `zod 3.25.76`, que l'avis ne couvre pas et qu'il ne faut pas déplacer. `make audit-npm` (`pnpm audit --prod`) ne signale aucune vulnérabilité connue avec lui. À retirer dès que les paquets TanStack résolvent `zod >= 4.6.6` sans lui. |
+| `zod@^4` | `4.6.7` | Ajouté le 2026-10-23. La première version corrigée est `4.6.6` pour [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (CVE-2023-54404, élevée, publiée le 2026-10-01) : valider un grand tableau avec un schéma de tableau sans contrainte de longueur accumule une erreur par élément en échec, sans plafond, et épuise la mémoire dans `zod <= 4.6.5`. Relevé dans le registre npm le 2026-10-23 : `4.6.6` publiée le 2026-10-11, `4.6.7` le 2026-10-12 (la dernière, et acceptée par le délai minimal de publication de pnpm 11) ; MIT. Le `zod` de l'application (validation des réponses IPC, [ADR-0031](adr/0031-validation-des-reponses-ipc.md)) est épinglé à `4.6.7` dans `package.json` ; l'override sert aux 17 chemins de l'audit par `@tanstack/react-start` > `@tanstack/start-plugin-core` > `@tanstack/router-generator` et `router-plugin`, qui déclarent `zod ^4.5.4` et gardaient `4.6.5` dans le lockfile. L'affirmation précédente selon laquelle `zod 3.25.76` était hors du périmètre de l'avis était erronée : ce paquet contient `zod/v4`, importé par le SDK MCP, et la plage de l'avis est `<4.6.6`. Le 2026-11-12, `shadcn 4.22.2` résout le SDK et son pair vers `zod 4.6.7` ; l'override de production reste limité à `^4`. `make audit-npm` (`pnpm audit --prod`) ne signale aucune vulnérabilité connue avec lui. À retirer dès que les paquets TanStack résolvent `zod >= 4.6.6` sans lui. |
 
 pnpm `11.1.2` ignore `package.json#pnpm` : les overrides vont dans
 `apps/desktop/pnpm-workspace.yaml`, comme l'indique le
@@ -3049,15 +3049,12 @@ version, sinon la dernière version et sa date de publication.
   Son `rust-version` est `1.95.0` (API crates.io, 2026-10-20), le plancher que
   donne le commentaire de `Cargo.toml`. `50.0.0`, publiée le 2026-10-20, déclare
   `1.97.0`.
-- `rusqlite` `0.37.0` n’est pas répétée ici : elle est déjà consignée comme
-  épinglage délibéré, avec sa raison, dans le tableau des MSRV ci-dessus, dans le
-  commentaire de `Cargo.toml` et dans
-  [ADR-0010](adr/0010-contraintes-natives-sqlite.md).
-- `@vitest/browser` et `@vitest/coverage-v8` `4.1.11` déclarent le pair exact
-  `vitest` `4.1.11`, et `@storybook/addon-vitest@10.6.0` déclare
-  `vitest ^3.0.0 || ^4.0.0` (`npm view <paquet>@<version> peerDependencies`,
-  2026-10-20) : ils restent sur la ligne 4 avec `vitest`, comme le dit le
-  tableau npm ci-dessus.
+- `rusqlite` `0.37.0` était épinglée délibérément lors de la vérification du
+  2026-10-20. La mise à jour de sécurité du 2026-11-12 la porte à `0.41.1` ;
+  le motif et le découpage des fonctionnalités SQLx figurent ci-dessous.
+- `@vitest/browser` et `@vitest/coverage-v8` `4.1.12` exigent exactement
+  `vitest` `4.1.12` ; `@storybook/addon-vitest@10.6.2` accepte Vitest 3, 4
+  ou 5 (registre npm, 2026-11-12). La famille reste alignée sur la version 4.
 - npm marque `eslint@9.39.5` comme obsolète : « This version is no longer
   supported. Please see https://eslint.org/version-support for other options. »
   (`npm view eslint@9.39.5 deprecated`, 2026-10-20).
@@ -3085,6 +3082,8 @@ ne figure donc sous une exemption.
 
 | Crate | Épinglée | Dernière publiée | Registre | Vérifié le |
 |---|---|---|---|---|
+| `rusqlite` | `0.41.1` | `0.42.0` (2026-11-11) | [API crates.io](https://crates.io/api/v1/crates/rusqlite) | 2026-11-12 |
+| `sqlx-postgres` | `0.9.0` | idem | [API crates.io](https://crates.io/api/v1/crates/sqlx-postgres) | 2026-11-12 |
 | `async-trait` | `0.1.92` | idem | [API crates.io](https://crates.io/api/v1/crates/async-trait) | 2026-10-20 |
 | `bitflags` | `2.13.1` | `2.13.2` (2026-09-10) | [API crates.io](https://crates.io/api/v1/crates/bitflags) | 2026-10-20 |
 | `chrono` | `0.4.45` | idem | [API crates.io](https://crates.io/api/v1/crates/chrono) | 2026-10-20 |
@@ -3149,8 +3148,8 @@ ne figure donc sous une exemption.
 | `@types/node` | `26.5.1` | `26.6.5` (2026-10-09) | [registre npm](https://registry.npmjs.org/@types%2Fnode) | 2026-10-20 |
 | `@types/react` | `19.3.0` | idem | [registre npm](https://registry.npmjs.org/@types%2Freact) | 2026-10-20 |
 | `@types/react-dom` | `19.3.0` | idem | [registre npm](https://registry.npmjs.org/@types%2Freact-dom) | 2026-10-20 |
-| `@vitest/browser` | `4.1.11` | `5.0.5` (2026-10-15) | [registre npm](https://registry.npmjs.org/@vitest%2Fbrowser) | 2026-10-20 |
-| `@vitest/coverage-v8` | `4.1.11` | `5.0.5` (2026-10-15) | [registre npm](https://registry.npmjs.org/@vitest%2Fcoverage-v8) | 2026-10-20 |
+| `@vitest/browser` | `4.1.12` | `5.1.0` | [registre npm](https://registry.npmjs.org/@vitest%2Fbrowser) | 2026-11-12 |
+| `@vitest/coverage-v8` | `4.1.12` | `5.1.0` | [registre npm](https://registry.npmjs.org/@vitest%2Fcoverage-v8) | 2026-11-12 |
 | `eslint` | `9.39.5` | `10.13.0` (2026-10-16) | [registre npm](https://registry.npmjs.org/eslint) | 2026-10-20 |
 | `eslint-plugin-storybook` | `10.6.2` | `10.6.3` (2026-10-20) | [registre npm](https://registry.npmjs.org/eslint-plugin-storybook) | 2026-10-21 |
 | `jsdom` | `30.0.1` | `30.1.3` (2026-10-15) | [registre npm](https://registry.npmjs.org/jsdom) | 2026-10-20 |
@@ -3413,3 +3412,68 @@ crate. Rien n'a été exécuté face à un vrai compte Turso : les lignes marqu�
 | *Non vérifié :* que `/v2/pipeline` accepte `want_rows` et une requête `close` sans baton, que la première entrée de `results` est l'`execute`, que 401/403 répondent à un mauvais jeton et 404 à une base absente, et ce que le serveur fait d'un `sql` contenant plusieurs instructions (la spécification en attend une ; `MULTIPLE_STATEMENTS` n'est pas déclarée, donc l'exécuteur en envoie une) | les formes suivent la spécification ; les statuts suivent la lecture habituelle | pas de compte |
 | *Non vérifié :* comment le serveur écrit un `REAL` infini ou NaN (JSON ne sait pas l'écrire) : une valeur `null` est lue comme le texte `non-finite` ; un nombre hors de la plage `f64` rend toute la réponse mal formée | une valeur inécrivable ne fait pas échouer le résultat quand elle est `null` | pas de compte |
 | *Non vérifié :* si Turso accepte un argument blob en base64 avec bourrage et s'il écrit ses propres blobs avec bourrage (la spécification dit seulement « base64 ») | le décodeur accepte les deux formes ; l'encodeur ajoute le bourrage, forme standard | pas de compte |
+
+
+## Vérification de sécurité des dépendances — 2026-11-12
+
+Les [alertes Dependabot ouvertes](https://github.com/so-keyldzn/oxyn/security/dependabot)
+ont été lues le 2026-11-12. Les numéros ci-dessous désignent les 26 alertes
+initiales ; GitHub ne les réévalue qu'une fois les lockfiles sur sa branche
+par défaut. Aucune alerte n'a été écartée. Les versions et dates de publication
+ont été vérifiées dans les registres npm et crates.io ; les plages des avis
+ont été lues sur GitHub et RustSec. Les lockfiles ont le statut suivant :
+
+| Alertes | Dépendance et résultat |
+|---|---|
+| #67 | `minimatch` 10.2.6 → 11.0.8 pour les trois consommateurs de la branche 10 ; le glob de Storybook passe à 14.0.4. La version 11.0.8 corrige aussi [GHSA-hqmv-qgp3-jx75](https://github.com/isaacs/minimatch/security/advisories/GHSA-hqmv-qgp3-jx75) et [GHSA-c859-jr93-m5j4](https://github.com/isaacs/minimatch/security/advisories/GHSA-c859-jr93-m5j4), qui touchent la 11.0.7. Son délai de publication avait dépassé 24 heures avant la résolution. La version 3 non concernée reste présente. |
+| #64, #63, #62 | `systeminformation` 5.33.10 → 5.33.19. |
+| #61 | `@hono/node-server` 2.1.1 → 2.1.7. |
+| #60 | `deepmerge` 4.3.1 reste dans la CLI shadcn, utilisée pour le développement. [GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4) n'a pas de correction publiée : npm audit indique `>=4.3.2`, mais cette version était absente de npm et 4.3.1 était la dernière le 2026-11-12. Utiliser la CLI avec un projet et des registres de confiance ; cela n'élimine pas le risque de la dépendance. |
+| #59, #58, #57, #56, #55, #54, #53, #52, #46, #45 | `undici` 7.29.1 → 7.30.2 et 8.10.2 → 8.12.4 ; ces versions couvrent aussi les autres avis trouvés par l'audit npm complet. |
+| #49 | `qs` 6.16.0 → 6.17.1. |
+| #48, #47 | `zip` 0.6.6 reste dans `Cargo.lock` par les dépendances optionnelles `tch`/`torch-sys`. `cargo tree --workspace --all-features --target all -i zip@0.6.6` ne trouve aucun chemin actif ; la copie active est la 9.0.5. L'ancienne reste verrouillée : ces alertes GitHub restent pertinentes si le chemin optionnel est activé ; une actualisation limitée au workspace ne l'a pas retirée. |
+| #40, #39, #38, #37 | `fast-uri` 3.1.8 → 3.1.9. |
+| #33, #32 | La famille Vitest 4.1.12 remplace la 4.1.11, `@vitest/mocker` compris. |
+| #2 | `glib` 0.18.5 reste dans la chaîne GTK 0.18 de Tauri sous Linux, qui ne peut pas résoudre la version corrigée 0.20. La recherche dans les sources, sa date et ses limites figurent dans `deny.toml` et SECURITY. |
+
+L'audit npm complet a aussi révélé `body-parser` 2.3.0 → 2.4.0,
+`ip-address` 10.7.2 → 10.7.6, `glob` 13.0.6 → 14.0.4 et le paquet
+`zod 3.25.76` décrit dans le tableau des overrides ci-dessus. L'override de
+`glob` est limité au plugin docgen de Storybook, qui appelle `globSync` ; les
+trois overrides de minimatch sont limités au parseur TypeScript, à ts-morph et
+à `eslint-plugin-import-x` 4.18.1. Sa version précédente 4.17.1 utilise
+`makeRe`, supprimé dans minimatch 11. Ne pas étendre l'override à des
+consommateurs non examinés ; le retirer pour chacun dès que son parent accepte
+une version corrigée. L'audit npm complet ne signale plus que l'avis `deepmerge`
+sans correctif ; l'audit limité à la production est distinct.
+
+L'audit Rust a également trouvé deux avis RustSec :
+
+- [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html) :
+  une base SQLite et un WAL conçus avec des tailles de pages incohérentes
+  peuvent divulguer la mémoire du processus. `rusqlite` 0.41.1 résout
+  `libsqlite3-sys` 0.39.1, dont l'en-tête embarqué identifie SQLite 3.54.1,
+  au-dessus du minimum corrigé 3.54.0. Le driver vérifie la version liée à
+  l'exécution ; ce test ne reproduit pas le WAL forgé. Les fonctionnalités
+  `chrono`, `uuid` et `json` de la façade SQLx 0.9 poussaient Cargo à résoudre
+  son driver SQLite optionnel, dont la plage `libsqlite3-sys <0.38` entrait en
+  conflit. Les activer sur `sqlx-postgres 0.9.0` exact retire ce driver
+  optionnel de la résolution. Les ensembles de fonctionnalités SQLx core et
+  PostgreSQL du workspace sur l'hôte sont identiques avant et après.
+- [RUSTSEC-2026-0486](https://rustsec.org/advisories/RUSTSEC-2026-0486.html) :
+  `rustix` 1.1.4 → 1.1.6 corrige le traitement des tampons xattr vides. Le
+  changement de comportement impose d'accompagner cette montée par `xattr`
+  1.6.1 → 1.7.0 : l'ancienne version interroge la taille avec un tampon vide ;
+  la 1.7.0 utilise les fonctions `*_query` dédiées
+  ([version](https://github.com/Stebalien/xattr/releases/tag/v1.7.0)). La
+  dépendance directe rustix 0.38.44 appartient à une branche distincte non
+  concernée. Versions et compatibilité vérifiées le 2026-11-12.
+
+Avec `rusqlite 0.41.1`, l'installation du gestionnaire de progression peut
+échouer. Oxyn refuse une opération ou une connexion si l'installation échoue
+et retire le callback qui a pu être enregistré avant l'échec. Le nettoyage
+journalise un message fixe sans contenu de base ; une écriture achevée n'est
+jamais présentée comme échouée. Ce comportement suit les sources installées de
+`InnerConnection::set_clientdata` dans `rusqlite` 0.41.1 et de
+`sqlite3_set_clientdata` dans SQLite 3.54.1, lues le 2026-11-12. Aucune
+injection de panne d'allocation n'a été effectuée.

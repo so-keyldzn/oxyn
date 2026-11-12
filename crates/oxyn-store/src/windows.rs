@@ -28,7 +28,18 @@ use oxyn_core::{
 use rusqlite::params;
 
 use crate::sessions::ABANDONED_AFTER;
-use crate::{Result, Store};
+use crate::{Result, Store, StoreError};
+
+fn sqlite_console_limit(extra: usize) -> Result<i64> {
+    WindowLayout::MAX_CONSOLES
+        .checked_add(extra)
+        .and_then(|limit| i64::try_from(limit).ok())
+        .ok_or_else(|| {
+            StoreError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::other("window console limit exceeds SQLite integer range"),
+            )))
+        })
+}
 
 /// Typed access to the window layout. Every method may block.
 #[derive(Debug)]
@@ -205,7 +216,7 @@ impl<'a> Windows<'a> {
                                  AND d.is_open = 1
                                ORDER BY c.position, c.document_id
                                LIMIT ?2)",
-                        params![rowid, WindowLayout::MAX_CONSOLES],
+                        params![rowid, sqlite_console_limit(0)?],
                     )?;
                 }
                 layout.consoles = consoles;
@@ -343,7 +354,7 @@ fn consoles(
          LIMIT ?2",
     )?;
     let ids = select
-        .query_map(params![window, WindowLayout::MAX_CONSOLES + 1], |row| {
+        .query_map(params![window, sqlite_console_limit(1)?], |row| {
             Ok(row.get::<_, String>(0).ok())
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

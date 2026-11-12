@@ -366,7 +366,6 @@ fn stream_rows(
     // `raw_query()` borrows mutably.
     let declared: Vec<(String, Option<String>)> = statement
         .columns()
-        .iter()
         .map(|column| {
             (
                 column.name().to_owned(),

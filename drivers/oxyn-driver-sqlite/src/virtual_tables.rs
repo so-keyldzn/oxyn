@@ -29,7 +29,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, ErrorCode};
 
 use crate::error::{self, Effect};
-use crate::schema_sql::{MAX_SCHEMA_SQL_BYTES, TokenKind, tokens};
+use crate::schema_sql::{MAX_SCHEMA_SQL_BYTES, TokenKind, invalid_sql, tokens};
 
 /// A relation of `sqlite_schema`, with what the listing adds to it.
 pub(crate) struct Listed {
@@ -65,7 +65,8 @@ pub(crate) fn list(
          WHERE type IN ('table', 'view') ORDER BY type, name"
     );
     let mut statement = connection.prepare(&sql).map_err(read)?;
-    let mut rows = statement.query([MAX_SCHEMA_SQL_BYTES]).map_err(read)?;
+    let max_bytes = i64::try_from(MAX_SCHEMA_SQL_BYTES).map_err(|_| invalid_sql())?;
+    let mut rows = statement.query([max_bytes]).map_err(read)?;
     let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
     while let Some(row) = rows.next().map_err(read)? {
         raw.push((

@@ -10,6 +10,10 @@ allowBuilds:
 # Patched transitive dependencies; rationale and removal conditions are dated
 # in docs/RESEARCH-NOTES.md (npm security overrides).
 overrides:
+  "@joshwooding/vite-plugin-react-docgen-typescript>glob": 14.0.4
+  "@ts-morph/common>minimatch": 11.0.8
+  "@typescript-eslint/typescript-estree>minimatch": 11.0.8
+  "eslint-plugin-import-x>minimatch": 11.0.8
   katex: 0.18.2
   seroval: 1.6.12
   seroval-plugins: 1.6.12
