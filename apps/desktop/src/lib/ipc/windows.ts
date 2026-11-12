@@ -32,7 +32,8 @@ export type WindowConsoles = z.infer<typeof WindowConsoles>
 export const HandedResult = z.object({
   result: z.string(),
   rows: z.number().int().nonnegative(),
-  affectedRows: z.number().int().nonnegative().nullable(),
+  // Server-reported u64 counts can exceed JavaScript's safe integer range.
+  affectedRows: z.number().nonnegative().nullable(),
   complete: z.boolean(),
   truncated: z.boolean(),
   cancelled: z.boolean(),

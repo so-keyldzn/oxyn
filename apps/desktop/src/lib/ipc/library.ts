@@ -176,7 +176,8 @@ export const RetainedResult = z.discriminatedUnion("type", [
     result: z.string(),
     columns: z.array(ResultColumn),
     rows: z.number().int().nonnegative(),
-    affectedRows: z.number().int().nonnegative().nullable(),
+    // Server-reported u64 counts can exceed JavaScript's safe integer range.
+    affectedRows: z.number().nonnegative().nullable(),
     complete: z.boolean(),
     /** The buffer stopped retaining rows at its bound. */
     truncated: z.boolean(),
