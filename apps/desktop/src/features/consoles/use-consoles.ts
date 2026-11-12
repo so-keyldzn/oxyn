@@ -783,6 +783,7 @@ async function handedResult(
     result: handed.result,
     columns,
     rows: handed.rows,
+    affectedRows: handed.affectedRows,
     complete: handed.complete,
     truncated: handed.truncated,
     cancelled: handed.cancelled,

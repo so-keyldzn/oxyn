@@ -112,7 +112,14 @@ fn a_duckdb_file_opens_shows_its_tree_previews_runs_and_explains() {
         ))
         .expect("the console writes");
     assert!(
-        matches!(created, CommandOutcome::Executed { rows: 2, .. }),
+        matches!(
+            created,
+            CommandOutcome::Executed {
+                rows: 0,
+                affected_rows: Some(2),
+                ..
+            }
+        ),
         "{created:?}"
     );
 

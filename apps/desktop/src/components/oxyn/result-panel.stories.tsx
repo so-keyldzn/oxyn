@@ -492,3 +492,55 @@ export const Narrow: Story = {
     ),
   ],
 }
+
+/** A command count must never manufacture grid rows or an export. */
+export const AffectedRows: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "update-count",
+      columns: [],
+      rows: 0,
+      affectedRows: 505,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+      elapsedMs: 12,
+    },
+    fetchPage: fn(),
+    footerActions: <Button>Export</Button>,
+    toolbar: <input aria-label="Find in result" />,
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText("Statement completed")).toBeVisible()
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "505 rows affected · 12 ms"
+    )
+    await expect(canvas.queryByRole("grid")).toBeNull()
+    await expect(canvas.queryByRole("button", { name: "Export" })).toBeNull()
+    await expect(canvas.queryByLabelText("Find in result")).toBeNull()
+    await expect(args.fetchPage).not.toHaveBeenCalled()
+  },
+}
+
+export const CompletedWithoutRows: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "no-op",
+      columns: [],
+      rows: 0,
+      affectedRows: null,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "Statement completed"
+    )
+    await expect(canvas.queryByRole("grid")).toBeNull()
+    await expect(canvas.queryByText(/rows shown/)).toBeNull()
+  },
+}

@@ -173,6 +173,7 @@ impl Backend {
                         })
                         .collect(),
                     rows: buffer.row_count(),
+                    affected_rows: super::results::affected_rows(&buffer),
                     complete: buffer.is_complete(),
                     truncated: buffer.stats().truncated,
                 })

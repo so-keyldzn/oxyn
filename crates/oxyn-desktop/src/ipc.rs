@@ -339,6 +339,8 @@ pub enum CommandOutcome {
         result: String,
         columns: Vec<ResultColumn>,
         rows: u64,
+        /// A completed command count, distinct from records available to read.
+        affected_rows: Option<u64>,
         /// The SQL duration, as the driver measured it.
         elapsed_ms: u64,
         /// From the command's start to its outcome: the wait for the

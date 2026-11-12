@@ -176,6 +176,7 @@ export const RetainedResult = z.discriminatedUnion("type", [
     result: z.string(),
     columns: z.array(ResultColumn),
     rows: z.number().int().nonnegative(),
+    affectedRows: z.number().int().nonnegative().nullable(),
     complete: z.boolean(),
     /** The buffer stopped retaining rows at its bound. */
     truncated: z.boolean(),

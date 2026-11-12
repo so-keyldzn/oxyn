@@ -32,6 +32,7 @@ export type WindowConsoles = z.infer<typeof WindowConsoles>
 export const HandedResult = z.object({
   result: z.string(),
   rows: z.number().int().nonnegative(),
+  affectedRows: z.number().int().nonnegative().nullable(),
   complete: z.boolean(),
   truncated: z.boolean(),
   cancelled: z.boolean(),

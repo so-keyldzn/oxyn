@@ -66,6 +66,7 @@ export type ResultState =
       result: string
       columns: Array<ResultColumn>
       rows: number
+      affectedRows?: number | null
       complete: boolean
       truncated: boolean
       cancelled: boolean
@@ -364,6 +365,9 @@ export const ResultPanel = React.memo(function ResultPanel({
           state={{
             status: "done",
             rows: state.rows,
+            affectedRows: state.affectedRows,
+            noResult:
+              state.complete && state.columns.length === 0 && state.rows === 0,
             elapsedMs: state.elapsedMs,
             truncated: state.truncated,
             cancelled: state.cancelled,
@@ -382,7 +386,14 @@ export const ResultPanel = React.memo(function ResultPanel({
                 <EmptyMedia variant="icon">
                   <HugeiconsIcon icon={TableIcon} strokeWidth={2} />
                 </EmptyMedia>
-                <EmptyTitle>No rows</EmptyTitle>
+                <EmptyTitle>
+                  {state.complete &&
+                  !state.cancelled &&
+                  !state.truncated &&
+                  state.columns.length === 0
+                    ? "Statement completed"
+                    : "No rows"}
+                </EmptyTitle>
                 <EmptyDescription>
                   {state.cancelled
                     ? "The statement was cancelled before any row arrived."
@@ -392,7 +403,7 @@ export const ResultPanel = React.memo(function ResultPanel({
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-            {footer(barActions(null))}
+            {footer(state.columns.length === 0 ? null : barActions(null))}
           </div>
         )
       }

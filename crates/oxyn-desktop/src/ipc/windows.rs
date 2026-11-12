@@ -72,6 +72,7 @@ pub enum HandoffRequest {
 pub struct HandedResult {
     pub result: String,
     pub rows: u64,
+    pub affected_rows: Option<u64>,
     pub complete: bool,
     pub truncated: bool,
     pub cancelled: bool,

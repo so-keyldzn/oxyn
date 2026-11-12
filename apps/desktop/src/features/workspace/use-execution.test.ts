@@ -6,6 +6,7 @@ describe("stateFromOutcome", () => {
   it("never presents a truncated result as complete", () => {
     const { state } = stateFromOutcome({
       type: "executed",
+      affectedRows: null,
       result: "r",
       columns: [{ name: "id", dataType: "Int64", nullable: false }],
       rows: 2_000_000,
@@ -26,6 +27,7 @@ describe("stateFromOutcome", () => {
   it("keeps an unverified row-limit stop incomplete", () => {
     const { state } = stateFromOutcome({
       type: "executed",
+      affectedRows: null,
       result: "r",
       columns: [{ name: "id", dataType: "Int64", nullable: false }],
       rows: 10_000,
@@ -77,4 +79,26 @@ describe("stateFromOutcome", () => {
       "cancelled"
     )
   })
+})
+
+it("keeps affected rows out of the grid and names them in the status bar", () => {
+  const { state, summary } = stateFromOutcome({
+    type: "executed",
+    result: "write",
+    columns: [],
+    rows: 0,
+    affectedRows: 505,
+    elapsedMs: 12,
+    latencyMs: 14,
+    complete: true,
+    cancelled: false,
+    truncated: false,
+    rowLimitUnverified: false,
+  })
+  expect(state).toMatchObject({
+    status: "populated",
+    rows: 0,
+    affectedRows: 505,
+  })
+  expect(summary).toMatchObject({ status: "done", rows: 0, affectedRows: 505 })
 })

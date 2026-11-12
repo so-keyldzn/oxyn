@@ -271,7 +271,19 @@ export function ConnectionForm({
     onSubmit: ({ value }) => onSubmit(draftFrom(driver, value)),
   })
   const values = useSelector(form.store, (state) => state.values)
-  const dirty = useSelector(form.store, (state) => state.isDirty)
+  const touched = useSelector(form.store, (state) => state.isDirty)
+  // A failed opening can follow a successful save. Compare against that save,
+  // not the empty form's original defaults; subsequent edits still need a guard.
+  const dirty = saved
+    ? values.name.trim() !== saved.name ||
+      values.environment !== saved.environment ||
+      values.privacyTier !== saved.privacyTier ||
+      values.readOnly !== saved.readOnly ||
+      settingsChanged(driver, values, saved) ||
+      driver.fields.some(
+        (field) => field.secret && (values.values[field.key] ?? "") !== ""
+      )
+    : touched
   React.useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])

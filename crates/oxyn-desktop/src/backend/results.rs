@@ -29,6 +29,19 @@ use crate::ipc::results::{
 };
 use crate::ipc::{CatalogAddress, Cell, CommandOutcome, IpcError, ResultColumn, ResultPage};
 
+/// A positive command count with no records is an affected-row count. Keep
+/// zero ambiguous: an empty zero-column SELECT and a no-op command both exist.
+/// Partial streams never establish a completed write's affected-row count.
+pub(super) fn affected_rows(buffer: &ResultBuffer) -> Option<u64> {
+    let stats = buffer.stats();
+    (buffer.is_complete()
+        && !stats.truncated
+        && buffer.schema().fields().is_empty()
+        && buffer.is_empty()
+        && stats.rows > 0)
+        .then_some(stats.rows)
+}
+
 /// The largest window of rows one page call returns.
 ///
 /// A virtualized grid shows a few dozen rows; 2 000 leaves room for fast

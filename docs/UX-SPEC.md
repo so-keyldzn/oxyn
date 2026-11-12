@@ -313,6 +313,11 @@ back to the saved value restores the stored state. The announcement happens
 before saving, not after: the user who fixes a typo in the host learns they
 lose the password at the moment they can still cancel.
 
+When saving a new connection succeeds but opening it fails, leaving unchanged
+saved details needs no discard confirmation. Later edits remain guarded: the
+dialog says only unsaved changes will be lost and the saved connection remains.
+Typed secrets are cleared after saving; they never become a form baseline.
+
 ### The sqlite-vec switch
 
 A SQLite connection carries, under its file, a switch labelled
@@ -432,6 +437,14 @@ width; changing the window width does not re-run its read.
 The grid takes the available height; its status and its export scope stay at
 the bottom of its area. The number of rows drawn on a board does not define a
 limit of the application's viewport.
+
+A command's affected-row count is distinct from the records retained for the
+grid. A completed command with no columns or records and a positive count says
+`N rows affected`, without a grid, find controls or export. With no positive
+count, it says `Statement completed` without inventing affected rows. Actual
+records, including `RETURNING` and zero-column records, keep their grid.
+Retained results and consoles moved between windows preserve this distinction.
+Cancellation and truncation retain their warnings.
 
 Two reading presets are offered in the preferences: `Compact` (main text
 13 px, secondary mentions 11 px, data rows 24 px) and `Comfortable` (14 px,

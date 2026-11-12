@@ -195,6 +195,7 @@ export const CommandOutcome = z.discriminatedUnion("type", [
     result: z.string(),
     columns: z.array(ResultColumn),
     rows: z.number().int().nonnegative(),
+    affectedRows: z.number().int().nonnegative().nullable(),
     /** The SQL duration, as the driver measured it. */
     elapsedMs: z.number().nonnegative(),
     /**

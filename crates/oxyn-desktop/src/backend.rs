@@ -1126,7 +1126,8 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
                     nullable: field.is_nullable(),
                 })
                 .collect(),
-            rows: stats.rows,
+            rows: u64::try_from(buffer.row_count()).unwrap_or(u64::MAX),
+            affected_rows: results::affected_rows(&buffer),
             elapsed_ms: ipc::millis(stats.total_time),
             latency_ms: ipc::millis(timings.total),
             complete: matches!(sink, SinkOutcome::Exhausted),

@@ -420,6 +420,7 @@ export function ConsolePanel({
               ? {
                   result: shown.result,
                   rows: shown.rows,
+                  affectedRows: shown.affectedRows ?? null,
                   complete: shown.complete,
                   truncated: shown.truncated,
                   cancelled: shown.cancelled,
@@ -474,6 +475,8 @@ export function ConsolePanel({
   const exportable =
     state.status === "populated" &&
     state.complete &&
+    (state.columns.length > 0 || state.rows > 0) &&
+    state.affectedRows == null &&
     !state.truncated &&
     !state.cancelled
 

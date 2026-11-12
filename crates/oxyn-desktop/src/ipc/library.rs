@@ -343,6 +343,7 @@ pub enum RetainedResult {
         result: String,
         columns: Vec<crate::ipc::ResultColumn>,
         rows: usize,
+        affected_rows: Option<u64>,
         /// Only an exhausted stream describes a whole result.
         complete: bool,
         /// The buffer stopped retaining rows at its bound.

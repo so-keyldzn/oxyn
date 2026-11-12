@@ -402,6 +402,7 @@ describe("what an answer touched", () => {
     const executed = (cancelled: boolean) =>
       decisionSettled(decisionStarted(asked, "cmd-1"), "cmd-1", true, {
         type: "executed",
+        affectedRows: null,
         result: "r",
         columns: [],
         rows: 3,

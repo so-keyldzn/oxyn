@@ -21,6 +21,7 @@ const executed = (
   }
 ): CommandOutcome => ({
   type: "executed",
+  affectedRows: null,
   result,
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows,

@@ -505,7 +505,14 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
 
       <DiscardChangesDialog
         open={confirmingLeave}
-        what={driver ? `this new ${driver.displayName} connection` : "it"}
+        what={
+          saved
+            ? `unsaved changes to ${saved.name}`
+            : driver
+              ? `this new ${driver.displayName} connection`
+              : "it"
+        }
+        saved={!!saved}
         onKeep={() => setConfirmingLeave(false)}
         onDiscard={leaveDriver}
       />

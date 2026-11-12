@@ -79,6 +79,7 @@ const executed = (
   result: string
 ): Extract<CommandOutcome, { type: "executed" }> => ({
   type: "executed",
+  affectedRows: null,
   result,
   columns: [{ name: "id", dataType: "Int64", nullable: false }],
   rows: 3,
