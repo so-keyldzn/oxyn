@@ -28,6 +28,7 @@ export type RetainedResultState =
       result: string
       columns: Array<ResultColumn>
       rows: number
+      affectedRows?: number | null
       /** The run ended without a doubt and the stream was exhausted. */
       complete: boolean
       truncated: boolean
@@ -42,7 +43,12 @@ export type RetainedResultState =
 export function retainedExportable(
   state: Extract<RetainedResultState, { status: "open" }>
 ) {
-  return state.complete && !state.truncated
+  return (
+    state.complete &&
+    !state.truncated &&
+    state.affectedRows == null &&
+    (state.columns.length > 0 || state.rows > 0)
+  )
 }
 
 /** What these rows are, in the words of the library screen. */
@@ -53,6 +59,8 @@ export function retainedNotice(
     return "Incomplete or uncertain execution. These rows are for inspection; export is unavailable."
   if (state.truncated)
     return "Truncated result. Only retained rows are shown; export is unavailable."
+  if (state.affectedRows != null)
+    return "Retained execution summary. No query was rerun."
   return "Retained rows only. Opening, scrolling and exporting do not rerun the query."
 }
 
@@ -168,6 +176,7 @@ export function RetainedResultView({
                 result: state.result,
                 columns: state.columns,
                 rows: state.rows,
+                affectedRows: state.affectedRows,
                 complete: state.complete,
                 truncated: state.truncated,
                 cancelled: false,

@@ -300,3 +300,94 @@ fn a_result_is_paged_searched_inspected_and_then_expires() {
             .is_none()
     );
 }
+
+#[test]
+fn command_counts_are_not_readable_records() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend);
+    let connection: ConnectionId = open.connection.parse().expect("connection");
+    let session = open.session.parse().expect("session");
+    let run = |sql: &str| {
+        runtime
+            .block_on(backend.execute(CommandId::new(), connection, session, sql.into()))
+            .expect("executes")
+    };
+    run("CREATE TABLE counts (id INTEGER)");
+    for (sql, affected) in [
+        ("INSERT INTO counts VALUES (1), (2)", 2),
+        ("UPDATE counts SET id = id WHERE id = 1", 1),
+    ] {
+        let CommandOutcome::Executed {
+            result,
+            rows,
+            affected_rows,
+            columns,
+            ..
+        } = run(sql)
+        else {
+            panic!("executed");
+        };
+        assert_eq!(rows, 0);
+        assert!(columns.is_empty());
+        assert_eq!(affected_rows, Some(affected));
+        let retained = runtime
+            .block_on(backend.open_retained_result(connection, result.parse().expect("result")))
+            .expect("retained summary");
+        assert!(
+            matches!(retained, crate::ipc::library::RetainedResult::Open { rows: 0, affected_rows: Some(count), .. } if count == affected)
+        );
+    }
+    for sql in [
+        "SELECT id FROM counts",
+        "UPDATE counts SET id = id WHERE id IN (1, 2) RETURNING id",
+    ] {
+        let outcome = run(sql);
+        assert!(
+            matches!(
+                outcome,
+                CommandOutcome::Executed {
+                    rows: 2,
+                    affected_rows: None,
+                    ..
+                }
+            ),
+            "{sql}: {outcome:?}"
+        );
+    }
+    assert!(matches!(
+        run("UPDATE counts SET id = id WHERE id = 99"),
+        CommandOutcome::Executed {
+            rows: 0,
+            affected_rows: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn zero_column_records_and_partial_streams_are_not_affected_counts() {
+    let schema = Arc::new(Schema::empty());
+    let records = ResultBuffer::new(schema.clone(), 1024);
+    let options = arrow::array::RecordBatchOptions::new().with_row_count(Some(3));
+    records
+        .push(
+            RecordBatch::try_new_with_options(schema.clone(), vec![], &options)
+                .expect("zero-column SELECT records"),
+        )
+        .expect("buffered");
+    records.mark_complete(ExecStats {
+        rows: 3,
+        ..ExecStats::default()
+    });
+    assert_eq!(affected_rows(&records), None);
+    let partial = ResultBuffer::new(schema, 1024);
+    assert_eq!(affected_rows(&partial), None);
+    partial.mark_complete(ExecStats {
+        rows: 3,
+        truncated: true,
+        ..ExecStats::default()
+    });
+    assert_eq!(affected_rows(&partial), None);
+}

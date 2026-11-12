@@ -21,6 +21,7 @@ const { useExecution } = await import("./use-execution")
 
 const executed: CommandOutcome = {
   type: "executed",
+  affectedRows: null,
   result: "late-result",
   columns: [],
   rows: 1,

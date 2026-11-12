@@ -103,6 +103,7 @@ function entry(result: string) {
 function opened(result: string, rows: number): RetainedResult {
   return {
     type: "open",
+    affectedRows: null,
     result,
     columns: [{ name: "id", dataType: "Int64", nullable: false }],
     rows,

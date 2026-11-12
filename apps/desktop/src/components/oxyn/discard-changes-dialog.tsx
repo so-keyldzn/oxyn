@@ -18,12 +18,15 @@ import {
 export function DiscardChangesDialog({
   open,
   what,
+  saved = false,
   onKeep,
   onDiscard,
 }: {
   open: boolean
   /** What is abandoned, e.g. « this new connection ». */
   what: string
+  /** A saved connection remains after abandoning the current edits. */
+  saved?: boolean
   onKeep: () => void
   onDiscard: () => void
 }) {
@@ -43,7 +46,9 @@ export function DiscardChangesDialog({
             Discard {what}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            The details you typed are not saved anywhere and will be lost.
+            {saved
+              ? "Only unsaved changes will be lost. The saved connection will remain in this workspace."
+              : "The details you typed are not saved anywhere and will be lost."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

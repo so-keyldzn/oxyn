@@ -134,6 +134,7 @@ describe("optional fields", () => {
     // footer would claim missing rows nobody looked for.
     const executed = {
       type: "executed",
+      affectedRows: null,
       result: "r",
       columns: [],
       rows: 10_000,

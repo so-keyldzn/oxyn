@@ -94,6 +94,7 @@ export function RetainedResultTab({
             result: opened.data.result,
             columns: opened.data.columns,
             rows: opened.data.rows,
+            affectedRows: opened.data.affectedRows,
             complete: opened.data.complete && succeeded,
             truncated: opened.data.truncated,
           }

@@ -16,6 +16,9 @@ export type ResultFooterState =
   | {
       status: "done"
       rows: number
+      affectedRows?: number | null
+      /** A completed statement returned neither a schema nor records. */
+      noResult?: boolean
       elapsedMs?: number | null
       truncated: boolean
       cancelled: boolean
@@ -65,7 +68,12 @@ export function footerSummary(state: ResultFooterState): {
       warning: true,
     }
   }
-  return { text: `${rows(state.rows)} shown${elapsed}`, warning: false }
+  if (state.noResult && state.affectedRows == null)
+    return { text: `Statement completed${elapsed}`, warning: false }
+  return {
+    text: `${state.affectedRows == null ? `${rows(state.rows)} shown` : `${rows(state.affectedRows)} affected`}${elapsed}`,
+    warning: false,
+  }
 }
 
 /**

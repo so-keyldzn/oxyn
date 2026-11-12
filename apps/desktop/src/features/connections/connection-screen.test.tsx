@@ -228,3 +228,30 @@ describe("ConnectionScreen after a saved connection failed to open", () => {
     })
   })
 })
+
+describe("leaving a saved connection after an opening failure", () => {
+  it("leaves without claiming the successfully saved form will be lost", async () => {
+    await failFirstOpening()
+    await waitFor(() =>
+      expect(valueOf(screen.getByLabelText(/^Password/))).toBe("")
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Connections" }))
+    await screen.findByRole("button", { name: /PostgreSQL/ })
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+  })
+
+  it("protects later edits and says the saved connection remains", async () => {
+    await failFirstOpening()
+    type(screen.getByLabelText(/^Name/), "billing edited")
+    fireEvent.click(screen.getByRole("button", { name: "Connections" }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog.textContent).toContain("Discard unsaved changes to billing?")
+    expect(dialog.textContent).toContain("The saved connection will remain")
+    expect(dialog.textContent).not.toContain("not saved anywhere")
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+    expect(valueOf(screen.getByLabelText(/^Name/))).toBe("billing edited")
+    type(screen.getByLabelText(/^Name/), "billing")
+    fireEvent.click(screen.getByRole("button", { name: "Connections" }))
+    await screen.findByRole("button", { name: /PostgreSQL/ })
+  })
+})

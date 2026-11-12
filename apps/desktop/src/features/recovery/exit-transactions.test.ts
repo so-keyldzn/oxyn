@@ -39,6 +39,7 @@ vi.mock("@/lib/ipc/consoles", async () => {
           throw new BackendError({ message: failure, retryable: false })
         return {
           type: "executed",
+          affectedRows: null,
           result: "r",
           columns: [],
           rows: 0,

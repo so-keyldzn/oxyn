@@ -23,6 +23,7 @@ export function stateFromOutcome(outcome: CommandOutcome): {
           result: outcome.result,
           columns: outcome.columns,
           rows: outcome.rows,
+          affectedRows: outcome.affectedRows,
           complete: outcome.complete,
           truncated: outcome.truncated,
           cancelled: outcome.cancelled,
@@ -35,6 +36,7 @@ export function stateFromOutcome(outcome: CommandOutcome): {
           : {
               status: "done",
               rows: outcome.rows,
+              affectedRows: outcome.affectedRows,
               elapsedMs: outcome.elapsedMs,
             },
       }
@@ -97,6 +99,7 @@ export function useExecution({
       ? {
           status: "done",
           rows: initial.rows,
+          affectedRows: initial.affectedRows,
           elapsedMs: initial.elapsedMs ?? 0,
         }
       : { status: "idle" }

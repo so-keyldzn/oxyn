@@ -34,7 +34,12 @@ export type ExecutionSummary =
   | { status: "running"; rows: number }
   /** Cancel was sent; the server has not confirmed yet (UX-SPEC « Cancellation »). */
   | { status: "cancelling"; rows: number }
-  | { status: "done"; rows: number; elapsedMs: number }
+  | {
+      status: "done"
+      rows: number
+      affectedRows?: number | null
+      elapsedMs: number
+    }
   | { status: "failed"; message?: string; retryable?: boolean }
   | { status: "cancelled" }
 
@@ -55,7 +60,7 @@ export function describeExecution(summary: ExecutionSummary) {
     case "cancelling":
       return `Cancellation requested… · ${rowCount(summary.rows)}`
     case "done":
-      return `${rowCount(summary.rows)} · ${summary.elapsedMs.toLocaleString("en-US")} ms`
+      return `${summary.affectedRows == null ? rowCount(summary.rows) : `${rowCount(summary.affectedRows)} affected`} · ${summary.elapsedMs.toLocaleString("en-US")} ms`
     case "failed":
       return summary.retryable === undefined
         ? "Failed"

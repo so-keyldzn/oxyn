@@ -152,6 +152,7 @@ fn the_result_keeps_a_reader_while_it_moves() {
     let handed = HandedResult {
         result: result.to_string(),
         rows: 1,
+        affected_rows: None,
         complete: true,
         truncated: false,
         cancelled: false,

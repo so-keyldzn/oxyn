@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="937cd9169a43" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="793982b801de" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -337,6 +337,13 @@ la valeur enregistrée rétablit l'état stocké. L'annonce se fait avant
 l'enregistrement, pas après : l'utilisateur qui corrige une faute de frappe dans
 l'hôte apprend qu'il perd le mot de passe au moment où il peut encore annuler.
 
+Lorsque l'enregistrement d'une nouvelle connexion réussit mais que son ouverture
+échoue, quitter les détails enregistrés inchangés ne demande pas de confirmation.
+Les modifications ultérieures restent protégées : le dialogue indique que seules
+les modifications non enregistrées seront perdues et que la connexion enregistrée
+restera présente. Les secrets saisis sont effacés après l'enregistrement ; ils ne
+deviennent jamais une référence de comparaison du formulaire.
+
 ### L'interrupteur sqlite-vec
 
 Une connexion SQLite porte, sous son fichier, un interrupteur libellé
@@ -460,6 +467,15 @@ définition sur la largeur disponible ; changer la largeur de fenêtre ne
 relance pas sa lecture.
 
 ### Lisibilité et hauteur de grille
+
+Le nombre de lignes affectées par une commande est distinct des enregistrements
+conservés pour la grille. Une commande terminée sans colonne ni enregistrement,
+avec un compteur positif, affiche `N rows affected`, sans grille, recherche ni
+export. Sans compteur positif, elle affiche `Statement completed`, sans inventer
+un nombre de lignes affectées. Les véritables enregistrements, y compris ceux de
+`RETURNING` et ceux sans colonne, gardent leur grille. L'historique et les consoles
+déplacées entre fenêtres conservent cette distinction. Les avertissements
+d'annulation et de troncature restent prioritaires.
 
 La grille occupe la hauteur disponible ; son statut et sa portée d'export
 restent en bas de sa zone. La quantité de lignes dessinées dans une planche

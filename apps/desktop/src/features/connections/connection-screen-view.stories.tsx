@@ -505,6 +505,15 @@ export const SavedButNotOpened: Story = {
     await expect(alert).toHaveTextContent(
       "billing is saved in this workspace. Connecting again updates it"
     )
+    await userEvent.type(canvas.getByLabelText(/^Name/), "later edit")
+    await userEvent.click(canvas.getByRole("button", { name: /^Back/ }))
+    const body = within(document.body)
+    const dialog = await body.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent("The saved connection will remain")
+    await expect(dialog).not.toHaveTextContent("not saved anywhere")
+    await expect(
+      body.getByRole("button", { name: "Keep editing" })
+    ).toHaveFocus()
   },
 }
 
