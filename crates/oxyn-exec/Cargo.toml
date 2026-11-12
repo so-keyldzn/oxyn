@@ -19,6 +19,7 @@ oxyn-driver.workspace = true
 oxyn-query.workspace = true
 oxyn-store.workspace = true
 async-trait.workspace = true
+arrow.workspace = true
 # Already in the graph through oxyn-store: the launch start bounds which
 # history rows are still running here.
 chrono.workspace = true
@@ -30,9 +31,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# A fake cursor returns `RecordBatch`es: the only way to prove the history's
-# nominal path — duration and rows — without a server.
-arrow.workspace = true
+# Holds the audit writer behind a file lock to test late abandonment.
+rusqlite.workspace = true
 oxyn-driver-sqlite.workspace = true
 # A production read calling a writing function must be refused by the server,
 # through the bus: only a real PostgreSQL can show it (issue #11).

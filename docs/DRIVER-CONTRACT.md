@@ -100,6 +100,8 @@ can sort the whole relation. The interface offers pages from that same flag,
 so an order without the flag, or the flag without the order, shows a page that
 repeats or skips rows. A driver that cannot tell leaves the flag at its default, `false`.
 
+**Native continuation is a separate promise** ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). `Relation::retained_preview` declares traversal of one cursor, not a unique key; `retained_preview_sort` separately vouches for requested sorts. A server without the latter keeps sorted first-page reads, with continuation refused until the sort is cleared. `Session::prepare_preview` marks such a request retained; the executor still reclassifies it and enforces read-only before `execute_preview`. It keeps unread batch remainders and bounded Arrow history, never re-executes a previous page, and binds each continuation to its connection, session, relation and shape. The default methods preserve independent bounded previews. Closing, expiring or abandoning a native read releases its cursor; a dropped cursor future is never resumed. The driver owns protocol cleanup, including remote IDs received after cancellation. Redis scan duplicates are suppressed within a 16 MiB identity budget, failing explicitly on overflow; a clipped continuation identity is refused.
+
 **Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
 it declares a primary key, makes a click on that table read every vector into a
 temporary b-tree before the first row appears.

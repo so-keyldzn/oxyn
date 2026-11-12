@@ -265,6 +265,8 @@ fn a_hostile_table_previews_filters_and_pages_without_becoming_sql() {
         }],
         predicate: None,
         offset: 200,
+        page_size: PREVIEW_ROWS,
+        continuation: None,
     };
     assert!(
         runtime
@@ -331,6 +333,61 @@ fn a_hostile_table_previews_filters_and_pages_without_becoming_sql() {
     assert!(
         matches!(third, CommandOutcome::Executed { rows: 50, .. }),
         "450 rows in key order: the third page holds the last 50"
+    );
+    for size in [50_u32, 100, 200] {
+        for offset in [0, u64::from(size)] {
+            let outcome = runtime
+                .block_on(backend.preview_relation(
+                    CommandId::new(),
+                    connection,
+                    session,
+                    table.address.clone(),
+                    PreviewShapeDraft {
+                        page_size: size,
+                        offset,
+                        ..PreviewShapeDraft::default()
+                    },
+                ))
+                .expect("the selected size reaches the driver");
+            let CommandOutcome::Executed { result, rows, .. } = outcome else {
+                panic!("the preview executes");
+            };
+            assert_eq!(rows, u64::from(size));
+            let result = result.parse().expect("result id");
+            for row in [0, usize::try_from(size - 1).expect("small page")] {
+                let crate::ipc::results::ResultWindow::Page(page) = runtime
+                    .block_on(backend.read_result_page(connection, result, row, 1))
+                    .expect("one retained row")
+                else {
+                    panic!("the preview result is held");
+                };
+                let id = offset + u64::try_from(row).expect("small offset") + 1;
+                assert_eq!(
+                    serde_json::to_string(page.rows.first().expect("one row")).expect("row JSON"),
+                    format!(r#"["{id}","row {id}"]"#)
+                );
+            }
+        }
+    }
+    let invalid_size = PreviewShapeDraft {
+        page_size: 201,
+        ..PreviewShapeDraft::default()
+    };
+    assert!(
+        backend
+            .preview_pagination(connection, &table.address, &invalid_size, 200)
+            .is_err()
+    );
+    assert!(
+        runtime
+            .block_on(backend.preview_relation(
+                CommandId::new(),
+                connection,
+                session,
+                table.address.clone(),
+                invalid_size,
+            ))
+            .is_err()
     );
     let second = runtime
         .block_on(backend.preview_relation(

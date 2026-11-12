@@ -226,7 +226,7 @@ impl SessionSlot {
         limit: u32,
         shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
-    ) -> Result<ExecRequest> {
+    ) -> Result<oxyn_driver::PreparedPreview> {
         let token = cancel.child();
         let guard = tokio::select! {
             biased;
@@ -235,12 +235,27 @@ impl SessionSlot {
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        let operation = session.preview_request(path, limit, shape, &token);
+        let operation = session.prepare_preview(path, limit, shape, &token);
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,
             _ = self.closing.cancelled() => { token.cancel(); operation.await }
         }
+    }
+
+    pub(crate) async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        session.execute_preview(request, cancel).await
     }
 
     /// Declares where this session resolves unqualified names.

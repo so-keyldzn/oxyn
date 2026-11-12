@@ -391,6 +391,7 @@ pub struct Executor {
     approvals: ApprovalRegistry,
     events: EventBus,
     results: RwLock<crate::retained::RetainedResults>,
+    previews: crate::preview_stream::Registry,
     catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: Arc<RwLock<HashMap<ConnectionId, ConnectionConfig>>>,
     /// Orders every write of a connection — to the store, then to
@@ -722,6 +723,10 @@ impl Executor {
 
         let start = Instant::now();
         let result_outcome = self.execute_command(id, command, cancel).await;
+        let mut delivery = self.previews.delivery(match &result_outcome {
+            Ok(Outcome::Executed { result, .. }) => Some(*result),
+            _ => None,
+        });
         guard.settle();
         let duration = start.elapsed();
 
@@ -775,6 +780,7 @@ impl Executor {
             }
         }
 
+        delivery.settle();
         result_outcome
     }
 
@@ -891,16 +897,30 @@ impl Executor {
                     });
                 }
                 let budget = ExecLimits::DEFAULT_TIMEOUT;
-                let request = Self::prepare_within(
-                    &slot,
-                    &path,
-                    *limit,
-                    shape,
-                    cancel,
-                    Deadline::starting_at(started, budget),
-                )
-                .await?;
-                let mut request = reclassified_request(request, Some(&slot));
+                let read = crate::preview_stream::Read {
+                    path: path.clone(),
+                    shape: shape.clone(),
+                    size: usize::try_from(*limit)
+                        .map_err(|_| OxynError::Config("preview size exceeds platform".into()))?,
+                };
+                let prepared = if shape.continuation.is_some() {
+                    oxyn_driver::PreparedPreview {
+                        request: self.previews.request(&slot, &read)?,
+                        retained: true,
+                    }
+                } else {
+                    Self::prepare_within(
+                        &slot,
+                        &path,
+                        *limit,
+                        shape,
+                        cancel,
+                        Deadline::starting_at(started, budget),
+                    )
+                    .await?
+                };
+                let retained = prepared.retained.then_some(read);
+                let mut request = reclassified_request(prepared.request, Some(&slot));
                 if request.is_mutating() {
                     // Two distinct refusals, because they call for two different
                     // actions. `Unknown` means "this text could not be
@@ -946,6 +966,7 @@ impl Executor {
                     cancel,
                     Run {
                         preview_limit: Some(row_limit),
+                        retained,
                         started,
                     },
                 )
@@ -1472,6 +1493,7 @@ impl Executor {
 
     /// Closes the sessions of a connection, after cancelling what runs on them.
     async fn disconnect(&self, connection: ConnectionId) -> Result<Outcome> {
+        self.previews.close(connection, None);
         // Cancellation first: closing without cancelling leaves the queries
         // running server-side, connection taken and lock held.
         self.running
@@ -1502,6 +1524,7 @@ impl Executor {
                 reason: "session does not belong to this connection".into(),
             });
         }
+        self.previews.close(connection, Some(session));
         slot.begin_close();
         for running in self.running.for_session(session) {
             self.running.cancel(&self.sessions, running.statement).await;
@@ -1681,6 +1704,7 @@ impl Executor {
     ) -> Result<Outcome> {
         let Run {
             preview_limit,
+            retained,
             started,
         } = run;
         // Default `ExecLimits` forbids writing: a mutating request that did not
@@ -1732,6 +1756,7 @@ impl Executor {
                     &ct,
                     Run {
                         preview_limit,
+                        retained,
                         started,
                     },
                     &mut guard,
@@ -1773,6 +1798,7 @@ impl Executor {
     ) -> Result<Drained> {
         let Run {
             preview_limit,
+            retained,
             started,
         } = scope;
         let connection = slot.connection();
@@ -1789,7 +1815,23 @@ impl Executor {
             .timeout
             .and_then(|after| Deadline::starting_at(started, after));
         let calling = tokio::time::Instant::now();
-        let cursor = Self::execute_within(slot, request, ct, deadline).await?;
+        let result = ResultId::new();
+        let cursor = if let Some(read) = retained {
+            let (cursor, stream) = self
+                .previews
+                .page(
+                    slot,
+                    read,
+                    request,
+                    ct,
+                    deadline.map(|deadline| deadline.at),
+                )
+                .await?;
+            self.previews.bind(result, stream);
+            cursor
+        } else {
+            Self::execute_within(slot, request, ct, deadline).await?
+        };
         let streaming = tokio::time::Instant::now();
         let statement = cursor.handle();
         self.running.register(RunningStatement::new(
@@ -1801,7 +1843,6 @@ impl Executor {
             ct.clone(),
         ));
 
-        let result = ResultId::new();
         let buffer = Arc::new(ResultBuffer::with_limits(
             BatchSource::schema(&cursor),
             BufferLimits::default()
@@ -1913,7 +1954,7 @@ impl Executor {
         shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
         deadline: Option<Deadline>,
-    ) -> Result<ExecRequest> {
+    ) -> Result<oxyn_driver::PreparedPreview> {
         let Some(deadline) = deadline else {
             return slot.preview_request(path, limit, shape, cancel).await;
         };
@@ -2535,6 +2576,7 @@ impl Executor {
     /// The buffer is only freed when nobody holds it any more — the grid may be
     /// reading it.
     pub fn forget_result(&self, result: ResultId) -> Option<Arc<ResultBuffer>> {
+        self.previews.forget(result);
         self.results
             .write()
             .remove(&result)
@@ -2550,6 +2592,7 @@ impl Executor {
     /// at that point: it is logged at `warn` level. Returns the number of
     /// closed sessions.
     pub async fn shutdown(&self) -> usize {
+        self.previews.clear();
         // Before closing sessions: a caller usually bounds this call, and a
         // server that never answers the close would cut it before the end —
         // taking with it every outcome already queued.
@@ -2731,10 +2774,11 @@ impl fmt::Debug for Executor {
 }
 
 /// What a statement's run needs besides the request itself.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Run {
     /// The row bound of a preview, which also makes the end worth confirming.
     preview_limit: Option<usize>,
+    retained: Option<crate::preview_stream::Read>,
     /// When the command began: the origin of its deadline and of its timings.
     started: tokio::time::Instant,
 }
@@ -2743,6 +2787,7 @@ impl Run {
     fn starting_now(preview_limit: Option<usize>) -> Self {
         Self {
             preview_limit,
+            retained: None,
             started: tokio::time::Instant::now(),
         }
     }
@@ -3045,6 +3090,7 @@ impl ExecutorBuilder {
             approvals: self.approvals,
             events: self.events,
             results: RwLock::new(crate::retained::RetainedResults::default()),
+            previews: crate::preview_stream::Registry::default(),
             catalogs: RwLock::new(HashMap::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_writes: Arc::new(Mutex::new(())),

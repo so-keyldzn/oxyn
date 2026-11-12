@@ -342,3 +342,5 @@ async fn a_version_conflict_is_permanent() {
     assert!(!matches!(conflict, OxynError::OutcomeUnknown(_)));
     clean(&*session, index).await;
 }
+
+mod native_preview;

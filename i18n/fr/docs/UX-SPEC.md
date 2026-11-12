@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a542c4e55a1e" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="937cd9169a43" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -866,7 +866,10 @@ Dans cette revue, Entrée seule ne valide jamais une écriture ; Échap refuse.
 ## Données d'une table sélectionnée
 
 Sélectionner une table ou une vue SQL ouvre l'onglet **Data** et lit au plus
-**200 lignes**. Le driver construit et cite l'identifiant qualifié ; le bus
+**200 lignes**. La taille de page est **50, 100 ou 200**, initialement 200, et
+reste attachée à l'aperçu conservé de la relation pendant la session. La changer
+revient à la première page, en gardant le filtre appliqué et le tri ; ce geste
+n'applique pas un filtre simplement saisi. Le driver construit et cite l'identifiant qualifié ; le bus
 applique la politique de la connexion et impose une requête en lecture seule.
 Sur PostgreSQL, le catalogue désigne la base de la session, tandis que seuls le
 schéma et la table rejoignent le nom SQL qualifié.
@@ -953,8 +956,8 @@ offerte que si l'ordre est total — le tri demandé complété par une clé uni
 que le catalogue déclare, ou, sans tri, l'ordre de la clé primaire là où le
 driver s'en porte garant ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md)).
 L'onglet Data charge la description de la relation une fois, à son ouverture ;
-tant qu'elle n'est pas lue, ni avis ni paginateur ne s'affichent. Ensuite, la
-ligne sous la barre dit quel cas s'applique :
+tant qu'elle n'est pas lue, la navigation est désactivée et annonce qu'elle
+attend cette description. Ensuite, la ligne sous la barre de filtre dit quel cas s'applique :
 
 * **ordre par défaut** — les lignes arrivent dans l'ordre de la clé et les
   pages sont offertes d'emblée : « Rows come in the order of the primary key
@@ -968,13 +971,28 @@ ligne sous la barre dit quel cas s'applique :
   actions du pied de page à droite et non dans sa note, ouvre le même menu
   Sort. Une fois que l'utilisateur trie, les pages
   sont offertes, et le coût est le sien à choisir ;
-* **aucune clé unique connue** — l'aperçu reste à sa première page et dit
+* **aucune clé unique connue ni continuation native** — l'aperçu reste à sa première page et dit
   pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
   ligne et en omettrait une autre, sans rien signaler.
 
-Sur une page suivante, la ligne indique « Rows 1,201–1,400 of this order. Each
-page is a new read: the server may have changed between two of them. », et le
-pied de page « Preview · rows 1,201–1,400 · total row count not requested » —
+La barre de pagination reste sous le panneau de résultat, hors du défilement
+de la grille, même sur une seule page, un résultat vide, un chargement ou une
+erreur. Elle porte `Rows per page`, `Page N`, la plage réellement reçue
+(`Rows 1–2` pour deux lignes), et `Previous page` / `Next page`. Zéro ligne
+donne `No rows` ; un chargement ou un échec n'annonce aucune plage. Les contrôles
+sont désactivés pendant une lecture ; la navigation l'est aussi après un échec
+ou sans ordre total ni continuation native. Le sélecteur de taille peut relancer une lecture après
+une erreur. Une page courte désactive Next ; une page pleine l'autorise sans
+compter le total. Si la suivante est vide, Previous ramène à la précédente.
+Aucun nombre total de pages ni action Last : ils exigeraient de compter la
+table. La barre se replie sur une fenêtre étroite et reste accessible au clavier.
+
+Pour ClickHouse, Elasticsearch/OpenSearch et les collections Redis parcourables, les pages suivent une lecture conservée ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). La barre indique « Pages follow one read. Refresh starts a new read. » Previous retrouve les mêmes lignes ; actualisation, filtre, tri, taille et reconnexion abandonnent la continuation et repartent à la première page. L’expiration ou le budget d’historique produit une erreur explicite, avec possibilité d’actualiser. Les chaînes et documents JSON Redis ont une seule valeur ; les résumés de structures probabilistes ne sont pas des collections de membres. L’ancien OpenSearch sans `_shard_doc` visite successivement les partitions index/shard ; le tri conserve l’aperçu borné de première page et la barre demande de l’effacer pour parcourir les pages natives. Les futures partitions peuvent refléter des modifications concurrentes. OpenSearch 2.0–2.3 conserve son aperçu initial sur la première page, PIT étant apparu en 2.4. Aucun aperçu ne demande un comptage global de lignes ou de résultats.
+
+Pour les aperçus SQL/par clé indépendants, sur une page suivante, la ligne sous le filtre indique « Page 7 of this order.
+Each page is a new read: the server may have changed between two of them. »,
+et le pied du résultat nomme la plage réelle, par exemple
+« Preview · rows 1,201–1,250 · total row count not requested » —
 nombres groupés à la manière en-US. L'aperçu ne
 prétend pas être un instantané
 ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).

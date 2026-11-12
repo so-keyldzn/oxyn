@@ -83,6 +83,92 @@ async fn drain(cursor: &mut Box<dyn Cursor>) -> Vec<RecordBatch> {
     batches
 }
 
+/// Opt-in counterpart to the wire fixtures, against a disposable libSQL
+/// server. The plaintext client is test-only and restricted to the loopback.
+#[tokio::test]
+#[ignore = "requires a disposable local libSQL server in OXYN_TURSO_TEST_URL"]
+async fn a_real_libsql_server_pages_a_composite_key_at_each_desktop_size() {
+    let base = std::env::var("OXYN_TURSO_TEST_URL").expect("a disposable server URL is set");
+    let endpoint = url::Url::parse(&base).expect("a local test URL");
+    assert_eq!(endpoint.scheme(), "http", "a test-only plaintext client");
+    assert_eq!(endpoint.host_str(), Some("127.0.0.1"), "only the loopback");
+    assert!(endpoint.username().is_empty() && endpoint.password().is_none());
+    let http = Http::new(ConnectSpec::plaintext(&base, TOKEN)).expect("a local test client");
+    let session = session_over(http).await.expect("a real libSQL session");
+    let table = format!(
+        "oxyn_qa_{}",
+        oxyn_core::CommandId::new().to_string().replace('-', "")
+    );
+    let create = format!(
+        "CREATE TABLE {table} (id INTEGER NOT NULL, tenant INTEGER NOT NULL, payload TEXT, amount TEXT, note TEXT, PRIMARY KEY (tenant,id))"
+    );
+    let mut cursor = session
+        .execute(write(&create), &CancelToken::new())
+        .await
+        .expect("create our own table");
+    drain(&mut cursor).await;
+    let values = (1..=201)
+        .map(|id| {
+            format!(
+                "({id},{},'{{\"tags\":[\"synthetic\",null,\"東京\"]}}','123456789.0001',NULL)",
+                (id - 1) % 3 + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut cursor = session
+        .execute(
+            write(&format!("INSERT INTO {table} VALUES {values}")),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("seed synthetic rows");
+    drain(&mut cursor).await;
+    let mut ordered: Vec<i64> = (1..=201).collect();
+    ordered.sort_by_key(|id| ((id - 1) % 3, *id));
+    let path = CatalogPath::for_relation(None, Some("main"), &table).expect("our table path");
+    for size in [50_u32, 100, 200] {
+        for offset in [0, size, 2 * size, 0] {
+            let shape = PreviewShape {
+                offset: u64::from(offset),
+                ..PreviewShape::unordered()
+            };
+            let request = session
+                .preview_request(&path, size, &shape, &CancelToken::new())
+                .await
+                .expect("a page request");
+            let mut cursor = session
+                .execute(request, &CancelToken::new())
+                .await
+                .expect("read a real page");
+            let batches = drain(&mut cursor).await;
+            let ids: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            let expected: Vec<i64> = ordered
+                .iter()
+                .copied()
+                .skip(usize::try_from(offset).expect("small offset"))
+                .take(usize::try_from(size).expect("small page"))
+                .collect();
+            assert_eq!(ids, expected, "size {size}, offset {offset}");
+        }
+    }
+    let mut cursor = session
+        .execute(write(&format!("DROP TABLE {table}")), &CancelToken::new())
+        .await
+        .expect("remove only the table this test created");
+    drain(&mut cursor).await;
+}
+
 #[tokio::test]
 async fn opening_proves_the_token_and_speaks_hrana_on_the_pipeline_endpoint() {
     let server = Server::database(database(|_| unreachable!("only the probe"))).await;
@@ -837,6 +923,77 @@ mod catalog {
             "SELECT * FROM \"main\".\"orders\" ORDER BY \"id\" ASC LIMIT 10"
         );
         assert_eq!(request.intent, StatementIntent::Read);
+    }
+
+    #[tokio::test]
+    async fn preview_page_sizes_and_offsets_reach_the_hrana_server() {
+        let server = Server::database(database(|request| {
+            for size in [50_u32, 100, 200] {
+                for offset in [0, size] {
+                    let suffix = if offset == 0 {
+                        String::new()
+                    } else {
+                        format!(" OFFSET {offset}")
+                    };
+                    let expected = format!(
+                        "SELECT * FROM \"main\".\"orders\" ORDER BY \"id\" ASC LIMIT {size}{suffix}"
+                    );
+                    if request.sql() == expected {
+                        return rows(
+                            &[("id", Some("INTEGER"))],
+                            (offset + 1..=201.min(offset + size))
+                                .map(|id| vec![value::int(i64::from(id))])
+                                .collect(),
+                        );
+                    }
+                }
+            }
+            fixture(request)
+        }))
+        .await;
+        let session = session(&server).await;
+        for size in [50_u32, 100, 200] {
+            for offset in [0, size] {
+                let shape = PreviewShape {
+                    offset: u64::from(offset),
+                    ..PreviewShape::unordered()
+                };
+                let request = session
+                    .preview_request(&relation("orders"), size, &shape, &CancelToken::new())
+                    .await
+                    .expect("a bounded page");
+                let mut cursor = session
+                    .execute(request, &CancelToken::new())
+                    .await
+                    .expect("a page is read");
+                let batches = drain(&mut cursor).await;
+                let ids: Vec<i64> = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch
+                            .column(0)
+                            .as_primitive::<Int64Type>()
+                            .values()
+                            .iter()
+                            .copied()
+                    })
+                    .collect();
+                assert_eq!(
+                    ids,
+                    (offset + 1..=201.min(offset + size))
+                        .map(i64::from)
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        assert_eq!(
+            server
+                .requests()
+                .iter()
+                .filter(|request| request.sql().starts_with("SELECT * FROM"))
+                .count(),
+            6
+        );
     }
 }
 

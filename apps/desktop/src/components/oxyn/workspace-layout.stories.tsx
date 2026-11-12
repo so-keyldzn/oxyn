@@ -1,3 +1,4 @@
+import { PreviewPagination } from "./preview-pagination"
 import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
@@ -743,12 +744,17 @@ function ObjectDataTab() {
               canFilter
               canSort
               columns={invoiceColumns.map((column) => column.name)}
-              applied={{ predicate: null, sort: [], offset: 0 }}
+              applied={{
+                predicate: null,
+                sort: [],
+                offset: 0,
+                pageSize: 200,
+                continuation: null,
+              }}
               status="loaded"
               pagination={null}
               onApplyPredicate={fn()}
               onApplySort={fn()}
-              onPage={fn()}
               onCancel={fn()}
               onLoadColumns={fn()}
             />
@@ -768,6 +774,26 @@ function ObjectDataTab() {
                 footerNote="Preview · total row count not requested"
               />
             </div>
+            <PreviewPagination
+              applied={{
+                predicate: null,
+                sort: [],
+                offset: 0,
+                pageSize: 200,
+                continuation: null,
+              }}
+              pagination={{
+                type: "ready",
+                previous: false,
+                next: false,
+                firstRow: 1,
+                orderedBy: ["id"],
+              }}
+              rows={7}
+              status="loaded"
+              onPage={fn()}
+              onPageSize={fn()}
+            />
           </>
         ),
         structure: <p className="p-3 text-sm">Structure</p>,

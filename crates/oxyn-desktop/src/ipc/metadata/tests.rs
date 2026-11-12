@@ -36,6 +36,8 @@ fn draft(sort: &[&str], offset: u64) -> PreviewShapeDraft {
             .collect(),
         predicate: None,
         offset,
+        page_size: PREVIEW_ROWS,
+        continuation: None,
     }
 }
 
@@ -57,7 +59,7 @@ fn sorted_on(column: &str) -> PreviewShape {
 fn a_relation_that_comes_in_key_order_has_pages_from_the_first_read() {
     let table = ordered(&[("id", true), ("name", false)]);
     assert_eq!(
-        pagination(&PreviewShape::default(), Some(&table), 200),
+        pagination(&PreviewShape::default(), Some(&table), 200, PREVIEW_ROWS),
         Pagination::Ready {
             previous: false,
             next: true,
@@ -68,7 +70,7 @@ fn a_relation_that_comes_in_key_order_has_pages_from_the_first_read() {
     );
     let composite = ordered(&[("order", true), ("line", true), ("note", false)]);
     assert_eq!(
-        pagination(&PreviewShape::default(), Some(&composite), 12),
+        pagination(&PreviewShape::default(), Some(&composite), 12, PREVIEW_ROWS),
         Pagination::Ready {
             previous: false,
             next: false,
@@ -82,7 +84,7 @@ fn a_relation_that_comes_in_key_order_has_pages_from_the_first_read() {
         ..PreviewShape::default()
     };
     assert_eq!(
-        pagination(&second, Some(&table), 200),
+        pagination(&second, Some(&table), 200, PREVIEW_ROWS),
         Pagination::Ready {
             previous: true,
             next: true,
@@ -96,7 +98,7 @@ fn a_relation_that_comes_in_key_order_has_pages_from_the_first_read() {
 fn a_sort_replaces_the_default_order_and_keeps_the_pages() {
     let table = ordered(&[("id", true), ("name", false)]);
     assert_eq!(
-        pagination(&sorted_on("name"), Some(&table), 200),
+        pagination(&sorted_on("name"), Some(&table), 200, PREVIEW_ROWS),
         Pagination::Ready {
             previous: false,
             next: true,
@@ -109,7 +111,12 @@ fn a_sort_replaces_the_default_order_and_keeps_the_pages() {
     // the driver completes the sort with the key it declared.
     let virtual_table = relation(&[("chunk_id", true), ("embedding", false)]);
     assert_eq!(
-        pagination(&sorted_on("chunk_id"), Some(&virtual_table), 200),
+        pagination(
+            &sorted_on("chunk_id"),
+            Some(&virtual_table),
+            200,
+            PREVIEW_ROWS
+        ),
         Pagination::Ready {
             previous: false,
             next: true,
@@ -124,25 +131,25 @@ fn no_page_is_offered_without_a_total_order() {
     let plain = PreviewShape::default();
     let virtual_table = relation(&[("chunk_id", true), ("embedding", false)]);
     assert_eq!(
-        pagination(&plain, Some(&virtual_table), 200),
+        pagination(&plain, Some(&virtual_table), 200, PREVIEW_ROWS),
         Pagination::NeedsOrder,
         "a key is known but the driver does not order this relation by itself"
     );
     let keyless = ordered(&[("name", false)]);
     for shape in [&plain, &sorted_on("name")] {
         assert_eq!(
-            pagination(shape, Some(&keyless), 200),
+            pagination(shape, Some(&keyless), 200, PREVIEW_ROWS),
             Pagination::NoUniqueKey,
             "no key, and sorting would not give one"
         );
     }
     assert_eq!(
-        pagination(&sorted_on("name"), None, 200),
+        pagination(&sorted_on("name"), None, 200, PREVIEW_ROWS),
         Pagination::Unknown,
         "an undescribed relation is not guessed to have a key, nor to lack one"
     );
     assert_eq!(
-        pagination(&plain, None, 200),
+        pagination(&plain, None, 200, PREVIEW_ROWS),
         Pagination::Unknown,
         "nothing is said before the description arrives"
     );
@@ -256,6 +263,46 @@ fn a_draft_debug_never_shows_the_predicate() {
 }
 
 #[test]
+fn page_sizes_are_bounded_and_old_callers_keep_two_hundred_rows() {
+    let old: PreviewShapeDraft = serde_json::from_str("{}").expect("an old plain preview");
+    assert_eq!(old.checked_page_size().expect("default size"), 200);
+    assert_eq!(PreviewShapeDraft::default().page_size, 200);
+    let table = ordered(&[("id", true)]);
+    for size in [50, 100, 200] {
+        let input = format!(r#"{{"pageSize":{size},"offset":{size}}}"#);
+        let draft: PreviewShapeDraft = serde_json::from_str(&input).expect("a page request");
+        let shape = draft.into_shape(Some(&table)).expect("aligned offset");
+        for count in [0, 2, 50, 51, 100, 200] {
+            assert!(matches!(
+                pagination(&shape, Some(&table), count, size),
+                Pagination::Ready { previous: true, next, first_row, .. }
+                if next == (count >= u64::from(size)) && first_row == u64::from(size) + 1
+            ));
+        }
+        let misaligned = PreviewShapeDraft {
+            page_size: size,
+            offset: u64::from(size) + 1,
+            ..PreviewShapeDraft::default()
+        };
+        assert!(misaligned.into_shape(Some(&table)).is_err());
+    }
+    for size in [0, 1, 49, 51, 201, u32::MAX] {
+        let draft = PreviewShapeDraft {
+            page_size: size,
+            ..PreviewShapeDraft::default()
+        };
+        assert!(draft.checked_page_size().is_err());
+        assert!(draft.into_shape(Some(&table)).is_err());
+    }
+    for value in ["null", "-1", "50.5", "\"50\""] {
+        assert!(
+            serde_json::from_str::<PreviewShapeDraft>(&format!(r#"{{"pageSize":{value}}}"#))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn freshness_crosses_as_three_states() {
     assert_eq!(
         FacetFreshness::from(Freshness::Never),
@@ -354,4 +401,24 @@ fn nothing_is_signalled_after_a_failure_or_a_cancellation() {
         let event = oxyn_exec::ExecEvent::new(oxyn_core::CommandId::new(), Some(connection), event);
         assert!(RefreshSignal::of(&event).is_empty());
     }
+}
+
+#[test]
+fn a_native_order_only_server_keeps_sorted_first_pages_without_offering_invalid_pages() {
+    let native = relation(&[("name", false)]).with_retained_preview(false);
+    assert!(matches!(
+        pagination(&PreviewShape::default(), Some(&native), 200, 200),
+        Pagination::Retained { next: true, .. }
+    ));
+    assert_eq!(
+        pagination(&sorted_on("name"), Some(&native), 200, 200),
+        Pagination::NeedsNativeOrder
+    );
+    assert!(draft(&["name"], 0).into_shape(Some(&native)).is_ok());
+    assert!(draft(&["name"], 200).into_shape(Some(&native)).is_err());
+    let native = native.with_retained_preview(true);
+    assert!(matches!(
+        pagination(&sorted_on("name"), Some(&native), 200, 200),
+        Pagination::Retained { next: true, .. }
+    ));
 }

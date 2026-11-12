@@ -3224,6 +3224,16 @@ completion times) and `gh release view v0.0.14` (asset sizes), read on
 2026-10-26; `Cargo.toml` (`[profile.release]`) and
 `.github/workflows/livraison.yml` (`timeout-minutes`, runners).
 
+## Turso brand mark — checked on 2026-11-12
+
+The configured shadcn `@svgl` registry supplies `TursoLight` and `TursoDark`
+as SVG React components with `viewBox="0 0 201 170"`, plus two wordmark variants.
+Checked with `pnpm dlx shadcn@latest view @svgl/turso`, then generated with
+`pnpm dlx shadcn@latest add @svgl/turso`. Oxyn keeps the two symbols, with their
+paths and colors unchanged; `DriverLogo` selects the light or dark mark as it
+does for other engines. No runtime package was added.
+Source: [the registry item](https://svgl.app/r/turso.json).
+
 ## Brand marks fetched from upstream — read on 2026-10-26
 
 The two `svgl` rows above found no mark for DuckDB, Elasticsearch and
@@ -3422,3 +3432,19 @@ message without database contents; a completed write is never relabelled as
 failed. The behavior follows the installed `rusqlite` 0.41.1
 `InnerConnection::set_clientdata` and SQLite 3.54.1 `sqlite3_set_clientdata`
 source, read on 2026-11-12. Allocation-failure injection was not performed.
+
+## Native preview continuation — checked on 2026-11-12
+
+The [Elasticsearch pagination API](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results) and [OpenSearch PIT API](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) provide PIT/search_after. Scroll rejects disabled hit tracking, confirmed in each server's search-request validator. `_shard_doc` is verified on the real OpenSearch 3.9 server and in tagged sources from 3.3; releases before 3.3 use `_search_shards`, PIT creation with `_shards` preference, an `_index` filter and `_doc` within one shard. Custom routing can duplicate an `_id` across shards, so `_index`/`_id` alone is not a unique tie-breaker. No server setting is changed to enable ID fielddata.
+
+Redis [SCAN](https://redis.io/docs/latest/commands/scan/) can return duplicate or empty nonterminal pages and COUNT is only a hint. [XRANGE](https://redis.io/docs/latest/commands/xrange/) and [VRANGE](https://github.com/redis/docs/blob/main/content/commands/vrange.md) accept exclusive continuation bounds; [TS.RANGE](https://redis.io/docs/latest/commands/ts.range/) continues after the last integer timestamp. The implementation retains reply remainders and complete stream-entry field rows.
+
+Additional disposable Docker images were verified by the Docker Hub registry: MariaDB 11.8.9, OpenSearch 2.19.7 and OpenSearch 3.9.0. The QA Compose file pins their manifest digests and binds ports only to 127.0.0.1. Synthetic search fixtures span two indices and three shards each, including same-index IDs on distinct routing shards.
+
+The real OpenSearch 3.9.0 alias fixture exposed a further distinction: `_shard_doc` alone returned 12,001 of 12,004 documents, with only 6,004 distinct sort tuples. Its [sort builder](https://github.com/opensearch-project/OpenSearch/blob/3.9.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java#L97) passes the index-local shard number; the [comparator](https://github.com/opensearch-project/OpenSearch/blob/3.9.0/server/src/main/java/org/opensearch/search/sort/ShardDocFieldComparatorSource.java#L89) combines it with the Lucene document position, without the index. Prefixing `_index` produced 12,004 distinct tuples and documents in the direct protocol verification. Elasticsearch's PIT-wide ordinal already distinguished all 12,004. This is covered by the cross-index, custom-routing backend fixture.
+
+The UI gate uses Vitest 4.1.12 `sequence.groupOrder` (installed `cli-api` and configuration resolver): jsdom runs before the Chromium stories. During this verification, the unchanged connection-secret tests passed alone but exceeded their existing five-second bound when mixed with browser startup on a loaded workstation. Project sequencing separates those resource demands; the assertions, per-test deadlines, accessibility checks and complete set of tests remain unchanged. Local validation also sets `VITEST_MAX_WORKERS=2`, supported by the installed resolver, to bound concurrent workers.
+
+Compatibility was checked against the [PIT API introduction in 2.4](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) and the tagged sources: `ShardDocSortBuilder.java` is absent in OpenSearch 2.19.7, 3.0.0 and 3.2.0, and present in [3.3.0](https://github.com/opensearch-project/OpenSearch/blob/3.3.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java). Therefore 2.0–2.3 keep their old bounded preview, 2.4–3.2 traverse native index/shard partitions, and 3.3+ use the completed `_index`/`_shard_doc` order. Sorted first-page reads remain available on older releases; only sorted continuation is refused. No previous preview or sort feature is removed.
+
+The native PostgreSQL check exposed a description/preview discrepancy on the composite `(tenant_id, id)` fixture: the actual page began at ID 401 for offset 50, correctly, but the UI named `(id, tenant_id)`. `describe_relation` now carries the same `WITH ORDINALITY` primary-key ranks as preview preparation, still excluding INCLUDE payload columns. The real INCLUDE regression asserts the described index order, and the multi-engine backend matrix checks the order announced to the UI against its composite-key fixture.

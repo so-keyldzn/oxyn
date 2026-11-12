@@ -260,16 +260,19 @@ menu, Mission Control and VoiceOver, not in the window itself.
 
 A table preview uses `Command::PreviewRelation` with explicit connection, session,
 identifier levels and limit. The `PolicyGate` decides before
-preparation; the driver composes a qualified, bounded `SELECT` after a cancellable
+preparation; the driver composes a qualified request for a bounded page after a cancellable
 metadata read if needed, then
 the executor enforces read-only and reuses `Execute`'s Arrow stream under
-the same command identifier. The interface requests 200 rows; the bus
+the same command identifier. The interface requests 50, 100 or 200 rows,
+defaulting to 200; the bus
 contract accepts 1 to 1,000. PostgreSQL qualifies schema and table in the
 session's database; SQLite keeps the catalog convention for its attached
 databases. The preview's grid and its cancellation are distinct from those of
 the SQL editor.
 
-The preview's receive bound reserves one extra row to
+Native collection previews additionally use `Session::prepare_preview` and `execute_preview` ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). Their defaults preserve the existing bounded execution. A retained request uses the same policy, reclassification, read-only enforcement, execution events and bounded page sink. `preview_stream::Registry` keeps one cursor and Arrow history behind page result IDs; each continuation is checked against connection, session, relation, size, filter, sort and projection. A page is read on demand and Previous reads history. History is bounded to 8 MiB memory, 128 MiB spill and 8192 batches per stream; at most 16 page identities are retained, for at most five minutes. Overflow or expiry is explicit. Closing a session, forgetting its last page, or abandoning a read cancels and releases the stream. An opening guard owns cancellation before the first schema. Native driver resources stay in Rust; their cleanup tasks are owned and time-bounded. A UI refresh or shape change starts a new stream on page one.
+
+For independent previews, the preview's receive bound reserves one extra row to
 confirm that the cursor of the already-limited query is exhausted. The `ResultBuffer`
 strictly keeps the requested limit: a non-empty extra batch is
 thrown away and leaves the result truncated; only a real end of stream allows
@@ -467,6 +470,10 @@ pub trait Session: Send + Sync {
     // transactions does not override them.
     async fn preview_request(&self, path: &CatalogPath, limit: u32,
         shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
+    async fn prepare_preview(&self, path: &CatalogPath, limit: u32,
+        shape: &PreviewShape, cancel: &CancelToken) -> Result<PreparedPreview>;
+    async fn execute_preview(&self, request: ExecRequest, cancel: &CancelToken)
+        -> Result<Box<dyn Cursor>>;
     async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)
         -> Result<()>;                               // SESSION_CONTEXT; the driver quotes
     fn context(&self) -> Option<SessionContext>;     // confirmed by the server; None by default

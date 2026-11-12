@@ -424,6 +424,12 @@ struct Probe {
     executed: Mutex<Vec<ExecRequest>>,
     cancelled: AtomicBool,
     mutating: bool,
+    retained: bool,
+    wait_during_open: bool,
+    batch_gate: Option<Arc<tokio::sync::Notify>>,
+    opening_token: Mutex<Option<CancelToken>>,
+    rows: Option<usize>,
+    cursor_dropped: Arc<AtomicBool>,
     /// Does the session declare it can sort and filter a preview?
     ///
     /// False by default: it is the state of an engine that cannot do it, and it
@@ -481,12 +487,32 @@ impl Session for PreviewSession {
                 .with_limits(ExecLimits::unbounded()),
         )
     }
-    async fn execute(&self, request: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        Ok(oxyn_driver::PreparedPreview {
+            request: self.preview_request(path, limit, shape, cancel).await?,
+            retained: self.0.retained,
+        })
+    }
+    async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.0.executed.lock().push(request);
+        *self.0.opening_token.lock() = Some(cancel.clone());
+        if self.0.wait_during_open {
+            cancel.cancelled().await;
+            return Err(OxynError::Cancelled);
+        }
         Ok(Box::new(PreviewCursor {
             handle: StatementHandle::new(),
             waiting: self.0.waiting,
             sent: false,
+            rows: self.0.rows.unwrap_or(3),
+            batch_gate: self.0.batch_gate.clone(),
+            dropped: self.0.cursor_dropped.clone(),
         }))
     }
     async fn cancel(&self, _: StatementHandle) -> Result<()> {
@@ -508,6 +534,15 @@ struct PreviewCursor {
     handle: StatementHandle,
     waiting: bool,
     sent: bool,
+    rows: usize,
+    batch_gate: Option<Arc<tokio::sync::Notify>>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for PreviewCursor {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -519,6 +554,9 @@ impl Cursor for PreviewCursor {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
     }
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if let Some(gate) = self.batch_gate.take() {
+            gate.notified().await;
+        }
         if self.waiting {
             return futures::future::pending().await;
         }
@@ -529,7 +567,11 @@ impl Cursor for PreviewCursor {
         Ok(Some(
             RecordBatch::try_new(
                 self.schema(),
-                vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+                vec![Arc::new(Int64Array::from(
+                    (1..=self.rows)
+                        .map(|n| i64::try_from(n).expect("fixture range"))
+                        .collect::<Vec<_>>(),
+                ))],
             )
             .expect("valid batch"),
         ))
@@ -936,3 +978,6 @@ async fn the_total_latency_counts_the_wait_the_sql_time_does_not() {
         timings.total - timings.prepare
     );
 }
+
+#[path = "retained_preview_tests.rs"]
+mod retained;

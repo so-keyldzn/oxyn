@@ -2700,6 +2700,16 @@ async fn included_columns_of_a_primary_key_index_are_not_key_columns() {
         .map(|field| field.name.as_str())
         .collect();
     assert_eq!(keys, ["a", "b"], "the INCLUDE column is not a key column");
+    let ordered: Vec<_> = described
+        .primary_key()
+        .iter()
+        .map(|field| (field.name.as_str(), field.primary_key_rank))
+        .collect();
+    assert_eq!(
+        ordered,
+        [("b", Some(1)), ("a", Some(2))],
+        "the description must explain the same index order as the preview"
+    );
 
     let request = session
         .preview_request(&path, 200, &PreviewShape::unordered(), &token)

@@ -933,4 +933,5 @@ export const catalogueDrivers: Array<DriverChoice> = [
   ),
   redisDriver,
   sqliteDriver,
+  tursoDriver,
 ]

@@ -84,6 +84,10 @@ pub struct PreviewShape {
     /// deterministic, which the driver checks: otherwise it refuses, rather
     /// than return a page nobody can say the contents of.
     pub offset: u64,
+    /// A previously returned page of the same retained execution. Never a
+    /// server cursor: the executor checks its connection, session and shape.
+    #[serde(default)]
+    pub continuation: Option<crate::ResultId>,
     /// The only columns to read, in this order; `None` reads them all.
     ///
     /// This is what bounds a read to what the user approved: a sample with

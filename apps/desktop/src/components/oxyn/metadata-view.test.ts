@@ -63,6 +63,7 @@ describe("previewNotice", () => {
       })
     ).toBe(false)
     expect(sameShape(PLAIN_SHAPE, { ...PLAIN_SHAPE, offset: 200 })).toBe(false)
+    expect(sameShape(PLAIN_SHAPE, { ...PLAIN_SHAPE, pageSize: 50 })).toBe(false)
     expect(sameShape(PLAIN_SHAPE, sorted)).toBe(false)
   })
 
@@ -90,6 +91,24 @@ describe("previewNotice", () => {
     expect(keyless?.text).toMatch(/no unique key/)
     // Sorting would not give it pages: nothing offers to.
     expect(keyless?.offersSort).toBeFalsy()
+  })
+
+  it("does not call the table empty after a full last page", () => {
+    const notice = previewNotice({
+      ...loaded,
+      status: "empty",
+      applied: { ...PLAIN_SHAPE, offset: 200 },
+      pagination: {
+        type: "ready",
+        previous: true,
+        next: false,
+        firstRow: 201,
+        orderedBy: ["id"],
+      },
+    })
+    expect(notice?.text).toBe(
+      "This page holds no rows. Return to the previous page."
+    )
   })
 
   it("claims nothing before the relation is described", () => {
@@ -153,7 +172,7 @@ describe("previewNotice", () => {
         orderedBy: null,
       },
     })?.text
-    expect(text).toMatch(/^Rows 1,201–1,400 of this order/)
+    expect(text).toMatch(/^Page 7 of this order/)
   })
 
   it("stays silent on the first page of the user's own order", () => {

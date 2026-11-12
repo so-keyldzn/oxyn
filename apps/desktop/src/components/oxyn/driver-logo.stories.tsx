@@ -55,6 +55,29 @@ export const UnknownDriver: Story = {
   },
 }
 
+export const Turso: Story = {
+  args: { driver: "turso" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 201 170")
+    const marks = svg.querySelectorAll("svg")
+    await expect(marks).toHaveLength(2)
+    await expect(marks[0]).toBeVisible()
+    await expect(marks[1]).not.toBeVisible()
+  },
+}
+
+export const TursoDark: Story = {
+  args: { driver: "turso" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 201 170")
+    const marks = svg.querySelectorAll("svg")
+    await expect(marks[0]).not.toBeVisible()
+    await expect(marks[1]).toBeVisible()
+  },
+}
+
 /** Both marks stay legible on the dark theme. */
 export const Dark: Story = {
   args: { driver: "sqlite" },

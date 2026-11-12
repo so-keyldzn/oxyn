@@ -105,8 +105,10 @@ the user writes, not a condition builder — a trade-off recorded in
 **Accepted gap**: the mockup draws **no** page control. Its
 `Result status` (`190:1860`) only displays "200 rows loaded · 284 ms · Total
 count not requested". The pagination decided by ADR-0020 therefore has no
-drawn place; it joins this status line, next to the counter, for lack of a
-frame that positions it. To revisit if the mockup settles it later.
+drawn place. Since 2026-11-12 it has a dedicated bar below the result panel,
+with 50/100/200 rows per page, the current page and its received range, and
+Previous/Next kept visible on a single page (UX-SPEC). To revisit if the mockup
+settles it later.
 
 ### The preview footer, word for word
 
@@ -218,7 +220,7 @@ Absent, and **not added** — each of these points is a feature:
 | `Plugins` tab and its table (`47:8480`) | the wasmtime host, which [ADR-0005](adr/0005-wasm-plugins.md) places in phase 4 and whose entry condition — six native drivers shipped — is not met. An empty tab would be worse than no tab |
 | `Diagnostics` tab and `Preview diagnostics` | a diagnostic report whose content and destination nothing describes — yet a crash report is one of the six channels of [I-03](../CLAUDE.md#i-03) |
 | `Interface font` field | the choice of interface font; the theme carries `ui_family`, but nothing exposes or persists it |
-| `Result page size` field | a page size setting; Oxyn currently fixes the preview at 200 rows (`PREVIEW_ROWS`) |
+| `Result page size` field | a global page size setting; the Data preview instead has a per-preview 50/100/200 selector, initially 200 (2026-11-12) |
 
 Accepted gap: the mockup carries `Save settings` and `Cancel`. Oxyn **saves
 as you go** and announces it ("Preferences saved locally."). A save

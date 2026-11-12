@@ -52,6 +52,7 @@ vi.mock("@/features/metadata/use-preview", () => ({
       applyPredicate: vi.fn(),
       applySort: vi.fn(),
       page: vi.fn(),
+      resizePage: vi.fn(),
       cancel: vi.fn(),
     }
   },

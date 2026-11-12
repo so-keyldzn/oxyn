@@ -32,6 +32,8 @@ import { Redis } from "@/components/ui/svgs/redis"
 import { Snowflake } from "@/components/ui/svgs/snowflake"
 import { SqlServer } from "@/components/ui/svgs/sqlServer"
 import { Sqlite } from "@/components/ui/svgs/sqlite"
+import { TursoLight } from "@/components/ui/svgs/tursoLight"
+import { TursoDark } from "@/components/ui/svgs/tursoDark"
 import { WeaviateDarkMode } from "@/components/ui/svgs/weaviateDarkMode"
 
 type Logo = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement
@@ -182,6 +184,11 @@ const logos: Partial<Record<string, Logo>> = {
   mysql: MysqlMark,
   mongodb: MongodbMark,
   sqlite: SqliteMark,
+  turso: framed(
+    "0 0 201 170",
+    { Mark: TursoLight, width: 201, height: 170 },
+    { Mark: TursoDark, width: 201, height: 170 }
+  ),
   sqlserver: SqlServer,
   duckdb: DuckdbMark,
   clickhouse: Clickhouse,

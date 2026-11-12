@@ -20,8 +20,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc::{CatalogAddress, IpcError, RelationDetail};
 
-/// Rows one preview reads, the bound UX-SPEC sets.
+/// Default and maximum page size of the Data preview (UX-SPEC).
 pub const PREVIEW_ROWS: u32 = 200;
+
+const fn default_preview_rows() -> u32 {
+    PREVIEW_ROWS
+}
 
 /// Sort keys one preview may carry. A composed order longer than this is not a
 /// preview any more; it is a query, and the console writes those.
@@ -45,7 +49,7 @@ pub struct PreviewSortDraft {
 /// **No `Debug` derive**: the predicate is SQL the user wrote, and it may hold
 /// a literal they would not want in a log; the manual implementation renders
 /// its length only.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewShapeDraft {
     #[serde(default)]
@@ -54,6 +58,23 @@ pub struct PreviewShapeDraft {
     pub predicate: Option<String>,
     #[serde(default)]
     pub offset: u64,
+    /// Omitted by older callers, which keep the original 200-row bound.
+    #[serde(default = "default_preview_rows")]
+    pub page_size: u32,
+    #[serde(default)]
+    pub continuation: Option<oxyn_core::ResultId>,
+}
+
+impl Default for PreviewShapeDraft {
+    fn default() -> Self {
+        Self {
+            sort: Vec::new(),
+            predicate: None,
+            offset: 0,
+            page_size: PREVIEW_ROWS,
+            continuation: None,
+        }
+    }
 }
 
 impl fmt::Debug for PreviewShapeDraft {
@@ -62,11 +83,26 @@ impl fmt::Debug for PreviewShapeDraft {
             .field("sort", &self.sort.len())
             .field("predicate_bytes", &self.predicate.as_ref().map(String::len))
             .field("offset", &self.offset)
+            .field("page_size", &self.page_size)
             .finish()
     }
 }
 
 impl PreviewShapeDraft {
+    /// Refuses sizes outside the Data preview's bounded choices, including
+    /// when the webview asks for pagination without executing a read.
+    ///
+    /// # Errors
+    /// An invalid-input error unless the size is 50, 100 or 200.
+    pub fn checked_page_size(&self) -> Result<u32, IpcError> {
+        match self.page_size {
+            50 | 100 | 200 => Ok(self.page_size),
+            _ => Err(IpcError::invalid(
+                "A preview page must contain 50, 100 or 200 rows",
+            )),
+        }
+    }
+
     /// Rebuilds the domain shape, refusing what no preview may ask for.
     ///
     /// `relation` is the catalog's description when it has been read. A sort
@@ -84,6 +120,7 @@ impl PreviewShapeDraft {
     /// Too many or duplicated sort keys, an empty or undeclared column, an
     /// oversized predicate, or a page without a total order.
     pub fn into_shape(self, relation: Option<&Relation>) -> Result<PreviewShape, IpcError> {
+        let page_size = self.checked_page_size()?;
         if self.sort.len() > MAX_SORT_KEYS {
             return Err(IpcError::invalid(format!(
                 "A preview can be sorted on {MAX_SORT_KEYS} columns at most"
@@ -127,6 +164,7 @@ impl PreviewShapeDraft {
             sort,
             predicate: self.predicate,
             offset: self.offset,
+            continuation: self.continuation,
             columns: None,
         };
         if shape.offset > 0 {
@@ -134,7 +172,7 @@ impl PreviewShapeDraft {
             // offered and what a script may ask for cannot drift apart: a page
             // of an order nobody can name is what ADR-0028 refuses, and the
             // order a relation comes in by default is the one ADR-0068 names.
-            match pagination(&shape, relation, 0) {
+            match pagination(&shape, relation, 0, page_size) {
                 Pagination::Unknown => {
                     return Err(IpcError::invalid(
                         "A page other than the first needs the relation to be described: \
@@ -153,9 +191,14 @@ impl PreviewShapeDraft {
                          this relation, so no order can be made total",
                     ));
                 }
-                Pagination::Ready { .. } => {}
+                Pagination::NeedsNativeOrder => {
+                    return Err(IpcError::invalid(
+                        "Clear the sort to browse this server's native order",
+                    ));
+                }
+                Pagination::Ready { .. } | Pagination::Retained { .. } => {}
             }
-            if !shape.offset.is_multiple_of(u64::from(PREVIEW_ROWS)) {
+            if !shape.offset.is_multiple_of(u64::from(page_size)) {
                 return Err(IpcError::invalid(
                     "A preview page starts on a multiple of its page size",
                 ));
@@ -180,6 +223,15 @@ pub enum Pagination {
     /// The relation is described and holds no unique key: no order can be made
     /// total, and sorting would not change that.
     NoUniqueKey,
+    /// This server can traverse its native order, but not a global sort.
+    NeedsNativeOrder,
+    /// Pages of one native execution; no unique key is invented.
+    #[serde(rename_all = "camelCase")]
+    Retained {
+        previous: bool,
+        next: bool,
+        first_row: u64,
+    },
     /// Each direction is offered only when it leads somewhere.
     #[serde(rename_all = "camelCase")]
     Ready {
@@ -207,10 +259,25 @@ pub enum Pagination {
 /// that does not vouch for its default order is not assumed to have applied
 /// one.
 #[must_use]
-pub fn pagination(applied: &PreviewShape, relation: Option<&Relation>, rows: u64) -> Pagination {
+pub fn pagination(
+    applied: &PreviewShape,
+    relation: Option<&Relation>,
+    rows: u64,
+    page_size: u32,
+) -> Pagination {
     let Some(relation) = relation else {
         return Pagination::Unknown;
     };
+    if relation.retained_preview {
+        if !applied.sort.is_empty() && !relation.retained_preview_sort {
+            return Pagination::NeedsNativeOrder;
+        }
+        return Pagination::Retained {
+            previous: applied.offset > 0,
+            next: rows >= u64::from(page_size),
+            first_row: applied.offset.saturating_add(1),
+        };
+    }
     let key = relation.primary_key();
     if key.is_empty() {
         return Pagination::NoUniqueKey;
@@ -223,7 +290,7 @@ pub fn pagination(applied: &PreviewShape, relation: Option<&Relation>, rows: u64
         previous: applied.offset > 0,
         // A short page is the last one: « next » there would spend a read to
         // show nothing.
-        next: rows >= u64::from(PREVIEW_ROWS),
+        next: rows >= u64::from(page_size),
         first_row: applied.offset.saturating_add(1),
         ordered_by: by_default.then(|| key.iter().map(|field| field.name.clone()).collect()),
     }

@@ -169,12 +169,92 @@ impl Asked<'_> {
 /// The number of hits a search returns when its body names none.
 const DEFAULT_SIZE: usize = 10;
 
+/// The latest remote resource, kept separately from the request in flight.
+/// No Debug: scroll/SQL cursor identifiers must never enter a log.
+pub(crate) enum Remote {
+    Scroll(String),
+    Sql(String, Tabular),
+    Pit { id: String, opensearch: bool },
+}
+impl Remote {
+    pub(crate) fn from_decoded(decoded: &Decoded, asked: &Asked<'_>) -> Option<Self> {
+        if let Some(id) = &decoded.page.scroll_id {
+            return Some(Self::Scroll(id.clone()));
+        }
+        Some(Self::Sql(
+            decoded.page.sql_cursor.clone()?,
+            asked.shape()?.tabular,
+        ))
+    }
+    pub(crate) fn update(&mut self, reply: &crate::http::Reply) {
+        #[derive(serde::Deserialize)]
+        struct Ids {
+            pit_id: Option<String>,
+            _scroll_id: Option<String>,
+        }
+        if let Ok(ids) = serde_json::from_slice::<Ids>(&reply.bytes) {
+            match self {
+                Self::Pit { id, .. } => {
+                    if let Some(next) = ids.pit_id {
+                        *id = next;
+                    }
+                }
+                Self::Scroll(id) => {
+                    if let Some(next) = ids._scroll_id {
+                        *id = next;
+                    }
+                }
+                Self::Sql(..) => {}
+            }
+        }
+    }
+
+    pub(crate) async fn release(self, http: &Http) {
+        let (method, path, body) = match self {
+            Self::Pit {
+                id,
+                opensearch: false,
+            } => (
+                Method::DELETE,
+                "/_pit".to_owned(),
+                serde_json::json!({"id": id}),
+            ),
+            Self::Pit {
+                id,
+                opensearch: true,
+            } => (
+                Method::DELETE,
+                "/_search/point_in_time".to_owned(),
+                serde_json::json!({"pit_id": [id]}),
+            ),
+            Self::Scroll(id) => (
+                Method::DELETE,
+                "/_search/scroll".to_owned(),
+                serde_json::json!({"scroll_id": [id]}),
+            ),
+            Self::Sql(id, tabular) => (
+                Method::POST,
+                format!("{}/close", sql_path(tabular)),
+                serde_json::json!({"cursor": id}),
+            ),
+        };
+        let call = Call {
+            timeout: Some(Duration::from_secs(5)),
+            ..Call::read(method, &path).with_json(&body)
+        };
+        let _ = http.send(call).await;
+    }
+}
+
 /// The cursor of one execution.
 pub(crate) struct EsCursor {
     pub(crate) handle: StatementHandle,
     pub(crate) schema: SchemaRef,
     pub(crate) queue: VecDeque<RecordBatch>,
     pub(crate) next: Option<Next>,
+    pub(crate) remote: Option<Remote>,
+    pub(crate) in_flight: bool,
+    pub(crate) layout: Option<HitLayout>,
     pub(crate) http: Arc<Http>,
     pub(crate) opaque: String,
     pub(crate) token: CancelToken,
@@ -188,6 +268,14 @@ pub(crate) struct EsCursor {
 impl Drop for EsCursor {
     fn drop(&mut self) {
         self.registry.remove(self.handle);
+        let remote = self.remote.take();
+        if remote.is_some() || self.in_flight {
+            self.registry.cleanup_request(
+                Arc::clone(&self.http),
+                remote,
+                self.in_flight.then(|| self.opaque.clone()),
+            );
+        }
     }
 }
 
@@ -222,15 +310,21 @@ impl EsCursor {
             timeout: self.timeout,
             intent: StatementIntent::Read,
         };
+        self.in_flight = true;
         let reply = tokio::select! {
             biased;
             () = self.token.cancelled() => {
                 stop(&self.http, &self.opaque).await;
+                self.in_flight = false;
                 self.release(next).await;
                 return Err(OxynError::Cancelled);
             }
             reply = self.http.send(call) => reply?,
         };
+        self.in_flight = false;
+        if let Some(remote) = &mut self.remote {
+            remote.update(&reply);
+        }
         let decoded = match &next {
             Next::Pit { layout, .. } | Next::Scroll { layout, .. } => decode(
                 &reply,
@@ -244,6 +338,16 @@ impl EsCursor {
             )?,
             Next::Sql { columns, shape, .. } => next_tabular(&reply, columns, *shape)?,
         };
+        if let Some(id) = &decoded.page.scroll_id {
+            self.remote = Some(Remote::Scroll(id.clone()));
+        }
+        if let Next::Sql { shape, .. } = &next {
+            self.remote = decoded
+                .page
+                .sql_cursor
+                .clone()
+                .map(|id| Remote::Sql(id, shape.tabular));
+        }
         self.next = match next {
             // The layout travels in `decoded`, which kept the first page's.
             Next::Pit { path, body, .. } => Asked {
@@ -281,25 +385,10 @@ impl EsCursor {
     }
 
     /// Releases what the server keeps for a stream the cursor leaves.
-    async fn release(&self, next: Next) {
-        let (method, path, body) = match next {
-            Next::Pit { .. } => return,
-            Next::Scroll { scroll_id, .. } => (
-                Method::DELETE,
-                "/_search/scroll".to_owned(),
-                serde_json::json!({"scroll_id": [scroll_id]}),
-            ),
-            Next::Sql { cursor, shape, .. } => (
-                Method::POST,
-                format!("{}/close", sql_path(shape.tabular)),
-                serde_json::json!({"cursor": cursor}),
-            ),
-        };
-        // Best effort: the server drops it at its keep-alive otherwise.
-        let _ = self
-            .http
-            .send(Call::read(method, &path).with_json(&body))
-            .await;
+    async fn release(&mut self, _next: Next) {
+        if let Some(remote) = self.remote.take() {
+            self.registry.release(Arc::clone(&self.http), remote);
+        }
     }
 }
 

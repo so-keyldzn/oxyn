@@ -17,6 +17,8 @@ mod hits;
 mod http;
 mod mapping;
 mod options;
+mod partition_preview;
+mod pit;
 mod preview;
 mod request;
 mod session;

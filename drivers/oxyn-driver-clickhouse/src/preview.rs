@@ -8,7 +8,7 @@
 //! predicate honest is not this module: the server refuses a second
 //! statement, the request is `readonly = 1`, and the row bound applies.
 //!
-//! # No page, ever
+//! # Independent reads have no OFFSET
 //!
 //! ClickHouse has no unique key: the sorting key orders granules and may
 //! repeat. A total order cannot be completed, so an `OFFSET` is refused for
@@ -23,6 +23,9 @@
 //! `hex(toString(…))`, the raw state with the column's server type kept in the
 //! catalog. That needs an explicit column list, which leaves out the
 //! `MATERIALIZED`, `ALIAS` and `EPHEMERAL` columns as `*` does.
+
+//! Native UI pagination instead retains one execution (ADR-0077). The
+//! bounded `request` remains available to callers needing only a sample.
 
 use oxyn_catalog::CatalogPath;
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
@@ -66,6 +69,25 @@ pub fn request(
     shape: &PreviewShape,
     columns: &[PreviewColumn],
 ) -> Result<ExecRequest> {
+    compose(path, limit, shape, columns, false)
+}
+
+pub(crate) fn stream_request(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    columns: &[PreviewColumn],
+) -> Result<ExecRequest> {
+    compose(path, limit, shape, columns, true)
+}
+
+fn compose(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    columns: &[PreviewColumn],
+    retained: bool,
+) -> Result<ExecRequest> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
             "preview limit must be in 1..=1000".into(),
@@ -101,7 +123,9 @@ pub fn request(
         text.push_str(" ORDER BY ");
         text.push_str(&order);
     }
-    text.push_str(&format!(" LIMIT {limit}"));
+    if !retained {
+        text.push_str(&format!(" LIMIT {limit}"));
+    }
 
     Ok(ExecRequest::new(LANGUAGE, text)
         .with_intent(StatementIntent::Read)

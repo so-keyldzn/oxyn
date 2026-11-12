@@ -58,6 +58,7 @@ impl Backend {
             .ok_or_else(|| IpcError::invalid("A preview needs a relation"))?;
         let path = address.to_path()?;
         let described = self.described_relation(connection, &path);
+        let page_size = shape.page_size;
         let shape = shape.into_shape(described.as_ref())?;
         self.run(
             id,
@@ -67,7 +68,7 @@ impl Backend {
                 catalog: address.catalog,
                 namespace: address.namespace,
                 relation,
-                limit: PREVIEW_ROWS,
+                limit: page_size,
                 shape,
             },
         )
@@ -87,6 +88,7 @@ impl Backend {
         applied: &PreviewShapeDraft,
         rows: u64,
     ) -> Result<Pagination, IpcError> {
+        let page_size = applied.checked_page_size()?;
         let path = address.to_path()?;
         let relation = self.described_relation(connection, &path);
         // Only what decides the order is carried over: the columns of the
@@ -103,9 +105,10 @@ impl Backend {
                 .collect(),
             predicate: None,
             offset: applied.offset,
+            continuation: applied.continuation,
             columns: None,
         };
-        Ok(pagination(&shape, relation.as_ref(), rows))
+        Ok(pagination(&shape, relation.as_ref(), rows, page_size))
     }
 
     /// Loads one level of the catalog, or the root.
@@ -766,3 +769,6 @@ mod duckdb_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod real_preview_tests;

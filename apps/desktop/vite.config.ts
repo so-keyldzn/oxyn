@@ -65,6 +65,9 @@ export default defineConfig({
         extends: true,
         test: {
           name: "unit",
+          // Keep the form/IPC tests' five-second budget independent of
+          // Chromium's cold starts; both projects still run in the same gate.
+          sequence: { groupOrder: 0 },
           environment: "jsdom",
           include: ["src/**/*.test.{ts,tsx}"],
         },
@@ -81,6 +84,7 @@ export default defineConfig({
           : [],
         test: {
           name: "storybook",
+          sequence: { groupOrder: 1 },
           // Pays each file's cold start before its first story is timed.
           setupFiles: ["./.storybook/vitest.setup.ts"],
           // Written out rather than inherited: the stories' own waits are

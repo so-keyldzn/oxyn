@@ -12,7 +12,7 @@ use crate::cells::BATCH_BYTES;
 
 /// Searches the cluster runs that Oxyn started, seen from another session:
 /// the `X-Opaque-Id` of each `indices:data/read/search` task.
-async fn oxyn_searches(observer: &dyn Session) -> Vec<String> {
+pub(super) async fn oxyn_searches(observer: &dyn Session) -> Vec<String> {
     let tasks = run(
         observer,
         read("GET /_tasks?actions=indices:data/read/search&detailed=true&group_by=none"),

@@ -2,8 +2,6 @@ import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
   ArrowUp01Icon,
   Delete02Icon,
   Sorting05Icon,
@@ -27,7 +25,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
-import { MAX_SORT_KEYS, PREVIEW_ROWS } from "@/lib/ipc/metadata"
+import { MAX_SORT_KEYS } from "@/lib/ipc/metadata"
 import type {
   Pagination,
   PreviewShape,
@@ -49,6 +47,7 @@ export function draftDiffers(draft: string, applied: string | null) {
 export function sameShape(a: PreviewShape, b: PreviewShape) {
   return (
     a.offset === b.offset &&
+    a.pageSize === b.pageSize &&
     (a.predicate ?? "").trim() === (b.predicate ?? "").trim() &&
     a.sort.length === b.sort.length &&
     a.sort.every((key, index) => {
@@ -98,6 +97,11 @@ export function previewNotice({
           }
         : null
     case "empty":
+      if (applied.offset > 0)
+        return {
+          text: "This page holds no rows. Return to the previous page.",
+          warning: false,
+        }
       return filtered
         ? {
             text: "No row matches this filter. The read succeeded; the table may still hold rows.",
@@ -122,6 +126,16 @@ export function previewNotice({
   }
   if (status !== "loaded" || !pagination) return null
   switch (pagination.type) {
+    case "needsNativeOrder":
+      return {
+        text: "Clear the sort to browse this server's native order.",
+        warning: false,
+      }
+    case "retained":
+      return {
+        text: "Pages follow the same read. Concurrent changes may affect rows not yet read.",
+        warning: false,
+      }
     case "unknown":
       // Not described yet: whether pages exist is not known, so nothing is
       // claimed either way. The description, once read, answers.
@@ -140,7 +154,7 @@ export function previewNotice({
     case "ready":
       if (pagination.previous)
         return {
-          text: `Rows ${pagination.firstRow.toLocaleString("en-US")}–${(applied.offset + PREVIEW_ROWS).toLocaleString("en-US")} of this order. Each page is a new read: the server may have changed between two of them.`,
+          text: `Page ${Math.floor(applied.offset / applied.pageSize) + 1} of this order. Each page is a new read: the server may have changed between two of them.`,
           warning: false,
         }
       // The order the user chose needs no explanation; the one Oxyn chose for
@@ -161,7 +175,11 @@ const NOT_COUNTED = "total row count not requested"
  * past the first page. Pure, so it is tested without a DOM.
  */
 export function previewFooterNote(pagination: Pagination | null, rows: number) {
-  if (pagination?.type === "ready" && pagination.firstRow > 1 && rows > 0) {
+  if (
+    (pagination?.type === "ready" || pagination?.type === "retained") &&
+    pagination.firstRow > 1 &&
+    rows > 0
+  ) {
     const last = pagination.firstRow + rows - 1
     return `Preview · rows ${pagination.firstRow.toLocaleString("en-US")}–${last.toLocaleString("en-US")} · ${NOT_COUNTED}`
   }
@@ -419,7 +437,7 @@ function SortComposer({
 }
 
 /**
- * The filter, sort and page controls of a relation preview (Figma `190:1618`,
+ * The filter, sort and ordering notice of a relation preview (Figma `190:1618`,
  * ADR-0020, ADR-0028).
  *
  * Absent — not disabled — when the session can neither filter nor sort a
@@ -439,7 +457,6 @@ export function PreviewControls({
   loadingColumns = false,
   onApplyPredicate,
   onApplySort,
-  onPage,
   onCancel,
   onLoadColumns,
   filterRef,
@@ -459,7 +476,6 @@ export function PreviewControls({
   loadingColumns?: boolean
   onApplyPredicate: (predicate: string) => void
   onApplySort: (sort: Array<PreviewSortKey>) => void
-  onPage: (forward: boolean) => void
   onCancel: () => void
   onLoadColumns: () => void
   /** The WHERE field, which a header's `Filter…` focuses. */
@@ -487,12 +503,6 @@ export function PreviewControls({
     applied,
     reshaped,
   })
-  const pages =
-    (status === "loaded" || status === "empty") &&
-    pagination?.type === "ready" &&
-    (pagination.previous || pagination.next)
-      ? pagination
-      : null
 
   return (
     <div className="flex shrink-0 flex-col gap-1 border-b px-3 py-1.5">
@@ -546,24 +556,19 @@ export function PreviewControls({
           />
         ) : null}
       </div>
-      {notice || pages ? (
-        // Wraps rather than squeezing the notice into a column of two words
-        // when the pager sits beside it on a narrow window.
+      {notice ? (
+        // Leave room for the Sort action on a narrow window.
         <div className="flex min-h-7 flex-wrap items-center gap-2">
-          {notice ? (
-            <p
-              role="status"
-              className={cn(
-                "min-w-48 flex-1 text-xs",
-                notice.warning ? "text-warning" : "text-muted-foreground"
-              )}
-            >
-              {notice.text}
-            </p>
-          ) : (
-            <div className="flex-1" />
-          )}
-          {notice?.offersSort && canSort ? (
+          <p
+            role="status"
+            className={cn(
+              "min-w-48 flex-1 text-xs",
+              notice.warning ? "text-warning" : "text-muted-foreground"
+            )}
+          >
+            {notice.text}
+          </p>
+          {notice.offersSort && canSort ? (
             // Outside the live region: the action is not part of what it says.
             <Button
               size="xs"
@@ -573,36 +578,6 @@ export function PreviewControls({
             >
               Sort…
             </Button>
-          ) : null}
-          {pages ? (
-            <div className="ms-auto flex shrink-0 items-center gap-1">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!pages.previous}
-                onClick={() => onPage(false)}
-              >
-                <HugeiconsIcon
-                  icon={ArrowLeft01Icon}
-                  strokeWidth={2}
-                  data-icon="inline-start"
-                />
-                Previous page
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!pages.next}
-                onClick={() => onPage(true)}
-              >
-                Next page
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  strokeWidth={2}
-                  data-icon="inline-end"
-                />
-              </Button>
-            </div>
           ) : null}
         </div>
       ) : null}

@@ -293,6 +293,9 @@ impl CatalogProvider for RedisCatalog {
         let mut described = Relation::new(name, RelationKind::KeyPattern)
             .with_fields(fields_of(&facts.kind))
             .with_comment(facts.comment());
+        if crate::preview_cursor::collection(&facts.kind) {
+            described = described.with_retained_preview(false);
+        }
         if let Some(length) = facts.length {
             described = described.with_estimated_rows(length);
         }

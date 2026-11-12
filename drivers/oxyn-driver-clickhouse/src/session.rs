@@ -364,6 +364,21 @@ impl Session for ClickhouseSession {
             .preview_request(path, limit, shape, cancel)
             .await
     }
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        Ok(oxyn_driver::PreparedPreview {
+            request: self
+                .catalog
+                .stream_preview_request(path, limit, shape, cancel)
+                .await?,
+            retained: true,
+        })
+    }
 
     fn catalog(&self) -> &dyn CatalogProvider {
         &self.catalog

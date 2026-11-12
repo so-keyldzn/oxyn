@@ -70,6 +70,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Verify remote cursor cleanup on the disposable search servers.
+reqwest.workspace = true
 # Ages a session's heartbeat, to test recovery without waiting two minutes.
 oxyn-store = { workspace = true, features = ["test-support"] }
 # Inspects the stored agent environment without going through Oxyn's

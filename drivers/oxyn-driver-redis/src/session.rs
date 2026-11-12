@@ -255,7 +255,7 @@ impl RedisSession {
 }
 
 /// How the session can stop a command, from the server's table.
-fn running_of(table: &CommandTable, argv: &[Vec<u8>]) -> Running {
+pub(crate) fn running_of(table: &CommandTable, argv: &[Vec<u8>]) -> Running {
     let name = argv
         .first()
         .map(|word| word.to_ascii_lowercase())
@@ -274,7 +274,7 @@ fn running_of(table: &CommandTable, argv: &[Vec<u8>]) -> Running {
 }
 
 /// The database a request addresses when it carries one: a preview's.
-fn bound_database(params: &[ScalarValue]) -> Result<Option<u32>> {
+pub(crate) fn bound_database(params: &[ScalarValue]) -> Result<Option<u32>> {
     match params {
         [] => Ok(None),
         [ScalarValue::Int64(database)] => u32::try_from(*database).map(Some).map_err(|_| {
@@ -380,6 +380,44 @@ impl Session for RedisSession {
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
         crate::preview::request(&self.shared, path, limit, shape, cancel).await
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        let request = self.preview_request(path, limit, shape, cancel).await?;
+        let command = request.text.split_whitespace().next().unwrap_or_default();
+        let retained = matches!(
+            command,
+            "HSCAN"
+                | "SSCAN"
+                | "LRANGE"
+                | "ZRANGE"
+                | "XRANGE"
+                | "VRANGE"
+                | "TS.RANGE"
+                | "TOPK.LIST"
+        );
+        Ok(oxyn_driver::PreparedPreview { request, retained })
+    }
+
+    async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        Ok(Box::new(
+            crate::preview_cursor::PreviewCursor::start(
+                Arc::clone(&self.shared),
+                request,
+                cancel.child(),
+            )
+            .await?,
+        ))
     }
 
     /// Selects the database the console addresses.

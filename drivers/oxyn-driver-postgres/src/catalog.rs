@@ -183,7 +183,9 @@ SELECT a.attname::text, \
        a.attnotnull, \
        pg_catalog.pg_get_expr(ad.adbin, ad.adrelid), \
        pg_catalog.col_description(c.oid, a.attnum), \
-       COALESCE(i.indisprimary, false) \
+       COALESCE(i.indisprimary, false), \
+       (SELECT k.rank FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, rank) \
+        WHERE k.attnum = a.attnum AND k.rank <= i.indnkeyatts) \
 FROM pg_catalog.pg_attribute a \
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
@@ -697,6 +699,22 @@ impl CatalogProvider for PostgresCatalog {
             }
             if primary_key {
                 field = field.primary_key();
+                if !redshift {
+                    // The preview already uses this index order. Its catalog
+                    // description must report the same order to the UI.
+                    let key_rank: i64 = row.try_get(7).map_err(|error| {
+                        map_exec_error(&self.driver, StatementIntent::Read, error)
+                    })?;
+                    let key_rank = u32::try_from(key_rank)
+                        .ok()
+                        .filter(|rank| *rank > 0)
+                        .ok_or_else(|| {
+                            OxynError::CatalogUnavailable(
+                                "a primary key column has no valid index position".into(),
+                            )
+                        })?;
+                    field = field.with_primary_key_rank(key_rank);
+                }
             }
             if let Some(text) = default_value {
                 field = field.with_default(text);

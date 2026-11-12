@@ -95,3 +95,10 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 [[profile.default.overrides]]
 filter = 'package(oxyn-embed)'
 slow-timeout = { period = "300s", terminate-after = 1 }
+
+# The opt-in matrix walks complete synthetic collections on several local
+# protocols and observes their remote cleanup; serialize it with those servers.
+[[profile.default.overrides]]
+filter = 'package(oxyn-desktop) & test(real_engine_preview_pages_cross_the_bus_with_the_selected_size)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }

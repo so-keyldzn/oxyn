@@ -41,33 +41,95 @@ const PING_BOUND: Duration = Duration::from_secs(10);
 
 /// The executions `Session::cancel` can reach, by handle.
 #[derive(Debug, Default)]
-pub(crate) struct Registry(Mutex<HashMap<StatementHandle, CancelToken>>);
+pub(crate) struct Registry {
+    executions: Mutex<HashMap<StatementHandle, CancelToken>>,
+    cleanup: Mutex<tokio::task::JoinSet<()>>,
+}
 
 impl Registry {
     fn insert(&self, handle: StatementHandle, token: CancelToken) {
-        self.0
+        self.executions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(handle, token);
     }
 
     pub(crate) fn remove(&self, handle: StatementHandle) {
-        self.0
+        self.executions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&handle);
     }
 
     fn get(&self, handle: StatementHandle) -> Option<CancelToken> {
-        self.0
+        self.executions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&handle)
             .cloned()
     }
 
+    pub(crate) fn release(self: &Arc<Self>, http: Arc<Http>, remote: crate::cursor::Remote) {
+        self.cleanup_request(http, Some(remote), None);
+    }
+
+    pub(crate) fn cleanup_request(
+        self: &Arc<Self>,
+        http: Arc<Http>,
+        remote: Option<crate::cursor::Remote>,
+        opaque: Option<String>,
+    ) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let mut tasks = self.cleanup.lock().unwrap_or_else(PoisonError::into_inner);
+        while tasks.try_join_next().is_some() {}
+        let owner = Arc::clone(self);
+        tasks.spawn_on(
+            async move {
+                if let Some(opaque) = opaque {
+                    let _ =
+                        tokio::time::timeout(Duration::from_secs(10), stop(&http, &opaque)).await;
+                }
+                if let Some(remote) = remote {
+                    remote.release(&http).await;
+                }
+                drop(owner);
+            },
+            &runtime,
+        );
+    }
+
+    pub(crate) fn spawn_owned(
+        self: &Arc<Self>,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let mut tasks = self.cleanup.lock().unwrap_or_else(PoisonError::into_inner);
+        while tasks.try_join_next().is_some() {}
+        let owner = Arc::clone(self);
+        tasks.spawn(async move {
+            work.await;
+            drop(owner);
+        });
+    }
+
+    async fn finish_cleanup(&self) {
+        let _ = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let mut tasks = std::mem::take(
+                    &mut *self.cleanup.lock().unwrap_or_else(PoisonError::into_inner),
+                );
+                if tasks.is_empty() {
+                    break;
+                }
+                while tasks.join_next().await.is_some() {}
+            }
+        })
+        .await;
+    }
+
     fn all(&self) -> Vec<CancelToken> {
-        self.0
+        self.executions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
@@ -77,6 +139,7 @@ impl Registry {
 }
 
 /// An open session.
+#[derive(Clone)]
 pub(crate) struct ElasticsearchSession {
     http: Arc<Http>,
     capabilities: Capabilities,
@@ -96,6 +159,136 @@ impl ElasticsearchSession {
             catalog,
             registry: Arc::default(),
         }
+    }
+
+    async fn execute_inner(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+        mut owned: Option<crate::pit::Lease>,
+        layout: Option<crate::hits::HitLayout>,
+        handle: Option<StatementHandle>,
+    ) -> Result<EsCursor> {
+        self.capabilities.require_language(request.language)?;
+        if !request.params.is_empty() {
+            return Err(OxynError::NotSupported {
+                capability: "bound values: a Search DSL body is JSON the user writes, and \
+                             Oxyn does not substitute into it"
+                    .to_owned(),
+            });
+        }
+        if cancel.is_cancelled() {
+            return Err(OxynError::Cancelled);
+        }
+        let parsed = parse_request(&request.text).map_err(OxynError::Query)?;
+        let intent = statement_intent(&parsed);
+        if request.limits.read_only && intent.is_mutating() {
+            return Err(OxynError::Query(
+                "this connection or execution is read-only, and Oxyn cannot prove this request \
+                 only reads: its endpoint writes, or is not one Oxyn knows"
+                    .to_owned(),
+            ));
+        }
+        let started = Instant::now();
+        let handle = handle.unwrap_or_default();
+        let opaque = format!("oxyn-{handle}");
+        let token = cancel.child();
+        self.registry.insert(handle, token.clone());
+        let mut pending = crate::pit::PendingSearch::new(
+            owned.is_some(),
+            Arc::clone(&self.http),
+            Arc::clone(&self.registry),
+            handle,
+            opaque.clone(),
+        );
+        let reply = self
+            .send(&parsed, intent, &opaque, request.limits.timeout, &token)
+            .await;
+        let reply = match reply {
+            Ok(reply) => {
+                pending.settle();
+                reply
+            }
+            Err(error) => {
+                self.registry.remove(handle);
+                return Err(error);
+            }
+        };
+        let asked = Asked {
+            path: &parsed.path,
+            body: parsed.body.as_ref(),
+            head: parsed.method == "HEAD",
+            read: !intent.is_mutating(),
+        };
+        let stream = if let Some(layout) = &layout {
+            Stream::Next(layout)
+        } else if asked.streams() {
+            Stream::First
+        } else {
+            Stream::No
+        };
+        if let Some(owned) = &mut owned {
+            owned.update(&reply);
+        }
+        let decoded = match decode(&reply, &asked, stream) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                self.registry.remove(handle);
+                return Err(error);
+            }
+        };
+        if intent.is_mutating()
+            && let Some(failure) = partial_failure(&reply, &parsed.path)
+        {
+            self.registry.remove(handle);
+            return Err(OxynError::Query(failure));
+        }
+        let next = asked.next(&decoded);
+        let stats = ExecStats {
+            server_time: decoded.took,
+            ..ExecStats::default()
+        };
+        let remote = owned
+            .and_then(|mut owned| owned.take())
+            .or_else(|| crate::cursor::Remote::from_decoded(&decoded, &asked));
+        Ok(EsCursor {
+            handle,
+            schema: decoded.schema,
+            queue: VecDeque::from(decoded.batches),
+            next,
+            remote,
+            in_flight: false,
+            layout: decoded.layout.clone(),
+            http: Arc::clone(&self.http),
+            opaque,
+            token,
+            timeout: request.limits.timeout,
+            max_rows: request.limits.max_rows,
+            stats,
+            started,
+            registry: Arc::clone(&self.registry),
+        })
+    }
+
+    pub(crate) async fn execute_pit(
+        &self,
+        mut request: ExecRequest,
+        shard: Option<u32>,
+        layout: Option<crate::hits::HitLayout>,
+        cancel: &CancelToken,
+        handle: Option<StatementHandle>,
+    ) -> Result<EsCursor> {
+        let owned = crate::pit::open(
+            Arc::clone(&self.http),
+            Arc::clone(&self.registry),
+            self.catalog.product().name == "OpenSearch",
+            &mut request,
+            shard,
+            cancel,
+        )
+        .await?;
+        self.execute_inner(request, cancel, Some(owned), layout, handle)
+            .await
     }
 
     /// Sends one parsed request, racing the token: a stop reaches the cluster
@@ -186,84 +379,31 @@ impl Session for ElasticsearchSession {
     /// [`OxynError::OutcomeUnknown`] for a stopped write; the cluster's
     /// refusal, classified; a `_bulk` answered 200 with failed items.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
-        self.capabilities.require_language(request.language)?;
-        if !request.params.is_empty() {
-            return Err(OxynError::NotSupported {
-                capability: "bound values: a Search DSL body is JSON the user writes, and \
-                             Oxyn does not substitute into it"
-                    .to_owned(),
-            });
-        }
-        if cancel.is_cancelled() {
-            return Err(OxynError::Cancelled);
-        }
-        let parsed = parse_request(&request.text).map_err(OxynError::Query)?;
-        let intent = statement_intent(&parsed);
-        if request.limits.read_only && intent.is_mutating() {
-            return Err(OxynError::Query(
-                "this connection or execution is read-only, and Oxyn cannot prove this request \
-                 only reads: its endpoint writes, or is not one Oxyn knows"
-                    .to_owned(),
+        Ok(Box::new(
+            self.execute_inner(request, cancel, None, None, None)
+                .await?,
+        ))
+    }
+
+    async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        if !preview::shard_doc(self.catalog.product()) {
+            return Ok(Box::new(
+                crate::partition_preview::Cursor::start(
+                    self.clone(),
+                    Arc::clone(&self.http),
+                    request,
+                    cancel.child(),
+                )
+                .await?,
             ));
         }
-        let started = Instant::now();
-        let handle = StatementHandle::new();
-        let opaque = format!("oxyn-{handle}");
-        let token = cancel.child();
-        self.registry.insert(handle, token.clone());
-        let reply = self
-            .send(&parsed, intent, &opaque, request.limits.timeout, &token)
-            .await;
-        let reply = match reply {
-            Ok(reply) => reply,
-            Err(error) => {
-                self.registry.remove(handle);
-                return Err(error);
-            }
-        };
-        let asked = Asked {
-            path: &parsed.path,
-            body: parsed.body.as_ref(),
-            head: parsed.method == "HEAD",
-            read: !intent.is_mutating(),
-        };
-        let stream = if asked.streams() {
-            Stream::First
-        } else {
-            Stream::No
-        };
-        let decoded = match decode(&reply, &asked, stream) {
-            Ok(decoded) => decoded,
-            Err(error) => {
-                self.registry.remove(handle);
-                return Err(error);
-            }
-        };
-        if intent.is_mutating()
-            && let Some(failure) = partial_failure(&reply, &parsed.path)
-        {
-            self.registry.remove(handle);
-            return Err(OxynError::Query(failure));
-        }
-        let next = asked.next(&decoded);
-        let stats = ExecStats {
-            server_time: decoded.took,
-            ..ExecStats::default()
-        };
-        Ok(Box::new(EsCursor {
-            handle,
-            schema: decoded.schema,
-            queue: VecDeque::from(decoded.batches),
-            next,
-            http: Arc::clone(&self.http),
-            opaque,
-            token,
-            timeout: request.limits.timeout,
-            max_rows: request.limits.max_rows,
-            stats,
-            started,
-            registry: Arc::clone(&self.registry),
-        }))
+        Ok(Box::new(
+            self.execute_pit(request, None, None, cancel, None).await?,
+        ))
     }
 
     async fn preview_request(
@@ -275,6 +415,17 @@ impl Session for ElasticsearchSession {
     ) -> Result<ExecRequest> {
         let relation = self.catalog.describe(path, cancel).await?;
         preview::request(path, &relation, limit, shape)
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        let relation = self.catalog.describe(path, cancel).await?;
+        preview::prepare_request(path, &relation, limit, shape, self.catalog.product())
     }
 
     /// Stops an execution: its token, which makes the page being fetched ask
@@ -289,6 +440,10 @@ impl Session for ElasticsearchSession {
         if let Some(token) = self.registry.get(statement) {
             token.cancel();
         }
+        // A drain may already have dropped its HTTP future. Await the owned
+        // stop/cleanup it queued, rather than mistaking the missing handle
+        // for a search that has ended on the server.
+        self.registry.finish_cleanup().await;
         Ok(())
     }
 
@@ -319,6 +474,7 @@ impl Session for ElasticsearchSession {
         for token in self.registry.all() {
             token.cancel();
         }
+        self.registry.finish_cleanup().await;
         Ok(())
     }
 }

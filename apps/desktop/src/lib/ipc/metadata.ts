@@ -14,8 +14,16 @@ import {
   RelationDetail,
 } from "./types"
 
-/** Rows one preview reads (`PREVIEW_ROWS`). */
+/** Default and maximum preview page size (`PREVIEW_ROWS`). */
 export const PREVIEW_ROWS = 200
+
+export const PREVIEW_PAGE_SIZES = [50, 100, 200] as const
+export const PreviewPageSize = z.union([
+  z.literal(50),
+  z.literal(100),
+  z.literal(200),
+])
+export type PreviewPageSize = z.infer<typeof PreviewPageSize>
 
 /** Sort keys one preview may carry (`MAX_SORT_KEYS`). */
 export const MAX_SORT_KEYS = 16
@@ -35,6 +43,8 @@ export const PreviewShape = z.object({
   sort: z.array(PreviewSortKey),
   predicate: z.string().nullable(),
   offset: z.number().int().nonnegative(),
+  pageSize: PreviewPageSize,
+  continuation: z.string().uuid().nullable(),
 })
 export type PreviewShape = z.infer<typeof PreviewShape>
 
@@ -42,6 +52,8 @@ export const PLAIN_SHAPE: PreviewShape = {
   sort: [],
   predicate: null,
   offset: 0,
+  pageSize: PREVIEW_ROWS,
+  continuation: null,
 }
 
 /**
@@ -55,6 +67,13 @@ export const Pagination = z.discriminatedUnion("type", [
   z.object({ type: z.literal("unknown") }),
   z.object({ type: z.literal("needsOrder") }),
   z.object({ type: z.literal("noUniqueKey") }),
+  z.object({ type: z.literal("needsNativeOrder") }),
+  z.object({
+    type: z.literal("retained"),
+    previous: z.boolean(),
+    next: z.boolean(),
+    firstRow: z.number().int().nonnegative(),
+  }),
   z.object({
     type: z.literal("ready"),
     previous: z.boolean(),
