@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { RecoveryList } from "@/components/oxyn/recovery-list"
@@ -70,7 +70,7 @@ export function RecoveryScreen() {
     () => new Map<string, DocumentEntry>()
   )
   const selectedOnce = React.useRef(false)
-  const launchCopies = useStore(session, (current) =>
+  const launchCopies = useSelector(session, (current) =>
     startup ? current.launchCopies : null
   )
 
@@ -146,7 +146,7 @@ export function RecoveryScreen() {
   }
   // Back returns where the user came from: the open workspace, if any. Nothing
   // is restored on the way.
-  const hasWorkspace = useStore(session, (current) => current.open !== null)
+  const hasWorkspace = useSelector(session, (current) => current.open !== null)
   const back = () => {
     markRecoveryOffered()
     void navigate({ to: hasWorkspace ? "/workspace" : "/" })

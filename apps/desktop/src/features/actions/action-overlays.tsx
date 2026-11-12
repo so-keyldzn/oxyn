@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { CommandPalette } from "@/components/oxyn/command-palette"
 import { QuickOpen } from "@/components/oxyn/quick-open"
@@ -42,7 +42,7 @@ export function ActionOverlays() {
   const [quickOpen, setQuickOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
   const [sheet, setSheet] = React.useState(false)
-  const catalog = useStore(actionSources, (state) => state.sources.catalog)
+  const catalog = useSelector(actionSources, (state) => state.sources.catalog)
   const connection = catalog?.state.connection ?? null
 
   useActionSource(

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b518f6cefd2d" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="00a27a711b49" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -131,9 +131,10 @@ d'un agent y portent `Actor::Agent` ([I-07](../CLAUDE.md#i-07)).
 
 **Les résultats traversent l'IPC par pages formatées.** `result_page` lit au plus
 2 000 lignes du `ResultBuffer` et les formate avec `oxyn_data::format_cell`. La
-grille (`ResultGrid`, TanStack Table + Virtual) ne demande que les pages visibles ;
+grille (`ResultGrid`, TanStack Query + Virtual) ne demande que les pages visibles ;
 défiler jusqu'à la dernière ligne ne relit rien de ce qui précède, et ne relance
-jamais la requête ([I-06](../CLAUDE.md#i-06)).
+jamais la requête ([I-06](../CLAUDE.md#i-06)). TanStack Table gère les colonnes
+d’une relation dans `RelationStructure`, pas la grille des résultats.
 
 **L'annulation est adressée par l'identifiant que choisit le front.** Le front tire
 un UUID par commande ; `Backend` y associe le `CancelToken` du dispatch, et `cancel`
@@ -1370,7 +1371,7 @@ guidait ce découpage reste celui-ci : **chaque phase livre un outil complet en 
 |---|---|---|
 | Trois moteurs web — WKWebView, WebView2, WebKitGTK : un rendu vérifié sur l'un ne l'est pas sur les autres | non évaluée | Vérification sous WebView2 et WebKitGTK inscrite au [plan](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri) ; WebKitGTK inutilisable est une condition de reconsidération d'[ADR-0029](adr/0029-interface-tauri-shadcn.md) |
 | Budgets de trame et de démarrage plus acquis par construction dans la webview | non évaluée | Campagne de mesure dans la webview, inscrite au plan ; la trame à 8 ms p99 au défilement est l'autre condition de reconsidération d'ADR-0029 |
-| Grille + éditeur au niveau d'un outil professionnel | Élevée | Assemblés depuis ADR-0029 — TanStack Table + Virtual, CodeMirror 6 — au lieu d'être écrits ; ne pas commencer un troisième driver avant qu'ils tiennent |
+| Grille + éditeur au niveau d'un outil professionnel | Élevée | Assemblés depuis ADR-0029 — TanStack Query + Virtual pour les résultats, Table pour la structure des relations, CodeMirror 6 — au lieu d'être écrits ; ne pas commencer un troisième driver avant qu'ils tiennent |
 | 30 systèmes à maintenir | Élevée | Un driver par protocole (~14 réels) ; drivers en plugins WASM dès la phase 4 |
 | Le câblage des fonctionnalités SQLx peut réintroduire une contrainte SQLite native | Moyenne | Garder les fonctionnalités de types PostgreSQL sur `sqlx-postgres` ; vérifier le graphe résolu et les fonctionnalités à chaque montée de SQLx ([ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md)) |
 | MSRV tiré vers le haut par les dépendances, dont une invisible | Faible | §3.1 ; `rust-version = "1.95"` couvre `wasm-host` même désactivée, et RESEARCH-NOTES tient la table des MSRV relevés |

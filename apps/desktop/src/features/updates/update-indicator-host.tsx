@@ -1,4 +1,4 @@
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { UpdateIndicator } from "@/components/oxyn/update-indicator"
 import { pendingUpdate } from "@/components/oxyn/update-model"
@@ -15,7 +15,7 @@ import { openReleasePage, updateStore } from "./update-store"
  * background check that failed stays silent here.
  */
 export function UpdateIndicatorHost() {
-  const state = useStore(updateStore, (view) => view.snapshot?.state ?? null)
+  const state = useSelector(updateStore, (view) => view.snapshot?.state ?? null)
   const pending = state ? pendingUpdate(state) : null
   if (pending === null) return null
   return <PendingUpdateIndicator pending={pending} />

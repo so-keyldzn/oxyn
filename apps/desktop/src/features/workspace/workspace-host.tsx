@@ -4,7 +4,7 @@ import {
   useNavigate,
   useRouterState,
 } from "@tanstack/react-router"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import {
   closeConnection,
@@ -41,8 +41,8 @@ export function WorkspaceHost({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const open = useStore(session, (state) => state.open)
-  const workspaces = useStore(session, (state) => state.workspaces)
+  const open = useSelector(session, (state) => state.open)
+  const workspaces = useSelector(session, (state) => state.workspaces)
   // What is mounted: the store's workspaces, plus those still writing their
   // drafts on their way out.
   const [mounted, setMounted] = React.useState<Array<OpenConnection>>(

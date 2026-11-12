@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import type { PendingApproval } from "@/components/oxyn/approval-dialog"
 import type { ResultState } from "@/components/oxyn/result-panel"
@@ -116,7 +116,7 @@ export function useExecution({
   /** The session the current run targets, when its transaction state matters. */
   const session = React.useRef<string | null>(null)
 
-  const progress = useStore(executionProgress, (all) =>
+  const progress = useSelector(executionProgress, (all) =>
     running ? all[running] : undefined
   )
   // The result is addressable from `schemaReady` on, before the last batch:

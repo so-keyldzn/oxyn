@@ -125,9 +125,10 @@ of an agent carry `Actor::Agent` there ([I-07](../CLAUDE.md#i-07)).
 
 **Results cross the IPC as formatted pages.** `result_page` reads at most
 2,000 rows from the `ResultBuffer` and formats them with `oxyn_data::format_cell`. The
-grid (`ResultGrid`, TanStack Table + Virtual) only requests the visible pages;
+grid (`ResultGrid`, TanStack Query + Virtual) only requests the visible pages;
 scrolling to the last row rereads nothing of what precedes, and never reruns
-the query ([I-06](../CLAUDE.md#i-06)).
+the query ([I-06](../CLAUDE.md#i-06)). TanStack Table manages the columns
+of a relation in `RelationStructure`, not the result grid.
 
 **Cancellation is addressed by the identifier the front end chooses.** The front end draws
 a UUID per command; `Backend` associates the dispatch's `CancelToken` with it, and `cancel`
@@ -1343,7 +1344,7 @@ guided this split remains this one: **each phase delivers a tool that is complet
 |---|---|---|
 | Three web engines — WKWebView, WebView2, WebKitGTK: a rendering checked on one is not checked on the others | not assessed | Verification under WebView2 and WebKitGTK recorded in the [plan](IMPLEMENTATION-PLAN.md#migration-to-the-tauri-interface); an unusable WebKitGTK is a reconsideration condition of [ADR-0029](adr/0029-interface-tauri-shadcn.md) |
 | Frame and startup budgets no longer guaranteed by construction in the webview | not assessed | Measurement campaign in the webview, recorded in the plan; the 8 ms p99 frame while scrolling is the other reconsideration condition of ADR-0029 |
-| Grid + editor at the level of a professional tool | High | Assembled since ADR-0029 — TanStack Table + Virtual, CodeMirror 6 — instead of being written; do not start a third driver before they hold |
+| Grid + editor at the level of a professional tool | High | Assembled since ADR-0029 — TanStack Query + Virtual for results, Table for relation structure, CodeMirror 6 — instead of being written; do not start a third driver before they hold |
 | 30 systems to maintain | High | One driver per protocol (~14 real ones); drivers as WASM plugins from phase 4 |
 | SQLx feature wiring can reintroduce a second SQLite link constraint | Medium | Keep PostgreSQL type features on `sqlx-postgres`; check the resolved graph and feature sets on SQLx upgrades ([ADR-0076](adr/0076-unify-sqlite-with-postgres-features.md)) |
 | MSRV pulled up by dependencies, one of them invisible | Low | §3.1; `rust-version = "1.95"` covers `wasm-host` even disabled, and RESEARCH-NOTES keeps the table of recorded MSRVs |

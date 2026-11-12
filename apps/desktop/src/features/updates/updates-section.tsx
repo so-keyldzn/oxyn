@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { UpdateSettings } from "@/components/oxyn/update-settings"
 import { Spinner } from "@/components/ui/spinner"
@@ -18,7 +18,7 @@ import {
 
 /** Settings ▸ Updates, wired to the backend (ADR-0051). */
 export function UpdatesSection() {
-  const view = useStore(updateStore)
+  const view = useSelector(updateStore)
   const heading = React.useRef<HTMLHeadingElement>(null)
 
   // `Check for updates…` lands here: the keyboard follows it.

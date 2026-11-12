@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { visibleAssistantField } from "@/components/oxyn/assistant-composer"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
@@ -205,7 +205,7 @@ export function WorkspaceScreen({
     usePanelPreferences(compact)
   const [leftView, setLeftView] = React.useState<LeftView>("catalog")
   const [asideActive, setAsideActive] = React.useState(aside[0]?.id ?? "")
-  const inspectorWidth = useStore(
+  const inspectorWidth = useSelector(
     preferencesStore,
     (state) => state.preferences.inspectorWidth
   )
@@ -356,7 +356,7 @@ export function WorkspaceScreen({
 
   // Objects the assistant cites, opened from its sources as a click in the
   // catalog would; another connection's requests stay for its own screen.
-  const objectRequests = useStore(objectOpenRequests)
+  const objectRequests = useSelector(objectOpenRequests)
   React.useEffect(() => {
     if (objectRequests.length === 0) return
     for (const request of takeObjectOpenRequests(open.connection)) {
@@ -377,7 +377,7 @@ export function WorkspaceScreen({
 
   // Results an agent's query left, opened from the assistant: the retained
   // rows, never a rerun. Another connection's requests stay for its screen.
-  const resultRequests = useStore(resultOpenRequests)
+  const resultRequests = useSelector(resultOpenRequests)
   React.useEffect(() => {
     if (resultRequests.length === 0) return
     for (const request of takeResultOpenRequests(open.connection)) {

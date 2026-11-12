@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 import type { EditorView } from "@codemirror/view"
 
 import { ApprovalDialog } from "@/components/oxyn/approval-dialog"
@@ -203,14 +203,14 @@ export function ConsolePanel({
   // The last state the session reported — never one guessed from a `BEGIN`
   // being submitted (ADR-0039 §5).
   const declaresTransactions = capabilities.includes("TRANSACTIONS")
-  const reported = useStore(transactionStates, (all) =>
+  const reported = useSelector(transactionStates, (all) =>
     session ? all[session.session] : undefined
   )
   const transaction = session
     ? transactionNotice(reported, declaresTransactions)
     : null
   const withContext = capabilities.includes("SESSION_CONTEXT")
-  const version = useStore(catalogVersion)
+  const version = useSelector(catalogVersion)
   const choices = useQuery({
     queryKey: ["session-context-choices", open.connection, version],
     queryFn: () => consoles.contextChoices(open.connection),

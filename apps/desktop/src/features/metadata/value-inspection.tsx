@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { ValuePageDialog } from "@/components/oxyn/value-page-dialog"
 import type { ValuePageState } from "@/components/oxyn/value-page-dialog"
@@ -67,7 +67,7 @@ export function gridInspection({
  * answer for a value the user left is dropped.
  */
 export function ValueInspectionDialog({ source }: { source: string }) {
-  const inspected = useStore(inspection, (state) =>
+  const inspected = useSelector(inspection, (state) =>
     state.inspected?.source === source ? state.inspected : null
   )
   const [offsets, setOffsets] = React.useState<Array<number>>([0])

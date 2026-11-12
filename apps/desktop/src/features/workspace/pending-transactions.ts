@@ -1,5 +1,5 @@
 import * as React from "react"
-import { createStore, useStore } from "@tanstack/react-store"
+import { createStore, useSelector } from "@tanstack/react-store"
 
 import { transactionNotice } from "@/features/consoles/console-model"
 import { transactionStates } from "@/lib/ipc/events"
@@ -69,8 +69,8 @@ export function pendingTransaction(
 
 /** The connections whose workspace leaves a transaction pending. */
 export function usePendingTransactions(): Record<string, PendingTransaction> {
-  const workspaces = useStore(workspaceSessions)
-  const states = useStore(transactionStates)
+  const workspaces = useSelector(workspaceSessions)
+  const states = useSelector(transactionStates)
   return React.useMemo(() => {
     const byConnection: Record<string, Array<HeldSession>> = {}
     for (const { connection, sessions } of Object.values(workspaces))

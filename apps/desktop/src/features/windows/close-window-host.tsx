@@ -1,4 +1,4 @@
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { CloseWindowDialog } from "@/components/oxyn/close-window-dialog"
 import {
@@ -13,7 +13,7 @@ import {
  * a close that loses nothing goes without it.
  */
 export function CloseWindowHost() {
-  const close = useStore(windowClose)
+  const close = useSelector(windowClose)
   const asking = close !== null && close.rows.length > 0
   return (
     <CloseWindowDialog

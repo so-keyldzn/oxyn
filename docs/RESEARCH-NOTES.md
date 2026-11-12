@@ -3448,3 +3448,20 @@ The UI gate uses Vitest 4.1.12 `sequence.groupOrder` (installed `cli-api` and co
 Compatibility was checked against the [PIT API introduction in 2.4](https://docs.opensearch.org/latest/api-reference/search-apis/point-in-time-api/) and the tagged sources: `ShardDocSortBuilder.java` is absent in OpenSearch 2.19.7, 3.0.0 and 3.2.0, and present in [3.3.0](https://github.com/opensearch-project/OpenSearch/blob/3.3.0/server/src/main/java/org/opensearch/search/sort/ShardDocSortBuilder.java). Therefore 2.0–2.3 keep their old bounded preview, 2.4–3.2 traverse native index/shard partitions, and 3.3+ use the completed `_index`/`_shard_doc` order. Sorted first-page reads remain available on older releases; only sorted continuation is refused. No previous preview or sort feature is removed.
 
 The native PostgreSQL check exposed a description/preview discrepancy on the composite `(tenant_id, id)` fixture: the actual page began at ID 401 for offset 50, correctly, but the UI named `(id, tenant_id)`. `describe_relation` now carries the same `WITH ORDINALITY` primary-key ranks as preview preparation, still excluding INCLUDE payload columns. The real INCLUDE regression asserts the described index order, and the multi-engine backend matrix checks the order announced to the UI against its composite-key fixture.
+
+## TanStack local IPC and subscriptions — checked on 2026-11-12
+
+Documentation was queried through the Context7 CLI and compared with the
+installed packages: Query 5.102.8, Store 0.11.2, Form 1.33.5 and Pacer 0.23.0.
+No dependency version changes in this correction.
+
+| Verified behavior | Source and local consequence |
+|---|---|
+| Query's default network mode can pause queries and mutations while offline; `always` ignores browser connectivity | [Network mode](https://tanstack.com/query/latest/docs/framework/react/guides/network-mode). Reproduced with the installed Query package and synthetic promises. The application's `createQueryClient` uses `always` for local IPC, disables retries, and leaves refreshes to domain events or explicit actions rather than focus/reconnection. |
+| `useStore` is a deprecated alias for `useSelector`; the latter accepts `{ compare }` as its third argument | [Store React quick start](https://tanstack.com/store/latest/docs/framework/react/quick-start), installed `react-store/src/useStore.ts` and `useSelector.ts`. Form re-exports both hooks from Store. Application consumers use `useSelector`; the object-pin store remains isolated per connection. |
+| `useDebouncer` cancels pending work on unmount; it retains execution arguments in its state | [React useDebouncer](https://tanstack.com/pacer/latest/docs/framework/react/reference/functions/useDebouncer), installed React hook and core debouncer sources. Context changes also cancel pending work explicitly. The model-list debounce receives only a generation number, never a probe carrying a provider key. |
+
+The result grid uses Query for bounded pages and Virtual for rows and columns;
+Table is used by `RelationStructure`. This is a source inspection, not a memory
+measurement: the page cache's `gcTime` expires inactive entries and is not a
+byte budget. No renderer performance or total memory bound is claimed here.

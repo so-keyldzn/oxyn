@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import type { ExecutionSummary } from "@/components/oxyn/status-bar"
 import {
@@ -660,10 +660,10 @@ export function useConsoles({
   // at startup, or from this workspace and back. Each opens offline: text
   // only, no session, nothing run. A workspace on its way out leaves them to
   // the next one.
-  const restored = useStore(sessionStore, (state) => state.restored.length)
+  const restored = useSelector(sessionStore, (state) => state.restored.length)
   // What reaches « the workspace » — recovered copies, text for the active
   // console — goes to the shown one only (ADR-0046).
-  const shown = useStore(
+  const shown = useSelector(
     sessionStore,
     (state) => state.open?.session === open.session
   )
@@ -698,7 +698,7 @@ export function useConsoles({
   }, [ready, restored, shown])
 
   // Text from the assistant or the inspector, dropped into a console unrun.
-  const requests = useStore(consoleTextRequests)
+  const requests = useSelector(consoleTextRequests)
   const activeRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     if (requests.length === 0) return

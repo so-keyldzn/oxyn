@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useDebouncer } from "@tanstack/react-pacer"
 
 import { probeOf } from "@/components/oxyn/model-picker-model"
 import type {
@@ -99,6 +100,19 @@ export function useDraftModels(
   // key, the cached list is the one the previous key was allowed to see.
   const listedWith = React.useRef<ModelProbe | null>(null)
 
+  // Pacer keeps execution arguments in its state. Only a generation number
+  // belongs there: the probe's key stays in this form's closure.
+  const listing = useDebouncer(
+    (turn: number) => {
+      if (turn !== latest.current || auto === null) return
+      const newKey =
+        listedWith.current !== null && listedWith.current.key !== auto.key
+      listedWith.current = auto
+      void request(auto, newKey)
+    },
+    { wait: LIST_DEBOUNCE_MS }
+  )
+
   React.useEffect(() => {
     const turn = ++latest.current
     if (auto === null || list === undefined) {
@@ -106,15 +120,9 @@ export function useDraftModels(
       return
     }
     setModels({ status: "loading" })
-    const timer = window.setTimeout(() => {
-      if (turn !== latest.current) return
-      const newKey =
-        listedWith.current !== null && listedWith.current.key !== auto.key
-      listedWith.current = auto
-      void request(auto, newKey)
-    }, LIST_DEBOUNCE_MS)
-    return () => window.clearTimeout(timer)
-  }, [auto, list])
+    listing.maybeExecute(turn)
+    return () => listing.cancel()
+  }, [auto, list, listing])
 
   // Leaving the form drops the answers still on their way.
   React.useEffect(

@@ -4,7 +4,7 @@ import {
   InformationCircleIcon,
 } from "@hugeicons/core-free-icons"
 import { useDebouncedCallback } from "@tanstack/react-pacer"
-import { createStore, useStore } from "@tanstack/react-store"
+import { createStore, useSelector } from "@tanstack/react-store"
 
 import { AboutSection } from "@/features/settings/about-section"
 import { ConnectionsSettings } from "@/features/settings/connections-settings"
@@ -42,7 +42,7 @@ export function closeSettings() {
 
 /** For a shell that needs `onOpenSettings`: `useSettingsDialog().open`. */
 export function useSettingsDialog() {
-  const state = useStore(settingsDialog)
+  const state = useSelector(settingsDialog)
   return {
     section: state.section,
     isOpen: state.open,
@@ -66,7 +66,7 @@ export function SettingsDialog({
   onOpenConnectionChanged?: (open: OpenConnection) => void
 }) {
   const { isOpen, section } = useSettingsDialog()
-  const { preferences, save, loadError } = useStore(preferencesStore)
+  const { preferences, save, loadError } = useSelector(preferencesStore)
   const [unsavedEdit, setUnsavedEdit] = React.useState(false)
 
   // `Settings…` of the registry: ⌘, and the menu bar, from every screen.

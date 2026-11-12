@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { ObjectInspector } from "@/components/oxyn/object-inspector"
 import { ValueInspector } from "@/components/oxyn/value-inspector"
@@ -19,7 +19,7 @@ import type { OpenConnection } from "@/lib/ipc/types"
  * shows. Reads the catalog cache only; the object view loads what is missing.
  */
 export function ObjectInspectorPanel({ open }: { open: OpenConnection }) {
-  const object = useStore(inspection, (state) =>
+  const object = useSelector(inspection, (state) =>
     state.object?.connection === open.connection ? state.object : null
   )
   const facets = useQuery({
@@ -47,7 +47,7 @@ export function ObjectInspectorPanel({ open }: { open: OpenConnection }) {
  * page read from the existing result, never a new query.
  */
 export function ValueInspectorPanel({ open }: { open: OpenConnection }) {
-  const selected = useStore(inspection, (state) =>
+  const selected = useSelector(inspection, (state) =>
     state.selectedRow?.connection === open.connection ? state.selectedRow : null
   )
   const row = useQuery({

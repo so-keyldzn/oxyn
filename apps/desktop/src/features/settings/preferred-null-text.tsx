@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { NullTextContext } from "@/components/oxyn/cell-value"
 import { preferencesStore } from "@/features/settings/preferences"
@@ -11,7 +11,7 @@ import { preferencesStore } from "@/features/settings/preferences"
  * read, and the next result takes it the same way.
  */
 export function PreferredNullText({ children }: { children: React.ReactNode }) {
-  const nullText = useStore(
+  const nullText = useSelector(
     preferencesStore,
     (state) => state.preferences.nullText
   )

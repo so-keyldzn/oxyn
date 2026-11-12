@@ -4,7 +4,7 @@ paths:
   - "crates/oxyn-desktop/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/front.md" sha256="69ec3af13018" -->
+<!-- oxyn-translation source=".claude/rules/front.md" sha256="dcebd1edb16c" -->
 
 > Traduction française de [.claude/rules/front.md](../../../../.claude/rules/front.md). **La version anglaise fait foi.**
 
@@ -161,7 +161,14 @@ meurt au lieu d'un processus.
 Le formatage d'une cellule est fait en Rust par `oxyn_data::format_cell`. Le front
 ne reformate pas une date ni un binaire : l'écran divergerait du fichier exporté.
 
-## Pas de retry
+## IPC local et absence de retry
+
+Le routeur utilise `createQueryClient` dans `src/lib/query-client.ts`. Les queries
+et mutations utilisent `networkMode: "always"` : la connectivité du navigateur
+ne doit pas suspendre l’IPC local. Rust indique si le serveur réel est joignable.
+Le retour du focus et la reconnexion réseau ne relancent pas les queries ; les
+signaux du domaine et les actions explicites de l’utilisateur gèrent les
+rafraîchissements.
 
 `QueryClient` est configuré `retry: false`. Un appel au backend qui échoue est une
 réponse, pas un réseau capricieux ; et une écriture ambiguë ne se rejoue pas

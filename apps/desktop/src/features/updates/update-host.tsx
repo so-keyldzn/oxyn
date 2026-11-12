@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useStore } from "@tanstack/react-store"
+import { useSelector } from "@tanstack/react-store"
 
 import { RestartToUpdateDialog } from "@/components/oxyn/restart-to-update-dialog"
 import {
@@ -30,8 +30,8 @@ const announced = new Set<string>()
  * `Restart now`. The lasting form of every toast is in Settings ▸ Updates.
  */
 export function UpdateHost() {
-  const state = useStore(updateStore, (view) => view.snapshot?.state ?? null)
-  const restartWork = useStore(updateStore, (view) => view.restartWork)
+  const state = useSelector(updateStore, (view) => view.snapshot?.state ?? null)
+  const restartWork = useSelector(updateStore, (view) => view.restartWork)
 
   const availability = state ? checkAvailability(state) : null
   useActionSource(
