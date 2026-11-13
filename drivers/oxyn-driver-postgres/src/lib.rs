@@ -108,6 +108,7 @@
 //! The cancellation tests additionally need a server that accepts
 //! `pg_cancel_backend` on its own processes, which is the default.
 
+mod backend_identity;
 mod cancel;
 pub mod catalog;
 pub mod cursor;

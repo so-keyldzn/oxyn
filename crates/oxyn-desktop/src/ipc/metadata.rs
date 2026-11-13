@@ -173,34 +173,38 @@ impl PreviewShapeDraft {
             // offered and what a script may ask for cannot drift apart: a page
             // of an order nobody can name is what ADR-0028 refuses, and the
             // order a relation comes in by default is the one ADR-0068 names.
-            match pagination(&shape, relation, 0, page_size) {
-                Pagination::NotApplicable => {
-                    return Err(IpcError::invalid("this object has no pageable collection"));
-                }
-                Pagination::Unknown => {
-                    return Err(IpcError::invalid(
-                        "A page other than the first needs the relation to be described: \
+            // A retained cursor supplies its own ordering/identity proof; the
+            // executor validates it even when its metadata cache was evicted.
+            if shape.continuation.is_none() {
+                match pagination(&shape, relation, 0, page_size) {
+                    Pagination::NotApplicable => {
+                        return Err(IpcError::invalid("this object has no pageable collection"));
+                    }
+                    Pagination::Unknown => {
+                        return Err(IpcError::invalid(
+                            "A page other than the first needs the relation to be described: \
                          its key is not known yet",
-                    ));
-                }
-                Pagination::NeedsOrder => {
-                    return Err(IpcError::invalid(
-                        "A page other than the first needs a sort: an OFFSET over an \
+                        ));
+                    }
+                    Pagination::NeedsOrder => {
+                        return Err(IpcError::invalid(
+                            "A page other than the first needs a sort: an OFFSET over an \
                          uncertain order shows a row twice and hides another",
-                    ));
-                }
-                Pagination::NoUniqueKey => {
-                    return Err(IpcError::invalid(
-                        "This preview stays on its first page: no unique key is known for \
+                        ));
+                    }
+                    Pagination::NoUniqueKey => {
+                        return Err(IpcError::invalid(
+                            "This preview stays on its first page: no unique key is known for \
                          this relation, so no order can be made total",
-                    ));
+                        ));
+                    }
+                    Pagination::NeedsNativeOrder => {
+                        return Err(IpcError::invalid(
+                            "Clear the sort to browse this server's native order",
+                        ));
+                    }
+                    Pagination::Ready { .. } | Pagination::Retained { .. } => {}
                 }
-                Pagination::NeedsNativeOrder => {
-                    return Err(IpcError::invalid(
-                        "Clear the sort to browse this server's native order",
-                    ));
-                }
-                Pagination::Ready { .. } | Pagination::Retained { .. } => {}
             }
             if !shape.offset.is_multiple_of(u64::from(page_size)) {
                 return Err(IpcError::invalid(

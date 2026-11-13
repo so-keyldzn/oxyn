@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="73f53d1ff8f1" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="0847ea25dc49" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -282,6 +282,8 @@ l'éditeur SQL.
 Les aperçus de collections natives utilisent aussi `Session::prepare_preview` et `execute_preview` ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). Leurs valeurs par défaut conservent l’exécution bornée existante. Une requête conservée utilise la même politique, reclassification, lecture seule, les mêmes événements et le même collecteur de page bornée. `preview_stream::Registry` détient un curseur et un historique Arrow derrière les identités de résultats ; chaque continuation est vérifiée contre connexion, session, relation, taille, filtre, tri et projection. La page est lue à la demande, Previous lit l’historique. Celui-ci est borné à 8 Mio en mémoire, 128 Mio de débordement et 8192 lots par flux ; au plus 16 identités de pages sont détenues, pendant au plus cinq minutes. Dépassement et expiration sont explicites. Fermer une session, oublier sa dernière page ou abandonner une lecture annule et libère le flux. Un garde détient l’annulation dès avant le premier schéma. Les ressources natives restent en Rust ; leurs tâches de nettoyage sont détenues et bornées en temps. Actualiser ou changer la forme depuis l’interface démarre un nouveau flux à la première page.
 
 Les lectures SQL conservées peuvent demander `PreviewMode::Dedicated` ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)). Le registre réserve une des 16 places actives/en ouverture avant d’appeler `open_preview_session` sur le driver vivant. Les sessions privées sont exclues du repli du catalogue. L’annulation cible la session d’exécution réelle, la continuation restant liée à la source logique. Aucun sondage d’état transactionnel n’attend derrière un aperçu suspendu. Les tâches détenues détruisent le curseur avant la fermeture, gardent la capacité jusqu’à la fin du nettoyage, et sont rejointes à la fermeture de la source, la déconnexion et l’arrêt. Les écritures autorisées libèrent les lectures conservées de leur connexion avant exécution. Les échantillons laissent `continuable` à false et n’entrent jamais dans ce cycle.
+
+Les lectures locales à une session utilisent `PreviewMode::Original` et la connexion physique de leur source ([ADR-0079](adr/0079-retain-temporary-previews-on-their-owning-session.md)). `SessionSlot` a un rôle immuable Catalog, Console ou Preview. `Connect` et `OpenConsoleSession` désignent les deux premiers ; les lecteurs privés restent internes. Un curseur original réserve exclusivement son propriétaire ; les autres opérations échouent rapidement plutôt que d’attendre derrière un curseur au repos. Les tâches de nettoyage gardent occupation et capacité jusqu’à `finish_original_preview`, sans fermer le propriétaire. L’admission d’une mutation est exclusive par connexion depuis le nettoyage des aperçus jusqu’à sa fin ; les lecteurs en ouverture gardent une admission partagée jusqu’à leur liaison. `ReleasePreview` ferme la source indépendamment des lecteurs qui gardent les lignes déjà reçues. Le transfert d’une console refuse une source occupée et se coordonne avec les commandes d’aperçu en cours.
 
 Pour les aperçus indépendants, la borne de réception de l'aperçu réserve une ligne supplémentaire pour
 confirmer l'épuisement du curseur de la requête déjà limitée. Le `ResultBuffer`
@@ -802,7 +804,7 @@ ses scopes descendants partent avec lui. `Root` et les parents du scope publié 
 sont jamais évincés ; si la lecture ne tient toujours pas, elle est refusée sans
 rien évincer. L'usage compté est la publication : l'UI lit le cache sans passer
 par le bus. Le décompte garde les maxima des scopes déjà lus, car relister un
-parent conserve ses détails enfants ; la déconnexion remet ce budget à zéro.
+parent conserve ses détails enfants ; la déconnexion remet ce budget à zéro. `RefreshSessionCatalog` lit la session vivante nommée dans son propre cache, et `session_catalog` valide ce propriétaire. Tous ces caches partagent le budget par connexion, indexé par session et scope ; ils ne reçoivent pas chacun 50 000 objets supplémentaires. Fermer un propriétaire efface son cache et ses charges. Un nouveau catalogue préféré utilise une nouvelle génération de cache, tandis que le budget agrégé reste partagé avec les sessions survivantes.
 Cette borne ne limite pas les octets des chaînes ni les vecteurs temporaires
 rendus par le provider, et ce trajet ne fournit pas de persistance hors ligne.
 

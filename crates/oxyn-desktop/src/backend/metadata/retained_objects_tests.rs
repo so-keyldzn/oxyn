@@ -368,3 +368,6 @@ async fn editing_saved_settings_cannot_redirect_a_live_preview(#[case] driver: &
     assert!(!missing.path().join("another.db").exists());
     fixture.close().await;
 }
+
+#[path = "session_objects_tests.rs"]
+mod session_objects;

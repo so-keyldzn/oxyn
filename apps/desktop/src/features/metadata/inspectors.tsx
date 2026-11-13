@@ -24,12 +24,20 @@ export function ObjectInspectorPanel({ open }: { open: OpenConnection }) {
   )
   const facets = useQuery({
     queryKey: object
-      ? facetsKey(object.connection, object.address)
+      ? facetsKey(
+          object.connection,
+          object.address,
+          object.session ?? open.session
+        )
       : ["relation-facets", "none"],
     enabled: object !== null,
     queryFn: () =>
       object
-        ? metadata.relationFacets(object.connection, object.address)
+        ? metadata.relationFacets(
+            object.connection,
+            object.address,
+            object.session ?? open.session
+          )
         : Promise.reject(new Error("No object is selected")),
   })
   return (

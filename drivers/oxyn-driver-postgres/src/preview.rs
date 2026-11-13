@@ -53,7 +53,7 @@ WITH RECURSIVE target AS ( \
     WHERE i.indisprimary AND i.indisvalid AND i.indisready AND k.rank <= i.indnkeyatts \
 ) \
 SELECT c.attname::text, \
-       bool_or(t.typsend = 0 OR t.typcategory = 'Z' OR \
+       bool_or(t.typsend = 0 OR t.typcategory = 'Z' OR t.typtype = 'm' OR \
          (n.nspname = 'pg_catalog' AND t.typname IN \
            ('regproc', 'regprocedure', 'regoper', 'regoperator', 'regclass', \
             'regtype', 'regconfig', 'regdictionary', 'regnamespace', \

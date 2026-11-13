@@ -112,7 +112,9 @@ pub use approval::{ApprovalError, ApprovalRegistry, PendingCommand};
 pub use cancel::{CancelRegistry, CancelReport, RunningStatement, ServerCancel};
 pub use events::{EventBus, ExecEvent};
 pub use executor::{Executor, ExecutorBuilder, Outcome};
-pub use sessions::{CredentialResolver, NoCredentials, SessionRegistry, SessionSlot};
+pub use sessions::{
+    CredentialResolver, NoCredentials, SessionRegistry, SessionSlot, SessionTransfer,
+};
 pub use sink::{DispatchReport, ExecutorSink};
 
 /// What you import in one go when wiring the executor.

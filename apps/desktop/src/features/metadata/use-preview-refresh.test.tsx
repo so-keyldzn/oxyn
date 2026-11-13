@@ -39,6 +39,7 @@ vi.mock("@/lib/ipc/metadata", async (importOriginal) => {
   return {
     ...actual,
     metadata: {
+      releasePreview: () => Promise.resolve({ type: "done" }),
       previewRelation: (
         id: string,
         _connection: string,
@@ -148,15 +149,20 @@ function renderPreviews(open: OpenConnection, relations: Array<string>) {
   )
   return {
     ...hook,
-    show: (shown: Array<string>) => {
+    show: async (shown: Array<string>) => {
       for (const relation of relations)
         visible.set(relation, shown.includes(relation))
-      hook.rerender()
+      await act(async () => {
+        hook.rerender()
+      })
     },
   }
 }
 
 async function answerAll(outcome: (id: string) => CommandOutcome) {
+  await act(async () => {
+    await Promise.resolve()
+  })
   const waiting = [...ipc.pending]
   ipc.pending.clear()
   await act(async () => {
@@ -165,8 +171,8 @@ async function answerAll(outcome: (id: string) => CommandOutcome) {
   })
 }
 
-function signal(value: RefreshSignal) {
-  act(() => ipc.emit(value))
+async function signal(value: RefreshSignal) {
+  await act(async () => ipc.emit(value))
 }
 
 const readsSince = (mark: number) => ipc.reads.slice(mark)
@@ -180,7 +186,12 @@ beforeEach(() => {
   ipc.pending.clear()
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  previews.closeSessions(
+    Object.values(previews.store.state).map((entry) => entry.session)
+  )
+})
 
 describe("the size of a preview page", () => {
   it.each(["sqlite", "postgres", "mysql", "duckdb", "mongodb", "turso"])(
@@ -189,9 +200,9 @@ describe("the size of a preview page", () => {
       const open = { ...opened(), driver }
       const view = renderPreviews(open, ["paged"])
       await answerAll(executed)
-      act(() => view.result.current.at(0)?.resizePage(50))
+      await act(async () => view.result.current.at(0)?.resizePage(50))
       await answerAll((id) => ({ ...executed(id), rows: 50 }))
-      act(() => view.result.current.at(0)?.page(true))
+      await act(async () => view.result.current.at(0)?.page(true))
       expect(ipc.reads.at(-1)).toMatchObject({
         session: open.session,
         shape: { pageSize: 50, offset: 50 },
@@ -208,21 +219,21 @@ describe("the size of a preview page", () => {
       if (!value) throw new Error("one preview is mounted")
       return value
     }
-    act(() => preview().resizePage(50))
+    await act(async () => preview().resizePage(50))
     expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 0 })
     await answerAll((id) => ({ ...executed(id), rows: 50 }))
-    act(() => preview().page(true))
+    await act(async () => preview().page(true))
     expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 50 })
     await answerAll((id) => ({ ...executed(id), rows: 1 }))
-    act(() => preview().page(false))
+    await act(async () => preview().page(false))
     expect(ipc.reads.at(-1)?.shape).toMatchObject({ pageSize: 50, offset: 0 })
     await answerAll((id) => ({ ...executed(id), rows: 50 }))
-    act(() => preview().applyPredicate(" id >= 2 "))
+    await act(async () => preview().applyPredicate(" id >= 2 "))
     await answerAll(executed)
     const sort = [{ column: "id", descending: true }]
-    act(() => preview().applySort(sort))
+    await act(async () => preview().applySort(sort))
     await answerAll(executed)
-    act(() => preview().resizePage(100))
+    await act(async () => preview().resizePage(100))
     expect(ipc.reads.at(-1)?.shape).toEqual({
       pageSize: 100,
       continuation: null,
@@ -231,9 +242,9 @@ describe("the size of a preview page", () => {
       sort,
     })
     await answerAll(executed)
-    view.show([])
+    await view.show([])
     const count = ipc.reads.length
-    view.show(["sized"])
+    await view.show(["sized"])
     expect(ipc.reads).toHaveLength(count)
     expect(preview().applied.pageSize).toBe(100)
   })
@@ -241,10 +252,10 @@ describe("the size of a preview page", () => {
   it("ignores a late page of another size and keeps connections independent", async () => {
     const first = renderPreviews(opened(), ["sized"])
     await answerAll(executed)
-    act(() => first.result.current.at(0)?.resizePage(50))
+    await act(async () => first.result.current.at(0)?.resizePage(50))
     const old = [...ipc.pending.values()]
     ipc.pending.clear()
-    act(() => first.result.current.at(0)?.resizePage(100))
+    await act(async () => first.result.current.at(0)?.resizePage(100))
     await answerAll(executed)
     await act(async () => {
       for (const resolve of old) resolve({ ...executed("late"), rows: 50 })
@@ -264,13 +275,13 @@ describe("after a write, only the preview on screen reads again", () => {
     const view = renderPreviews(open, ["a", "b", "c"])
     await answerAll((id) => executed(`r-${id}`))
     const sort = [{ column: "id", descending: true }]
-    act(() => view.result.current[1]?.applySort(sort))
+    await act(async () => view.result.current[1]?.applySort(sort))
     await answerAll((id) => executed(`r-${id}`))
 
     // Several object tabs stay mounted; only `a` is the active one.
-    view.show(["a"])
+    await view.show(["a"])
     const mark = ipc.reads.length
-    signal({ type: "rowsChanged", connection: open.connection })
+    await signal({ type: "rowsChanged", connection: open.connection })
 
     expect(readsSince(mark).map((read) => read.relation)).toEqual(["a"])
     const hidden = Object.values(previews.store.state).filter(
@@ -282,12 +293,12 @@ describe("after a write, only the preview on screen reads again", () => {
 
     // Back on `b`: one read, with the order it had.
     const back = ipc.reads.length
-    view.show(["b"])
+    await view.show(["b"])
     expect(readsSince(back)).toMatchObject([
       { relation: "b", shape: { sort, offset: 0 } },
     ])
     await answerAll((id) => executed(`r-${id}`))
-    view.show(["b"])
+    await view.show(["b"])
     expect(ipc.reads).toHaveLength(back + 1)
   })
 
@@ -296,13 +307,13 @@ describe("after a write, only the preview on screen reads again", () => {
     const view = renderPreviews(open, ["a", "b"])
     await answerAll((id) => executed(`r-${id}`))
 
-    view.show([])
+    await view.show([])
     const mark = ipc.reads.length
-    signal({ type: "rowsChanged", connection: open.connection })
-    signal({ type: "lagged" })
+    await signal({ type: "rowsChanged", connection: open.connection })
+    await signal({ type: "lagged" })
     expect(readsSince(mark)).toEqual([])
 
-    view.show(["a"])
+    await view.show(["a"])
     expect(readsSince(mark).map((read) => read.relation)).toEqual(["a"])
   })
 })
@@ -312,14 +323,14 @@ describe("after a DDL", () => {
     const open = opened()
     const view = renderPreviews(open, ["invoices"])
     await answerAll((id) => executed(`r-${id}`))
-    act(() => view.result.current[0]?.applyPredicate("total > 10"))
+    await act(async () => view.result.current[0]?.applyPredicate("total > 10"))
     await answerAll((id) => executed(`r-${id}`))
 
     // What the backend sends once `ALTER TABLE … ADD COLUMN` succeeded.
     const mark = ipc.reads.length
-    signal({ type: "catalogInvalidated", connection: open.connection })
+    await signal({ type: "catalogInvalidated", connection: open.connection })
     expect(readsSince(mark)).toEqual([])
-    signal({ type: "rowsChanged", connection: open.connection })
+    await signal({ type: "rowsChanged", connection: open.connection })
 
     expect(readsSince(mark)).toMatchObject([
       {
@@ -339,14 +350,14 @@ describe("after a DDL", () => {
     const open = opened()
     const view = renderPreviews(open, ["invoices"])
     await answerAll((id) => executed(`r-${id}`))
-    view.show([])
+    await view.show([])
 
     const mark = ipc.reads.length
-    signal({ type: "catalogInvalidated", connection: open.connection })
-    signal({ type: "rowsChanged", connection: open.connection })
+    await signal({ type: "catalogInvalidated", connection: open.connection })
+    await signal({ type: "rowsChanged", connection: open.connection })
     expect(readsSince(mark)).toEqual([])
 
-    view.show(["invoices"])
+    await view.show(["invoices"])
     expect(readsSince(mark)).toHaveLength(1)
   })
 
@@ -357,9 +368,9 @@ describe("after a DDL", () => {
     const failed = view.result.current[0]?.state
 
     const mark = ipc.reads.length
-    signal({ type: "rowsChanged", connection: open.connection })
-    view.show([])
-    view.show(["invoices"])
+    await signal({ type: "rowsChanged", connection: open.connection })
+    await view.show([])
+    await view.show(["invoices"])
 
     expect(readsSince(mark)).toEqual([])
     expect(failed).toMatchObject({ status: "error" })
@@ -372,23 +383,38 @@ describe("after a DDL", () => {
     await answerAll((id) => executed(`r-${id}`))
 
     const mark = ipc.reads.length
-    signal({ type: "rowsChanged", connection: "elsewhere" })
+    await signal({ type: "rowsChanged", connection: "elsewhere" })
     expect(readsSince(mark)).toEqual([])
   })
 })
 
 describe("an automatic read on a tab that is no longer shown", () => {
+  it("keeps a pending SQL read on its owner instead of cancelling temporary state", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["private"])
+    await waitFor(() => expect(ipc.reads).toHaveLength(1))
+    const first = ipc.reads[0]?.id
+    await view.show([])
+    expect(ipc.cancelled).toEqual([])
+    await view.show(["private"])
+    expect(ipc.reads).toHaveLength(1)
+    expect(ipc.reads[0]?.id).toBe(first)
+    await answerAll(() => executed("preserved"))
+    expect(view.result.current[0]?.state).toMatchObject({ result: "preserved" })
+  })
+
   it("is cancelled, so the next object's read is not queued behind it", async () => {
     const open = opened()
+    open.capabilities = ["SERVER_SIDE_CANCEL"]
     const view = renderPreviews(open, ["slow", "small"])
     // Both tabs read on mount; only `slow` is meant to be on screen.
-    view.show(["slow"])
+    await view.show(["slow"])
     const slow = ipc.reads.find((read) => read.relation === "slow")
     expect(slow).toBeDefined()
     // `small` read on mount too, and was cancelled when `slow` took the screen.
     ipc.cancelled = []
 
-    view.show(["small"])
+    await view.show(["small"])
     expect(ipc.cancelled).toEqual([slow?.id])
     expect(
       Object.values(previews.store.state).find(
@@ -399,13 +425,14 @@ describe("an automatic read on a tab that is no longer shown", () => {
 
   it("reads again on return, and never shows the answer that came late", async () => {
     const open = opened()
+    open.capabilities = ["SERVER_SIDE_CANCEL"]
     const view = renderPreviews(open, ["slow", "small"])
-    view.show(["slow"])
+    await view.show(["slow"])
     const first = ipc.reads.find((read) => read.relation === "slow")?.id ?? ""
 
-    view.show(["small"])
+    await view.show(["small"])
     const mark = ipc.reads.length
-    view.show(["slow"])
+    await view.show(["slow"])
     const second = readsSince(mark).find((read) => read.relation === "slow")
     expect(second).toBeDefined()
     expect(second?.id).not.toBe(first)
@@ -429,12 +456,12 @@ describe("an automatic read on a tab that is no longer shown", () => {
   it("keeps a loaded preview cached across the tab change", async () => {
     const open = opened()
     const view = renderPreviews(open, ["a", "b"])
-    view.show(["a", "b"])
+    await view.show(["a", "b"])
     await answerAll((id) => executed(`r-${id}`))
 
     const mark = ipc.reads.length
-    view.show(["b"])
-    view.show(["a"])
+    await view.show(["b"])
+    await view.show(["a"])
     expect(ipc.cancelled).toEqual([])
     expect(readsSince(mark)).toEqual([])
     expect(view.result.current[0]?.state).toMatchObject({
@@ -445,13 +472,13 @@ describe("an automatic read on a tab that is no longer shown", () => {
   it("leaves a read the user asked for running", async () => {
     const open = opened()
     const view = renderPreviews(open, ["a", "b"])
-    view.show(["a"])
+    await view.show(["a"])
     await answerAll((id) => executed(`r-${id}`))
     ipc.cancelled = []
-    act(() => view.result.current[0]?.applyPredicate("id > 3"))
+    await act(async () => view.result.current[0]?.applyPredicate("id > 3"))
     expect(view.result.current[0]?.running).toBe(true)
 
-    view.show(["b"])
+    await view.show(["b"])
     expect(ipc.cancelled).toEqual([])
     expect(view.result.current[0]?.running).toBe(true)
   })
@@ -478,27 +505,27 @@ it.each([
   }
   await answerAll(() => ({ ...executed("first"), rows: 200 }))
   await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-  act(() => preview().page(true))
+  await act(async () => preview().page(true))
   expect(ipc.reads.at(-1)?.shape).toMatchObject({
     offset: 200,
     continuation: "first",
   })
   await answerAll(() => ({ ...executed("second"), rows: 200 }))
   await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-  act(() => preview().page(false))
+  await act(async () => preview().page(false))
   expect(ipc.reads.at(-1)?.shape).toMatchObject({
     offset: 0,
     continuation: "second",
   })
   await answerAll(() => ({ ...executed("back"), rows: 200 }))
   await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-  act(() => preview().refresh())
+  await act(async () => preview().refresh())
   expect(ipc.reads.at(-1)?.shape).toMatchObject({
     offset: 0,
     continuation: null,
   })
   await answerAll(executed)
-  act(() => preview().resizePage(50))
+  await act(async () => preview().resizePage(50))
   expect(ipc.reads.at(-1)?.shape).toMatchObject({
     offset: 0,
     pageSize: 50,
@@ -512,7 +539,7 @@ it("does not attach stale page availability to a same-size refreshed result", as
   const view = renderPreviews(opened(), ["a_view"])
   await answerAll(() => ({ ...executed("old"), rows: 200 }))
   await waitFor(() => expect(ipc.paginationReplies).toHaveLength(1))
-  act(() => view.result.current.at(0)?.refresh())
+  await act(async () => view.result.current.at(0)?.refresh())
   await answerAll(() => ({ ...executed("new"), rows: 200 }))
   await waitFor(() => expect(ipc.paginationReplies).toHaveLength(2))
   await act(async () =>
@@ -547,7 +574,7 @@ it("exposes availability failures and retries without rerunning the preview", as
   )
   expect(view.result.current.at(0)?.pagination).toBeNull()
   const reads = ipc.reads.length
-  act(() => view.result.current.at(0)?.retryPagination())
+  await act(async () => view.result.current.at(0)?.retryPagination())
   await waitFor(() => expect(ipc.paginationReplies).toHaveLength(2))
   expect(ipc.reads).toHaveLength(reads)
   await act(async () =>

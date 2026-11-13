@@ -5,6 +5,7 @@ import { flushAllDrafts, registerDraftFlush } from "./draft-registry"
 import { useConsoles } from "./use-consoles"
 import type { ConsoleHandle } from "./console-panel"
 import type { OpenConnection } from "@/lib/ipc/types"
+import type * as ConsoleIpc from "@/lib/ipc/consoles"
 
 vi.mock("@/lib/ipc/library", () => ({
   library: { newDocument: () => Promise.resolve("doc-1") },
@@ -14,7 +15,8 @@ vi.mock("@/lib/ipc/library", () => ({
 vi.mock("@/lib/ipc/windows", () => ({
   windows: { openInNewWindow: vi.fn(), reportConsoles: vi.fn() },
 }))
-vi.mock("@/lib/ipc/consoles", () => ({
+vi.mock("@/lib/ipc/consoles", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConsoleIpc>()),
   consoles: {
     open: () =>
       Promise.resolve({

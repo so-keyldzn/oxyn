@@ -1,3 +1,7 @@
+import { previewKey } from "@/features/metadata/preview-store"
+import { previews } from "@/features/metadata/preview-state"
+import { OpenSessionTable } from "@/components/oxyn/open-session-table"
+import { CatalogSource } from "@/components/oxyn/catalog-source"
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useSelector } from "@tanstack/react-store"
@@ -97,6 +101,7 @@ import { queryLanguageOf } from "@/lib/query-language"
 export type { AsideItem } from "@/components/oxyn/workspace-aside"
 
 interface ObjectTab {
+  owner?: OpenConnection
   key: string
   node: CatalogNode
   target?: OpenTarget
@@ -121,8 +126,8 @@ interface ResultTab {
  */
 export type WorkspaceExit = () => Promise<{ sessions: Array<string> }>
 
-function objectKey(address: CatalogAddress) {
-  return `object:${addressKey(address)}`
+function objectKey(address: CatalogAddress, source?: string) {
+  return `object:${source ? `${source}:` : ""}${addressKey(address)}`
 }
 
 /** A relation reached by a foreign key: known by its address only. */
@@ -224,6 +229,7 @@ export function WorkspaceScreen({
   React.useEffect(() => {
     if (focusAssistant > 0) visibleAssistantField()?.focus()
   }, [focusAssistant])
+  const [catalogSource, setCatalogSource] = React.useState("")
   const [objects, setObjects] = React.useState<Array<ObjectTab>>([])
   const [retained, setRetained] = React.useState<Array<ResultTab>>([])
   /** Result tabs with an export under way: they do not close meanwhile. */
@@ -243,8 +249,8 @@ export function WorkspaceScreen({
   // opened by address alone — restored, Quick Open, a link — takes its
   // catalog facts from there, a virtual table's module first among them.
   const loadedTree = useQuery({
-    queryKey: ["catalog", open.connection],
-    queryFn: () => metadata.catalogTree(open.connection),
+    queryKey: ["catalog", open.connection, open.session],
+    queryFn: () => metadata.catalogTree(open.connection, open.session),
     enabled: hasCatalog(open),
     placeholderData: (previous) => previous,
   }).data
@@ -254,7 +260,11 @@ export function WorkspaceScreen({
   // learns, for instance, that the table's module is not loaded.
   React.useEffect(() => {
     if (!loadedTree) return
-    setObjects((tabs) => tabsWithLoadedFacts(tabs, loadedTree))
+    setObjects((tabs) =>
+      tabs.map((tab) =>
+        tab.owner ? tab : (tabsWithLoadedFacts([tab], loadedTree)[0] ?? tab)
+      )
+    )
   }, [loadedTree])
   const objectHandles = React.useRef(new Map<string, ObjectViewHandle>())
   // One width for every object's definition, for as long as this workspace
@@ -272,7 +282,7 @@ export function WorkspaceScreen({
     (tab: ObjectTab | undefined) =>
       void saveObjectPlace(
         open.connection,
-        tab
+        tab && !tab.owner
           ? {
               address: tab.node.address,
               section: sections.current.get(tab.key) ?? "data",
@@ -292,6 +302,7 @@ export function WorkspaceScreen({
       if (object) {
         inspectObject({
           connection: open.connection,
+          session: object.owner?.session ?? open.session,
           address: object.node.address,
         })
         keepPlace(object)
@@ -326,9 +337,13 @@ export function WorkspaceScreen({
 
   const asideItem = aside.find((item) => item.id === asideActive) ?? aside[0]
 
-  const openObject = (opened: CatalogNode, target?: OpenTarget) => {
-    const node = withLoadedFacts(opened, loadedTreeRef.current)
-    const key = objectKey(node.address)
+  const openObject = (
+    opened: CatalogNode,
+    target?: OpenTarget,
+    owner?: OpenConnection
+  ) => {
+    const node = owner ? opened : withLoadedFacts(opened, loadedTreeRef.current)
+    const key = objectKey(node.address, owner?.session)
     const existing = objectsRef.current.find((tab) => tab.key === key)
     if (existing) {
       // Opened again with more facts than the tab holds — a click on the
@@ -350,7 +365,7 @@ export function WorkspaceScreen({
       return
     }
     // A new ObjectView announces itself to the inspector when it mounts.
-    setObjects((current) => [...current, { key, node, target }])
+    setObjects((current) => [...current, { key, node, target, owner }])
     setActive(key)
   }
 
@@ -360,7 +375,24 @@ export function WorkspaceScreen({
   React.useEffect(() => {
     if (objectRequests.length === 0) return
     for (const request of takeObjectOpenRequests(open.connection)) {
-      openObject(relatedNode(request.address))
+      const source = request.session
+        ? work.entries.find(
+            (entry) => entry.session?.session === request.session
+          )?.session
+        : null
+      if (request.session && !source) continue
+      openObject(
+        relatedNode(request.address),
+        undefined,
+        source
+          ? {
+              ...open,
+              session: source.session,
+              capabilities: source.capabilities,
+              readOnly: source.readOnly,
+            }
+          : undefined
+      )
     }
     // `openObject` reads the tabs through a ref: the requests are the trigger.
   }, [objectRequests, open.connection])
@@ -412,6 +444,25 @@ export function WorkspaceScreen({
       return true
     }
     if (key.startsWith("object:")) {
+      const closing = objectsRef.current.find((tab) => tab.key === key)
+      if (closing) {
+        try {
+          await previews.close(
+            previewKey(
+              open.connection,
+              addressKey(closing.node.address),
+              closing.owner?.session ?? open.session
+            )
+          )
+        } catch (error) {
+          toast.add({
+            title: "The preview could not close",
+            description: error instanceof Error ? error.message : String(error),
+            type: "warning",
+          })
+          return false
+        }
+      }
       const remaining = objectsRef.current.filter((tab) => tab.key !== key)
       objectsRef.current = remaining
       sections.current.delete(key)
@@ -681,7 +732,7 @@ export function WorkspaceScreen({
       return
     }
     const object = objectsRef.current.find((tab) => tab.key === key)
-    if (!object) return
+    if (!object || object.owner) return
     try {
       await windows.openInNewWindow({
         type: "object",
@@ -705,7 +756,10 @@ export function WorkspaceScreen({
 
   /** Why a tab cannot move to a new window now, or `null`. */
   const moveBlocked = (key: string): string | null => {
-    if (key.startsWith("object:")) return null
+    if (key.startsWith("object:"))
+      return objectsRef.current.find((tab) => tab.key === key)?.owner
+        ? "This object belongs to its console session and cannot move separately"
+        : null
     const entry = work.entries.find((item) => item.key === key)
     const handle = work.handles.current.get(key)
     if (!entry || !handle)
@@ -760,18 +814,71 @@ export function WorkspaceScreen({
     (entry) => entry.key === lastConsole.current
   )
 
+  const sourceEntry = work.entries.find(
+    (entry) => entry.session?.session === catalogSource
+  )
+  const sourceOpen = sourceEntry?.session
+    ? {
+        ...open,
+        session: sourceEntry.session.session,
+        capabilities: sourceEntry.session.capabilities,
+        readOnly: sourceEntry.session.readOnly,
+      }
+    : undefined
+  const sourceChoices = work.entries.flatMap((entry) =>
+    entry.session
+      ? [{ id: entry.session.session, label: entry.seed.title || "Console" }]
+      : []
+  )
+  React.useEffect(() => {
+    const live = new Set(
+      work.entries.flatMap((entry) =>
+        entry.session ? [entry.session.session] : []
+      )
+    )
+    setObjects((current) =>
+      current.filter((tab) => !tab.owner || live.has(tab.owner.session))
+    )
+  }, [work.entries])
+
   return (
     <>
       <WorkspaceLayout
         sidebar={
           leftView === "catalog" ? (
             <CatalogSidebar
-              open={open}
+              key={sourceOpen?.session ?? open.session}
+              open={sourceOpen ?? open}
+              sessionScoped={sourceOpen !== undefined}
+              sourceSelector={
+                <>
+                  <CatalogSource
+                    value={sourceOpen ? catalogSource : ""}
+                    choices={sourceChoices}
+                    onChange={setCatalogSource}
+                  />
+                  {sourceOpen && open.driver === "mysql" && (
+                    <OpenSessionTable
+                      onOpen={(database, table) =>
+                        openObject(
+                          relatedNode({
+                            catalog: null,
+                            namespace: database,
+                            relation: table,
+                          }),
+                          undefined,
+                          sourceOpen
+                        )
+                      }
+                    />
+                  )}
+                </>
+              }
               selected={
                 activeObject ? addressKey(activeObject.node.address) : null
               }
-              onSelect={(node) => openObject(node)}
-              onOpen={(node, target) => openObject(node, target)}
+              onSelect={(node) => openObject(node, undefined, sourceOpen)}
+              onOpen={(node, target) => openObject(node, target, sourceOpen)}
               onNewConsole={(place) =>
                 void work.openConsole({ context: place })
               }
@@ -883,7 +990,8 @@ export function WorkspaceScreen({
             className="h-full min-h-0"
           >
             <ObjectView
-              open={open}
+              open={tab.owner ?? open}
+              sessionScoped={tab.owner !== undefined}
               node={tab.node}
               active={visible && tab.key === active}
               initialTab={tab.target}
@@ -907,17 +1015,22 @@ export function WorkspaceScreen({
                     }
                   : undefined
               }
-              onOpenRelated={(address) => openObject(relatedNode(address))}
-              onOpenInConsole={(sql, title, options = {}) =>
-                void work.openConsole({
-                  text: sql,
-                  title,
-                  // Bound by the driver in the console, never concatenated
-                  // into the statement (I-10).
-                  parameters: options.parameters,
-                  needsValues: options.needsValues,
-                  notice: options.notice,
-                })
+              onOpenRelated={(address) =>
+                openObject(relatedNode(address), undefined, tab.owner)
+              }
+              onOpenInConsole={
+                tab.owner
+                  ? undefined
+                  : (sql, title, options = {}) =>
+                      void work.openConsole({
+                        text: sql,
+                        title,
+                        // Bound by the driver in the console, never concatenated
+                        // into the statement (I-10).
+                        parameters: options.parameters,
+                        needsValues: options.needsValues,
+                        notice: options.notice,
+                      })
               }
               definitionWidth={definitionWidth}
               onDefinitionWidthChange={setDefinitionWidth}

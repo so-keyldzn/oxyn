@@ -251,6 +251,10 @@ impl Session for DuckDbSession {
             .await
     }
 
+    async fn finish_original_preview(&self, cancel: &CancelToken) -> Result<()> {
+        self.worker.call(cancel, |_| Ok(())).await
+    }
+
     async fn open_preview_session(
         &self,
         path: &oxyn_catalog::CatalogPath,

@@ -28,9 +28,12 @@
 //! to the default. The guard sets it only at the last moment, in its `Drop`.
 
 use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnection, Postgres};
+
+pub(crate) const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A connection borrowed from the pool, which knows whether it may go back.
 #[derive(Debug)]
@@ -63,6 +66,30 @@ impl Lease {
     /// To call **after** the server has confirmed the reset to the default.
     pub(crate) const fn restored(&mut self) {
         self.dirty = false;
+    }
+
+    /// Restores only state installed by Oxyn after a synchronized setup error.
+    /// A failed or timed-out reset leaves the lease dirty and therefore closed.
+    pub(crate) async fn restore_setup(&mut self, began: bool, context_changed: bool) -> bool {
+        let restored = tokio::time::timeout(CLEANUP_TIMEOUT, async {
+            if began {
+                sqlx::raw_sql(crate::session::SQL_ROLLBACK)
+                    .execute(&mut **self)
+                    .await?;
+            }
+            if context_changed {
+                sqlx::raw_sql(crate::session::SQL_RESET_SEARCH_PATH)
+                    .execute(&mut **self)
+                    .await?;
+            }
+            Ok::<_, sqlx::Error>(())
+        })
+        .await
+        .is_ok_and(|result| result.is_ok());
+        if restored {
+            self.restored();
+        }
+        restored
     }
 
     /// The connection will not go back to the pool, whatever happens next.

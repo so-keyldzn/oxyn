@@ -258,13 +258,30 @@ export const metadata = {
     connection: string,
     address: CatalogAddress,
     shape: PreviewShape,
-    rows: number
+    rows: number,
+    session: string | null = null,
+    result: string | null = null
   ) =>
     call("preview_pagination", Pagination, {
       connection,
       address,
       shape,
       rows,
+      session,
+      result,
+    }),
+
+  releasePreview: (
+    commandId: string,
+    connection: string,
+    session: string,
+    result: string
+  ) =>
+    call("release_preview", CommandOutcome, {
+      commandId,
+      connection,
+      session,
+      result,
     }),
 
   refreshCatalog: (
@@ -295,14 +312,26 @@ export const metadata = {
       facet,
     }),
 
-  catalogTree: (connection: string) =>
-    call("catalog_tree", z.array(CatalogNode), { connection }),
+  catalogTree: (connection: string, session: string | null = null) =>
+    call("catalog_tree", z.array(CatalogNode), { connection, session }),
 
-  relationFacets: (connection: string, address: CatalogAddress) =>
-    call("relation_facets", RelationFacets, { connection, address }),
+  relationFacets: (
+    connection: string,
+    address: CatalogAddress,
+    session: string | null = null
+  ) =>
+    call("relation_facets", RelationFacets, { connection, address, session }),
 
-  searchCatalog: (connection: string, query: string) =>
-    call("search_catalog", z.array(CatalogSearchHit), { connection, query }),
+  searchCatalog: (
+    connection: string,
+    query: string,
+    session: string | null = null
+  ) =>
+    call("search_catalog", z.array(CatalogSearchHit), {
+      connection,
+      query,
+      session,
+    }),
 
   /**
    * The query a console opens to see the rows on the other side of a key.
@@ -316,7 +345,8 @@ export const metadata = {
     address: CatalogAddress,
     incoming: boolean,
     index: number,
-    source?: RelatedRowsSource | null
+    source?: RelatedRowsSource | null,
+    session: string | null = null
   ) =>
     call("related_rows_template", RelatedRowsQuery.nullable(), {
       connection,
@@ -324,6 +354,7 @@ export const metadata = {
       incoming,
       index,
       source: source ?? null,
+      session,
     }),
 
   /**
@@ -334,8 +365,15 @@ export const metadata = {
   composeObjectSql: (
     connection: string,
     address: CatalogAddress,
-    form: ObjectSqlForm
-  ) => call("compose_object_sql", z.string(), { connection, address, form }),
+    form: ObjectSqlForm,
+    session: string | null = null
+  ) =>
+    call("compose_object_sql", z.string(), {
+      connection,
+      address,
+      form,
+      session,
+    }),
 
   subscribeRefreshSignals: (onSignal: (signal: RefreshSignal) => void) => {
     // Constructing a channel outside the webview throws before `call` can

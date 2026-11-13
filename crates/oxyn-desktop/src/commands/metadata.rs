@@ -40,6 +40,7 @@ pub async fn preview_relation(
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     let outcome = run_owned(
         &backend,
@@ -54,14 +55,36 @@ pub async fn preview_relation(
 }
 
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the named IPC payload plus the backend and calling webview injected by Tauri"
+)]
 pub async fn preview_pagination(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     address: CatalogAddress,
     shape: PreviewShapeDraft,
     rows: u64,
+    result: Option<String>,
 ) -> Result<Pagination, IpcError> {
-    backend.preview_pagination(parse("connection", &connection)?, &address, &shape, rows)
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
+    let result = result.map(|id| parse("result", &id)).transpose()?;
+    if let Some(result) = result {
+        backend
+            .inner
+            .windows
+            .check_result(caller(&backend, &webview)?, result)?;
+    }
+    backend.preview_pagination_for_session(
+        parse("connection", &connection)?,
+        &address,
+        &shape,
+        rows,
+        owner,
+        result,
+    )
 }
 
 #[tauri::command]
@@ -77,6 +100,7 @@ pub async fn refresh_catalog(
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     run_owned(
         &backend,
@@ -102,6 +126,7 @@ pub async fn refresh_relation_facet(
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     run_owned(
         &backend,
@@ -115,12 +140,15 @@ pub async fn refresh_relation_facet(
 
 #[tauri::command]
 pub async fn catalog_tree(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
 ) -> Result<Vec<CatalogNode>, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
     backend
-        .on_blocking_pool(move |backend| backend.catalog_tree(connection))
+        .on_blocking_pool(move |backend| backend.catalog_tree_for_session(connection, owner))
         .await
 }
 
@@ -158,54 +186,82 @@ pub async fn completion_load(
 
 #[tauri::command]
 pub async fn relation_detail(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     address: CatalogAddress,
 ) -> Result<Option<RelationDetail>, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
     backend
-        .on_blocking_pool(move |backend| backend.relation_detail(connection, &address))
+        .on_blocking_pool(move |backend| {
+            backend.relation_detail_for_session(connection, &address, owner)
+        })
         .await
 }
 
 #[tauri::command]
 pub async fn relation_facets(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     address: CatalogAddress,
 ) -> Result<RelationFacets, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
     backend
-        .on_blocking_pool(move |backend| backend.relation_facets(connection, &address))
+        .on_blocking_pool(move |backend| {
+            backend.relation_facets_for_session(connection, &address, owner)
+        })
         .await
 }
 
 #[tauri::command]
 pub async fn search_catalog(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     query: String,
 ) -> Result<Vec<CatalogSearchHit>, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
     backend
-        .on_blocking_pool(move |backend| backend.search_catalog(connection, &query))
+        .on_blocking_pool(move |backend| {
+            backend.search_catalog_for_session(connection, &query, owner)
+        })
         .await
 }
 
 /// A query to review in a new console; this command never runs it.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the named IPC payload plus the backend and calling webview injected by Tauri"
+)]
 pub async fn related_rows_template(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     address: CatalogAddress,
     incoming: bool,
     index: usize,
     source: Option<RelatedRowsSource>,
 ) -> Result<Option<RelatedRowsQuery>, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
+    if let Some(source) = &source {
+        let window = caller(&backend, &webview)?;
+        backend.inner.windows.check_result(window, source.result)?;
+    }
     backend
         .on_blocking_pool(move |backend| {
-            backend.related_rows_template(connection, &address, incoming, index, source)
+            backend.related_rows_template_for_session(
+                connection, &address, incoming, index, source, owner,
+            )
         })
         .await
 }
@@ -213,14 +269,19 @@ pub async fn related_rows_template(
 /// A « Copy as » text for a relation; this command never runs it.
 #[tauri::command]
 pub async fn compose_object_sql(
+    webview: Webview,
     backend: State<'_, Backend>,
+    session: Option<String>,
     connection: String,
     address: CatalogAddress,
     form: ObjectSqlForm,
 ) -> Result<String, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
     let connection = parse("connection", &connection)?;
     backend
-        .on_blocking_pool(move |backend| backend.compose_object_sql(connection, &address, form))
+        .on_blocking_pool(move |backend| {
+            backend.compose_object_sql_for_session(connection, &address, form, owner)
+        })
         .await
 }
 
@@ -276,4 +337,53 @@ pub async fn subscribe_refresh_signals(
         }
     });
     Ok(())
+}
+
+/// Session metadata is visible only to a window that owns the live session.
+fn checked_source(
+    backend: &Backend,
+    webview: &Webview,
+    source: Option<String>,
+) -> Result<(Option<SessionId>, Option<crate::backend::SessionUse>), IpcError> {
+    let source = source.map(|id| parse("session", &id)).transpose()?;
+    let using = source
+        .map(|session| backend.inner.workbench.consoles.run_on(session))
+        .transpose()?;
+    if let Some(session) = source {
+        let window = caller(backend, webview)?;
+        backend.inner.windows.check_session(window, session)?;
+    }
+    Ok((source, using))
+}
+
+/// Close the cursor, preserving the bounded page already shown in the grid.
+#[tauri::command]
+pub async fn release_preview(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    command_id: String,
+    connection: String,
+    session: String,
+    result: String,
+) -> Result<CommandOutcome, IpcError> {
+    let window = caller(&backend, &webview)?;
+    let id = parse("command id", &command_id)?;
+    let session = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
+    backend.inner.windows.check_session(window, session)?;
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.run(
+            id,
+            oxyn_core::Command::ReleasePreview {
+                connection: parse("connection", &connection)?,
+                session,
+                result: parse("result", &result)?,
+            },
+        ),
+        |_| false,
+    )
+    .await
 }

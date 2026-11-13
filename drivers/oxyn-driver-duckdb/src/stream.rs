@@ -414,14 +414,22 @@ fn expect_parameters(statement: &Statement<'_>, given: usize) -> Result<()> {
 
 /// A read-only transaction the driver opened, rolled back when dropped —
 /// after every statement and result of the execution, declared before them.
-pub(crate) struct ReadOnlyTransaction<'c>(&'c Connection);
+pub(crate) struct ReadOnlyTransaction<'c> {
+    connection: &'c Connection,
+    interrupter: &'c Interrupter,
+}
 
 impl Drop for ReadOnlyTransaction<'_> {
     fn drop(&mut self) {
+        // A cursor can be dropped after its last batch while this rollback runs.
+        // Retire its cancellation target first: interrupting our own cleanup
+        // would leave an aborted transaction for the next statement. The worker
+        // remains serial until the rollback and this task have both returned.
+        self.interrupter.end();
         // Nothing to undo — the engine refused every write — and a failure
         // here leaves at worst the read-only transaction open, which the next
         // statement's error names.
-        let _ = self.0.execute_batch("ROLLBACK");
+        let _ = self.connection.execute_batch("ROLLBACK");
     }
 }
 
@@ -435,7 +443,7 @@ type Last<'c> = (Statement<'c>, Effect, Option<ReadOnlyTransaction<'c>>);
 fn prepare_last<'c>(
     connection: &'c Connection,
     request: &ExecRequest,
-    interrupter: &Interrupter,
+    interrupter: &'c Interrupter,
     applied: &mut bool,
     affected: &mut u64,
 ) -> Result<Option<Last<'c>>> {
@@ -466,7 +474,7 @@ fn prepare_last<'c>(
         crate::attach::check(&info.text)?;
     }
     let wrapper = if request.limits.read_only {
-        Some(read_only_wrapper(connection, &statements)?)
+        Some(read_only_wrapper(connection, &statements, interrupter)?)
     } else {
         None
     };
@@ -523,6 +531,7 @@ fn prepare_last<'c>(
 fn read_only_wrapper<'c>(
     connection: &'c Connection,
     statements: &[StatementInfo],
+    interrupter: &'c Interrupter,
 ) -> Result<ReadOnlyTransaction<'c>> {
     if let Some(info) = statements
         .iter()
@@ -556,7 +565,10 @@ fn read_only_wrapper<'c>(
     connection
         .execute_batch("BEGIN TRANSACTION READ ONLY")
         .map_err(|err| error::engine(&err, Effect::ReadOnly))?;
-    Ok(ReadOnlyTransaction(connection))
+    Ok(ReadOnlyTransaction {
+        connection,
+        interrupter,
+    })
 }
 
 /// Whether a statement changes where unqualified names resolve without `USE`:

@@ -651,9 +651,13 @@ export function ConsolePanel({
       const tree = queryClient.getQueryData<Array<CatalogNode>>([
         "catalog",
         open.connection,
+        session?.session ?? open.session,
       ])
-      const address = parts && tree ? loadedObject(tree, parts) : null
-      return address ? () => openObject(open.connection, address) : null
+      const address =
+        parts && tree ? loadedObject(tree, parts, session !== null) : null
+      return address
+        ? () => openObject(open.connection, address, session?.session)
+        : null
     },
   }
 

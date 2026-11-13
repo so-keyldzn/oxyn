@@ -17,7 +17,7 @@ pub(crate) use budget::CatalogBudget;
 
 pub(crate) struct ConnectionCatalog {
     pub cache: SharedCatalog,
-    pub refresh: Mutex<CatalogBudget>,
+    pub refresh: Arc<Mutex<CatalogBudget>>,
     pub closed: CancelToken,
     /// The first session is reserved for connection-level catalog work.
     pub session: RwLock<Option<oxyn_core::SessionId>>,
@@ -27,10 +27,40 @@ impl ConnectionCatalog {
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(CatalogCache::new())),
-            refresh: Mutex::new(CatalogBudget::default()),
+            refresh: Arc::new(Mutex::new(CatalogBudget::default())),
             closed: CancelToken::new(),
             session: RwLock::new(None),
         }
+    }
+}
+
+pub(crate) struct SessionCatalog {
+    pub cache: SharedCatalog,
+    closed: parking_lot::Mutex<bool>,
+}
+
+impl Default for SessionCatalog {
+    fn default() -> Self {
+        Self {
+            cache: Arc::new(RwLock::new(CatalogCache::new())),
+            closed: parking_lot::Mutex::new(false),
+        }
+    }
+}
+
+impl SessionCatalog {
+    pub fn publish(&self, patch: CatalogPatch) -> Result<()> {
+        let closed = self.closed.lock();
+        if *closed {
+            return Err(OxynError::Cancelled);
+        }
+        patch.apply(&mut self.cache.write())
+    }
+
+    pub fn close(&self) {
+        let mut closed = self.closed.lock();
+        *closed = true;
+        *self.cache.write() = CatalogCache::new();
     }
 }
 

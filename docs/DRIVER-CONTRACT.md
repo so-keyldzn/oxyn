@@ -107,7 +107,7 @@ use retained reads where supported ([ADR-0078](adr/0078-page-keyless-relations-w
 
 `PreviewShape::continuable` defaults to false: samples call `preview_request`
 and release their bounded cursor. Data browsing opts in to `prepare_preview`,
-whose `PreviewMode` distinguishes `Bounded`, `Retained` and `Dedicated`.
+whose `PreviewMode` distinguishes `Bounded`, `Retained`, `Dedicated` and `Original`.
 `Session::open_preview_session` opens a private reader from the live opening
 specification and reproducible namespace context. It must not read updated
 saved settings, copy unreproducible temporary state, or substitute a same-named
@@ -118,8 +118,22 @@ SQLite private readers narrow URI `mode=rw`/`mode=rwc` to `mode=ro`, including
 percent-encoded option names/values, without canonicalizing the filename or
 changing other VFS/cache options. Named shared-memory URIs preserve their
 identity and memory mode. Private-memory and unnamed temporary databases are
-not reproducible on a sibling; keyless objects keep a bounded read on the
-original session; no sibling is opened against a fresh empty database.
+not reproducible on a sibling; their keyless objects use `Original` on the
+owning session, never a fresh empty database.
+
+`Original` exclusively reserves that session while its read remains open
+([ADR-0079](adr/0079-retain-temporary-previews-on-their-owning-session.md)).
+Conflicting operations fail promptly, cancellation and closure remain available,
+and `finish_original_preview` acknowledges physical cleanup after cursor drop.
+It never closes the owning session or rolls back a user transaction. SQLite
+and DuckDB acknowledge their worker queue; MySQL acknowledges its connection
+lease; PostgreSQL joins its portal cleanup. The caller retains capacity and
+occupancy until this acknowledgement. A driver cannot claim original-session
+continuation while replacing its physical context silently. Existing read-only
+bounds still apply: a MySQL or DuckDB source with an open user transaction must
+finish that transaction before browsing; preview cleanup must never roll it back.
+DuckDB retires the completed read’s interruption target before rolling back its
+own read-only wrapper, so a late cursor drop cannot cancel that cleanup.
 
 **Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
 it declares a primary key, makes a click on that table read every vector into a

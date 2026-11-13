@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { KEPT_PREVIEWS, createPreviewStore } from "./preview-store"
+import { KEPT_PREVIEWS, createPreviewStore, previewKey } from "./preview-store"
 import type { PreviewEffects } from "./preview-store"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
 import type { CommandOutcome } from "@/lib/ipc/types"
@@ -413,4 +413,116 @@ describe("an automatic read that goes out of sight", () => {
     expect(effects.cancel).not.toHaveBeenCalled()
     expect(previews.store.state.k?.running).toBe("cmd1")
   })
+})
+
+it("releases an explicitly closed tab without confusing a React unmount with a close", async () => {
+  const { previews, effects, answer } = harness()
+  previews.attach("owned", target)
+  previews.read("owned", PLAIN_SHAPE)
+  await answer("cmd1", executed("owned-result"))
+  previews.detach("owned")
+  expect(effects.forgetResult).not.toHaveBeenCalled()
+  previews.attach("owned", target)
+  await previews.close("owned")
+  expect(effects.forgetResult).toHaveBeenCalledWith("owned-result")
+  expect(previews.store.state.owned).toBeUndefined()
+})
+
+it("keeps a pending SQL owner through hiding and remounting until explicit close", async () => {
+  const { previews, effects, answer } = harness()
+  const own = { ...target, preserveOwner: true }
+  previews.attach("owned", own)
+  previews.read("owned", PLAIN_SHAPE, true)
+  previews.pause("owned")
+  previews.detach("owned")
+  expect(effects.cancel).not.toHaveBeenCalled()
+  expect(previews.store.state.owned).toMatchObject({
+    views: 0,
+    running: "cmd1",
+  })
+  previews.attach("owned", own)
+  expect(previews.store.state.owned?.running).toBe("cmd1")
+  await previews.close("owned")
+  expect(effects.cancel).toHaveBeenCalledExactlyOnceWith("cmd1")
+  await answer("cmd1", executed("late"))
+  expect(effects.forgetResult).toHaveBeenCalledWith("late")
+})
+
+it("waits for the old cursor's release before replacing its shape", async () => {
+  const { previews, effects, answer, pending } = harness()
+  let release: (() => void) | undefined
+  effects.release = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve
+      })
+  )
+  previews.attach("owned", target)
+  previews.read("owned", PLAIN_SHAPE)
+  await answer("cmd1", executed("old"))
+  previews.read("owned", { ...PLAIN_SHAPE, predicate: "id > 4" })
+  expect(effects.release).toHaveBeenCalledWith(
+    expect.objectContaining({ session: "s1" }),
+    "old"
+  )
+  expect(pending.has("cmd2")).toBe(false)
+  expect(effects.forgetResult).not.toHaveBeenCalled()
+  release?.()
+  await Promise.resolve()
+  expect(pending.has("cmd2")).toBe(true)
+  await answer("cmd2", executed("replacement"))
+  expect(effects.forgetResult).toHaveBeenCalledWith("old")
+  expect(previews.store.state.owned?.state).toMatchObject({
+    result: "replacement",
+  })
+})
+
+it("keeps homonymous tables from two live sessions independent", async () => {
+  const { previews, effects, answer } = harness()
+  const first = previewKey("c1", "temporary.items", "first")
+  const second = previewKey("c1", "temporary.items", "second")
+  previews.attach(first, { ...target, session: "first" })
+  previews.attach(second, { ...target, session: "second" })
+  previews.read(first, { ...PLAIN_SHAPE, predicate: "id > 10" })
+  previews.read(second, PLAIN_SHAPE)
+  await answer("cmd2", executed("second-rows", 7))
+  await answer("cmd1", executed("first-rows", 3))
+  expect(previews.store.state[first]?.state).toMatchObject({
+    result: "first-rows",
+    rows: 3,
+  })
+  expect(previews.store.state[second]?.state).toMatchObject({
+    result: "second-rows",
+    rows: 7,
+  })
+  previews.closeSessions(["first"])
+  expect(effects.forgetResult).toHaveBeenCalledWith("first-rows")
+  expect(effects.forgetResult).not.toHaveBeenCalledWith("second-rows")
+  expect(previews.store.state[second]?.applied.predicate).toBeNull()
+})
+
+it("keeps a catalog filter on reconnect without carrying rows or a cursor", async () => {
+  const { previews, answer } = harness()
+  const first = previewKey("c1", "invoices", "s1")
+  const next = previewKey("c1", "invoices", "s2")
+  previews.attach(first, { ...target, shapeGroup: "catalog-invoices" })
+  previews.read(first, {
+    ...PLAIN_SHAPE,
+    predicate: "id > 20",
+    continuation: "prior",
+    offset: 200,
+  })
+  await answer("cmd1", executed("old-rows"))
+  previews.detach(first)
+  previews.attach(next, {
+    ...target,
+    session: "s2",
+    shapeGroup: "catalog-invoices",
+  })
+  expect(previews.store.state[next]?.applied).toMatchObject({
+    predicate: "id > 20",
+    offset: 0,
+    continuation: null,
+  })
+  expect(previews.store.state[next]?.state.status).toBe("initial")
 })

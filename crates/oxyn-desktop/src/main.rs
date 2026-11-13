@@ -134,6 +134,7 @@ fn main() -> Result<()> {
             // Metadata: catalog, relation facets, shaped preview
             commands::metadata::preview_relation,
             commands::metadata::preview_pagination,
+            commands::metadata::release_preview,
             commands::metadata::refresh_catalog,
             commands::metadata::refresh_relation_facet,
             commands::metadata::catalog_tree,

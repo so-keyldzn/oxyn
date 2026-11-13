@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use oxyn_catalog::{CatalogPath, CatalogScope};
-use oxyn_core::{CatalogRefreshScope, OxynError, Result};
+use oxyn_core::{CatalogRefreshScope, OxynError, Result, SessionId};
 
 use super::{CatalogPatch, path};
 
@@ -18,33 +18,62 @@ struct Reservation {
 
 #[derive(Default)]
 pub(crate) struct CatalogBudget {
-    scopes: HashMap<CatalogRefreshScope, Reservation>,
+    scopes: HashMap<(Option<SessionId>, CatalogRefreshScope), Reservation>,
     // The UI reads the cache without the bus, so a publication is the only
     // use the bus can observe: recency is counted in publications.
     clock: u64,
 }
 
 impl CatalogBudget {
-    /// Charges `patch` to `scope`, evicting the least recently published
-    /// scopes until both limits hold. Returns what the cache must drop before
-    /// the patch is applied. On refusal — the patch cannot fit even after
-    /// every evictable scope is gone — nothing is charged or evicted.
+    #[cfg(test)]
     pub fn reserve(
         &mut self,
         scope: &CatalogRefreshScope,
         patch: &CatalogPatch,
     ) -> Result<Vec<CatalogScope>> {
-        // Keep the high-water mark: list refreshes may retain child details.
+        Ok(self
+            .reserve_owned(None, scope, patch)?
+            .into_iter()
+            .map(|(_, scope)| scope)
+            .collect())
+    }
+
+    pub fn release_owner(&mut self, owner: SessionId) {
+        self.scopes
+            .retain(|(session, _), _| *session != Some(owner));
+    }
+
+    pub fn reserve_for(
+        &mut self,
+        owner: SessionId,
+        scope: &CatalogRefreshScope,
+        patch: &CatalogPatch,
+    ) -> Result<Vec<(SessionId, CatalogScope)>> {
+        Ok(self
+            .reserve_owned(Some(owner), scope, patch)?
+            .into_iter()
+            .filter_map(|(owner, scope)| owner.map(|owner| (owner, scope)))
+            .collect())
+    }
+
+    // Namespaces of different sessions never share charges or eviction targets.
+    fn reserve_owned(
+        &mut self,
+        owner: Option<SessionId>,
+        scope: &CatalogRefreshScope,
+        patch: &CatalogPatch,
+    ) -> Result<Vec<(Option<SessionId>, CatalogScope)>> {
+        let key = (owner, scope.clone());
         let objects = self
             .scopes
-            .get(scope)
+            .get(&key)
             .map_or(0, |held| held.objects)
             .max(patch.object_count());
         let target = anchor(scope);
-        let mut kept: Vec<(&CatalogRefreshScope, &Reservation)> = self
+        let mut kept: Vec<_> = self
             .scopes
             .iter()
-            .filter(|(key, _)| *key != scope)
+            .filter(|(held, _)| *held != &key)
             .collect();
         let mut victims = Vec::new();
         loop {
@@ -54,52 +83,52 @@ impl CatalogBudget {
             if kept.len() < MAX_CATALOG_SCOPES && total <= MAX_CATALOG_OBJECTS {
                 break;
             }
-            // Root carries the tree, and evicting a parent of `scope` would
-            // leave the patch attached to a listing that now looks empty.
             let oldest = kept
                 .iter()
                 .enumerate()
-                .filter(|(_, (key, _))| {
-                    anchor(key).is_some_and(|held| !target.as_ref().is_some_and(|t| held.covers(t)))
+                .filter(|(_, ((session, scope), _))| {
+                    anchor(scope).is_some_and(|held| {
+                        *session != owner
+                            || !target.as_ref().is_some_and(|target| held.covers(target))
+                    })
                 })
                 .min_by_key(|(_, (_, held))| held.used)
                 .map(|(position, _)| position);
             let Some(position) = oldest else {
                 return Err(OxynError::Config(
-                    "catalog cache limit exceeded (1024 scopes, 50000 metadata objects)".to_owned(),
+                    "catalog cache limit exceeded (1024 scopes, 50000 metadata objects)".into(),
                 ));
             };
             let (victim, _) = kept.swap_remove(position);
-            // Its descendants live inside the evicted node and go with it.
-            if let Some(evicted) = anchor(victim) {
-                kept.retain(|(key, _)| !anchor(key).is_some_and(|held| evicted.covers(&held)));
-            }
+            kept.retain(|(key, _)| !covered(victim, key));
             victims.push(victim);
         }
-        let mut evictions = Vec::with_capacity(victims.len());
+        let mut evictions = Vec::new();
         for victim in &victims {
-            let relation_still_held = anchor(victim).is_some_and(|evicted| {
-                target.as_ref() == Some(&evicted)
-                    || kept
-                        .iter()
-                        .any(|(key, _)| anchor(key).as_ref() == Some(&evicted))
+            let relation_still_held = anchor(&victim.1).is_some_and(|evicted| {
+                (victim.0 == owner && target.as_ref() == Some(&evicted))
+                    || kept.iter().any(|(key, _)| {
+                        key.0 == victim.0 && anchor(&key.1).as_ref() == Some(&evicted)
+                    })
             });
-            eviction(victim, relation_still_held, &mut evictions)?;
+            let mut scopes = Vec::new();
+            if anchor(&victim.1).is_none() {
+                scopes.push(CatalogScope::Server);
+            } else {
+                eviction(&victim.1, relation_still_held, &mut scopes)?;
+            }
+            evictions.extend(scopes.into_iter().map(|scope| (victim.0, scope)));
         }
-        let victims: Vec<CatalogRefreshScope> = victims.into_iter().cloned().collect();
+        let victims: Vec<_> = victims.into_iter().cloned().collect();
         drop(kept);
-
         self.scopes.retain(|key, _| {
-            !victims.iter().any(|victim| {
-                victim == key
-                    || anchor(victim)
-                        .zip(anchor(key))
-                        .is_some_and(|(evicted, held)| evicted.covers(&held))
-            })
+            !victims
+                .iter()
+                .any(|victim| victim == key || covered(victim, key))
         });
         self.clock = self.clock.saturating_add(1);
         self.scopes.insert(
-            scope.clone(),
+            key,
             Reservation {
                 objects,
                 used: self.clock,
@@ -107,6 +136,17 @@ impl CatalogBudget {
         );
         Ok(evictions)
     }
+}
+
+fn covered(
+    victim: &(Option<SessionId>, CatalogRefreshScope),
+    key: &(Option<SessionId>, CatalogRefreshScope),
+) -> bool {
+    victim.0 == key.0
+        && match anchor(&victim.1) {
+            None => true,
+            Some(evicted) => anchor(&key.1).is_some_and(|held| evicted.covers(&held)),
+        }
 }
 
 /// The tree node under which a scope's data lives; `None` for `Root`, which

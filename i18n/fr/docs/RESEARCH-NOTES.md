@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="48ba745f136d" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="11389137e40f" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3538,3 +3538,14 @@ seule option corrige l’ouverture en conservant les options VFS et la mémoire
 partagée nommée. Ils refusent aussi la mémoire non partagée et les sources
 temporaires sans nom, et prouvent qu’un fichier supprimé n’est pas recréé.
 Aucune dépendance ne change.
+
+
+## Protocoles d’aperçu sur la session d’origine — vérifiés le 2026-11-13
+
+- PostgreSQL `DECLARE … NO SCROLL CURSOR` se lit par `FETCH` ; terminer la transaction ferme un curseur non conservable. Le client diffuse des fenêtres et annule seulement la transaction de lecture seule qu’il a ouverte. Sources : [DECLARE](https://www.postgresql.org/docs/current/sql-declare.html), [FETCH](https://www.postgresql.org/docs/current/sql-fetch.html), [CLOSE](https://www.postgresql.org/docs/current/sql-close.html).
+- SQLx 0.9.0 n’a pas de multirange `TypType`/`PgTypeKind` dans `sqlx-postgres/src/connection/resolve.rs` et `type_info.rs`. Son Describe préparé ne décode pas `typtype = 'm'` ; la composition d’aperçu demande le texte du serveur pour ces colonnes, comme le repli existant en l’absence de sortie binaire. Le repli en protocole simple de la console reste disponible. Vérifié dans les sources résolues du registre et la [source 0.9.0](https://docs.rs/crate/sqlx-postgres/0.9.0/source/src/connection/resolve.rs).
+- Redshift documente `DECLARE name CURSOR FOR query`, sans l’option PostgreSQL `NO SCROLL`. Il autorise un curseur par session et exige une transaction ; le premier FETCH matérialise le résultat sur le leader, dont le budget dépend du cluster. Oxyn ne matérialise pas ce résultat dans son processus. Sa fenêtre de 200 lignes est sous la limite mononœud documentée. Sources : [DECLARE](https://docs.aws.amazon.com/redshift/latest/dg/declare.html), [FETCH](https://docs.aws.amazon.com/redshift/latest/dg/fetch.html). La validation locale en conteneurs ne comprend pas de déploiement Redshift réel.
+- MySQL `SHOW TABLES` omet les tables temporaires. Des métadonnées SHOW sur la source sont nécessaires lorsqu’une table temporaire masque un homonyme persistant. MySQL et MariaDB interdisent les tables temporaires parentes/enfants de contraintes de clés étrangères. Sources : [limites temporaires](https://dev.mysql.com/doc/refman/8.0/en/temporary-table-problems.html), [clés MySQL](https://dev.mysql.com/doc/refman/8.0/en/create-table-foreign-keys.html), [clés MariaDB](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/optimization-and-indexes/foreign-keys).
+
+- SHOW CREATE VIEW demande SHOW VIEW en plus de SELECT ; l’erreur 1142 est ER_TABLEACCESS_DENIED_ERROR. SHOW CREATE reste la référence pour une table temporaire ; seule cette erreur de permission sur une vue persistante confirmée permet le repli sur information_schema. Sources : [SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.0/en/show-create-view.html), [erreurs serveur](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html).
+- DuckDB expose les variables SQL par `duckdb_variables()`. Leur présence rend un aperçu sur une autre session non reproductible, même sans relation temporaire. Sources : [SET VARIABLE](https://www.duckdb.org/docs/current/sql/statements/set_variable), [fonctions de métadonnées](https://www.duckdb.org/docs/preview/sql/meta/duckdb_table_functions).

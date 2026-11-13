@@ -105,6 +105,7 @@ To locate the boards and their states before implementation, see
 | [0076](adr/0076-unify-sqlite-with-postgres-features.md) | Enable PostgreSQL type features directly while keeping one bundled SQLite (refines 0010) | accepted |
 | [0077](adr/0077-retain-preview-streams-for-native-pagination.md) | Native preview pages retain one bounded cursor and its history, without invented keys or total counts | accepted |
 | [0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md) | Keyless relation pages use bounded retained reads, isolated from catalog sessions | accepted |
+| [0079](adr/0079-retain-temporary-previews-on-their-owning-session.md) | Temporary previews retain their physical owner with explicit occupancy and isolated metadata | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

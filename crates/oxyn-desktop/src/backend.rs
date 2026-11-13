@@ -40,7 +40,7 @@ use tokio::sync::broadcast;
 
 use self::confirm::HostAnswer;
 pub(crate) use self::confirm::{HostConfirm, NativeDialog};
-pub(crate) use self::exit::ExitStep;
+pub(crate) use self::exit::{ExitStep, RunningStatement as SessionUse};
 pub(crate) use self::windows::{CloseStep, WindowKey};
 use crate::credentials::KeyringCredentials;
 use crate::ipc::consoles::ConsoleSession;

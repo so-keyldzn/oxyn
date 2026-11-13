@@ -55,6 +55,8 @@ mod interrupt;
 pub mod logical;
 mod open;
 pub mod options;
+#[cfg(test)]
+mod original_preview_tests;
 mod params;
 mod preview;
 mod preview_context;

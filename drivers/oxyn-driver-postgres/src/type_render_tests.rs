@@ -314,6 +314,11 @@ async fn the_fallback_refuses_bound_parameters_by_name() {
     let Some(session) = session().await else {
         return;
     };
+    apply(
+        &*session,
+        "CREATE TEMP TABLE oxyn_fallback_owner AS SELECT pg_backend_pid() AS pid",
+    )
+    .await;
     let request = read("SELECT int4multirange(int4range($1::int, 5))")
         .with_params(vec![oxyn_core::ScalarValue::Int64(1)]);
     let refusal = match session.execute(request, &CancelToken::new()).await {
@@ -324,6 +329,24 @@ async fn the_fallback_refuses_bound_parameters_by_name() {
         refusal.to_string().contains("cast that column to `text`"),
         "{refusal}"
     );
+    let mut sentinel = session
+        .execute(
+            read("SELECT pid = pg_backend_pid() FROM oxyn_fallback_owner"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("refusing a fallback keeps temporary state");
+    let batch = sentinel
+        .next_batch()
+        .await
+        .expect("sentinel")
+        .expect("owner row");
+    assert!(
+        batch.column(0).as_boolean().value(0),
+        "physical owner unchanged"
+    );
+    assert!(sentinel.next_batch().await.expect("complete").is_none());
+    drop(sentinel);
     session.close().await.expect("close");
 }
 
@@ -394,7 +417,8 @@ async fn cancelling_a_fallback_stops_it_on_the_server() {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let mut remaining = session
+    let observer = self::session().await.expect("configured observer");
+    let mut remaining = observer
         .execute(
             read(
                 "SELECT count(*)::int FROM pg_stat_activity \
@@ -414,5 +438,6 @@ async fn cancelling_a_fallback_stops_it_on_the_server() {
         0,
         "no pg_sleep left running on the server"
     );
+    observer.close().await.expect("observer close");
     session.close().await.expect("close");
 }

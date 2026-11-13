@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="803aa3381bf8" -->
+<!-- oxyn-translation source="docs/README.md" sha256="459ebf2cb7fe" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -109,6 +109,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0076](adr/0076-unify-sqlite-with-postgres-features.md) | Activer directement les types PostgreSQL tout en gardant un seul SQLite embarqué (précise 0010) | accepté |
 | [0077](adr/0077-retain-preview-streams-for-native-pagination.md) | Les pages natives conservent un curseur borné et son historique, sans clé inventée ni comptage global | accepté |
 | [0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md) | Les pages sans clé utilisent des lectures conservées bornées, isolées du catalogue | accepté |
+| [0079](adr/0079-retain-temporary-previews-on-their-owning-session.md) | Les aperçus temporaires gardent leur propriétaire physique avec occupation explicite et métadonnées isolées | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

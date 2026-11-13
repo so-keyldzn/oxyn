@@ -37,10 +37,11 @@ export function useCatalogCopies(open: OpenConnection) {
   // The facets the object view reads, with `facet` loaded through the bus
   // when it never was (I-01), and written back under that view's key.
   const facetsWith = async (node: CatalogNode, facet: RelationFacet) => {
-    const key = facetsKey(open.connection, node.address)
+    const key = facetsKey(open.connection, node.address, open.session)
     const cached = await queryClient.fetchQuery({
       queryKey: key,
-      queryFn: () => metadata.relationFacets(open.connection, node.address),
+      queryFn: () =>
+        metadata.relationFacets(open.connection, node.address, open.session),
     })
     if (cached[facet].freshness.state === "fetched") return cached
     const outcome = await metadata.refreshRelationFacet(
@@ -63,7 +64,11 @@ export function useCatalogCopies(open: OpenConnection) {
         )
       default:
     }
-    const read = await metadata.relationFacets(open.connection, node.address)
+    const read = await metadata.relationFacets(
+      open.connection,
+      node.address,
+      open.session
+    )
     queryClient.setQueryData(key, read)
     return read
   }
@@ -79,14 +84,19 @@ export function useCatalogCopies(open: OpenConnection) {
       return definition.sql
     }
     if (form === "insertTemplate") await facetsWith(node, "detail")
-    return metadata.composeObjectSql(open.connection, node.address, form)
+    return metadata.composeObjectSql(
+      open.connection,
+      node.address,
+      form,
+      open.session
+    )
   }
 
   return {
     copyName: (node: CatalogNode) =>
       void copyToClipboard(
         metadata
-          .relationFacets(open.connection, node.address)
+          .relationFacets(open.connection, node.address, open.session)
           .then((facets) => facets.qualifiedName),
         "Qualified name"
       ),

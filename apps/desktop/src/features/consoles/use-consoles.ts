@@ -1,3 +1,4 @@
+import { previews } from "@/features/metadata/preview-state"
 import * as React from "react"
 import { useSelector } from "@tanstack/react-store"
 
@@ -342,6 +343,7 @@ export function useConsoles({
     setClosedConsoles((all) => [...all, reopenable].slice(-MAX_REOPENABLE))
     // The session goes with the console; siblings and the catalog keep theirs.
     if (entry.session) {
+      previews.closeSessions([entry.session.session])
       void consoles
         .close(open.connection, entry.session.session)
         .catch(() => undefined)
@@ -645,6 +647,8 @@ export function useConsoles({
       setNotice(failure(error))
       return
     }
+    // The data tabs of this source stay in the old window and release their rows.
+    previews.closeSessions([entry.session.session])
     // Gone from here without closing: its session now belongs to the new
     // window, and this view's hold on the result is released as it unmounts.
     forgetSession(entry.session.session)

@@ -179,3 +179,31 @@ describe("the loaded object a name resolves to", () => {
     expect(loadedObject(tree, [{ text: "pg_stat", quoted: false }])).toBeNull()
   })
 })
+
+it("does not hide a temporary namespace when resolving a session's homonyms", () => {
+  const temporary = node(
+    "temp",
+    { catalog: null, namespace: "temp", relation: null },
+    [relation("temp", "items")],
+    true
+  )
+  const source = [
+    node("main", { catalog: null, namespace: "main", relation: null }, [
+      relation("main", "items"),
+    ]),
+    temporary,
+  ]
+  expect(
+    loadedObject(source, [{ text: "items", quoted: false }], true)
+  ).toBeNull()
+  expect(
+    loadedObject(
+      source,
+      [
+        { text: "temp", quoted: false },
+        { text: "items", quoted: false },
+      ],
+      true
+    )
+  ).toEqual({ catalog: null, namespace: "temp", relation: "items" })
+})

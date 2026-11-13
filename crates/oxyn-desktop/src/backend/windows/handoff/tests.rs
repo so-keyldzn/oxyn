@@ -228,6 +228,45 @@ fn nothing_runs_on_a_console_while_it_moves() {
     assert!(consoles.run_on(session).is_ok(), "a refused move frees it");
 }
 
+#[test]
+fn ownership_cannot_move_during_a_checked_console_operation() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let source = backend.reserve_window(true).expect("source");
+    let (connection, session) = opened(&runtime, &backend, source);
+    let target = backend.reserve_window(false).expect("target");
+    let using = backend
+        .inner
+        .workbench
+        .consoles
+        .run_on(session)
+        .expect("operation reservation");
+    backend
+        .inner
+        .windows
+        .check_session(source, session)
+        .expect("owner checked under reservation");
+    assert!(
+        runtime
+            .block_on(backend.hand_off(source, target, console(connection, session, None)))
+            .is_err()
+    );
+    assert!(backend.inner.windows.check_session(source, session).is_ok());
+    drop(using);
+    runtime
+        .block_on(backend.hand_off(source, target, console(connection, session, None)))
+        .expect("idle transfer");
+    assert!(
+        backend
+            .inner
+            .windows
+            .check_session(source, session)
+            .is_err()
+    );
+    assert!(backend.inner.windows.check_session(target, session).is_ok());
+}
+
 /// The console leaves the source's line for the target's: the next launch
 /// reopens it in one window, not as a copy no window claims.
 #[test]

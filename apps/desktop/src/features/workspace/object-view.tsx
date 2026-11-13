@@ -87,6 +87,7 @@ export type ObjectViewHandle = {
  */
 export function ObjectView({
   open,
+  sessionScoped = false,
   node,
   active,
   initialTab,
@@ -100,6 +101,7 @@ export function ObjectView({
   onDefinitionWidthChange,
 }: {
   open: OpenConnection
+  sessionScoped?: boolean
   node: CatalogNode
   /**
    * On screen: the active tab of a visible workspace. Kept mounted behind
@@ -179,13 +181,16 @@ export function ObjectView({
       restoredAt?.direction ??
       (unsupportedReason(open, "incoming") ? "outgoing" : "incoming")
   )
-  const source = `preview:${open.connection}:${addressKey(node.address)}`
+  const source = `preview:${open.connection}:${open.session}:${addressKey(node.address)}`
   const facets = useRelationFacets(open, node.address)
   const detailFreshness = facets.facets?.detail.freshness
+  const metadataReady = detailFreshness?.state === "fetched"
   const preview = usePreview({
     open,
     address: node.address,
     enabled: previewable,
+    ready: metadataReady,
+    rememberShape: !sessionScoped,
     visible: active && tab === "data" && !held,
     described:
       detailFreshness?.state === "fetched"
@@ -213,16 +218,21 @@ export function ObjectView({
   }
 
   React.useEffect(() => {
-    inspectObject({ connection: open.connection, address: node.address })
+    inspectObject({
+      connection: open.connection,
+      session: open.session,
+      address: node.address,
+    })
     return () => {
       const shown = inspection.state.object
       if (
         shown?.connection === open.connection &&
+        shown.session === open.session &&
         addressKey(shown.address) === addressKey(node.address)
       )
         inspectObject(null)
     }
-  }, [open.connection, node.address])
+  }, [open.connection, open.session, node.address])
   useReleaseSelection(source)
 
   const { ensure } = facets
@@ -262,7 +272,11 @@ export function ObjectView({
   // A read on a new session — the connection reopened with the module
   // enabled — replaces this state, and the controls come back with it.
   const moduleMissing =
-    state.status === "error" && state.missingModule ? state.missingModule : null
+    state.status === "error" && state.missingModule
+      ? state.missingModule
+      : facets.loads.detail.status === "error"
+        ? (facets.loads.detail.missingModule ?? null)
+        : null
   // A read that failed because the connection lacks the engine module the
   // table needs: explained rather than shown raw (docs/UX-SPEC.md). Only that
   // failure, as the backend names it — any other is shown as it came.
@@ -311,7 +325,8 @@ export function ObjectView({
           node.address,
           incoming,
           index,
-          selected ? { result: selected.result, row: selected.row } : null
+          selected ? { result: selected.result, row: selected.row } : null,
+          open.session
         )
         if (query)
           onOpenInConsole(query.sql, "Related rows.sql", {
@@ -403,7 +418,9 @@ export function ObjectView({
             cancelling={preview.cancelling}
             onRefresh={() => {
               setHeld(false)
-              preview.refresh()
+              if (metadataReady || preview.status !== "initial")
+                preview.refresh()
+              else void facets.refresh("detail")
             }}
             onCancel={preview.cancel}
           />
@@ -434,109 +451,135 @@ export function ObjectView({
         </>
       }
       panels={{
-        data: previewable ? (
-          <>
-            {moduleMissing ? null : (
-              <PreviewControls
-                canFilter={open.capabilities.includes("PREVIEW_FILTER")}
-                canSort={sortable}
-                columns={
-                  data?.detail.value?.fields.map((field) => field.name) ?? null
-                }
-                applied={preview.applied}
-                reshaped={preview.reshaped}
-                status={preview.status}
-                pagination={preview.pagination}
-                loadingColumns={detailLoad.status === "loading"}
-                onApplyPredicate={preview.applyPredicate}
-                onApplySort={preview.applySort}
-                onCancel={preview.cancel}
-                onLoadColumns={() => void facets.refresh("detail")}
-                filterRef={filterRef}
-                sortOpen={sortOpen}
-                onSortOpenChange={setSortOpen}
-              />
-            )}
-            {preview.approvalRefused ? (
-              <Alert className="rounded-none border-x-0 border-t-0 py-2">
-                <AlertTitle>Preview not read</AlertTitle>
-                <AlertDescription>
-                  This connection&apos;s policy requires an explicit approval
-                  for this read. Run it from a SQL console instead.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            <div className="min-h-0 flex-1">
-              {moduleMissing && state.status === "error" ? (
-                explainMissing(moduleMissing, state.message)
-              ) : (
-                <ResultPanel
-                  state={state}
-                  initialHint="Refresh data reads the first rows of this object."
-                  fetchPage={fetchPage}
+        data:
+          previewable &&
+          !metadataReady &&
+          !held &&
+          preview.status === "initial" &&
+          !moduleMissing ? (
+            <FacetFrame
+              label="object columns"
+              freshness={detailFreshness ?? { state: "never" }}
+              load={facets.loads.detail}
+              unsupported={null}
+              hasValue={false}
+              empty={false}
+              emptyText="No columns reported for this object."
+              onRefresh={() => void facets.refresh("detail")}
+              onCancel={() => facets.cancel("detail")}
+            >
+              {null}
+            </FacetFrame>
+          ) : previewable ? (
+            <>
+              {moduleMissing ? null : (
+                <PreviewControls
+                  canFilter={open.capabilities.includes("PREVIEW_FILTER")}
+                  canSort={sortable}
+                  columns={
+                    data?.detail.value?.fields.map((field) => field.name) ??
+                    null
+                  }
+                  applied={preview.applied}
+                  reshaped={preview.reshaped}
+                  status={preview.status}
+                  pagination={preview.pagination}
+                  loadingColumns={detailLoad.status === "loading"}
+                  onApplyPredicate={preview.applyPredicate}
+                  onApplySort={preview.applySort}
                   onCancel={preview.cancel}
-                  onRetry={preview.refresh}
-                  context={{ connectionName: open.name, statement: null }}
-                  footerNote={previewFooterNote(
-                    preview.pagination,
-                    state.status === "populated" ? state.rows : 0
-                  )}
-                  density={density}
-                  gridMenu={gridMenu}
-                  // Compact: the export sits in `Actions`, and the footer shows
-                  // only a running export's progress and its Cancel.
-                  footerActions={
-                    <>
-                      {preview.pagination?.type === "needsOrder" && sortable ? (
-                        <SortToBrowsePages onClick={() => setSortOpen(true)} />
-                      ) : null}
-                      {!compact || exporter.state.status === "exporting"
-                        ? exportMenu
-                        : null}
-                    </>
-                  }
-                  compactActions={
-                    compact ? (
-                      <>
-                        <ExportSubmenu
-                          {...exportChoice}
-                          exporting={exporter.state.status === "exporting"}
-                          onExport={exporter.run}
-                        />
-                        <DropdownMenuItem
-                          disabled={!selected || !onInspectRow}
-                          onClick={onInspectRow}
-                        >
-                          <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
-                          Inspect row
-                        </DropdownMenuItem>
-                      </>
-                    ) : undefined
-                  }
-                  {...gridInspection({
-                    source,
-                    open,
-                    result,
-                    columns: state.status === "populated" ? state.columns : [],
-                  })}
+                  onLoadColumns={() => void facets.refresh("detail")}
+                  filterRef={filterRef}
+                  sortOpen={sortOpen}
+                  onSortOpenChange={setSortOpen}
                 />
               )}
-            </div>
-            {!moduleMissing ? (
-              <PreviewPagination
-                applied={preview.applied}
-                pagination={preview.pagination}
-                error={preview.paginationError}
-                onRetry={preview.retryPagination}
-                status={preview.status}
-                rows={state.status === "populated" ? state.rows : null}
-                onPage={preview.page}
-                onPageSize={preview.resizePage}
-              />
-            ) : null}
-            <ValueInspectionDialog source={source} />
-          </>
-        ) : null,
+              {preview.approvalRefused ? (
+                <Alert className="rounded-none border-x-0 border-t-0 py-2">
+                  <AlertTitle>Preview not read</AlertTitle>
+                  <AlertDescription>
+                    This connection&apos;s policy requires an explicit approval
+                    for this read. Run it from a SQL console instead.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="min-h-0 flex-1">
+                {moduleMissing && state.status === "error" ? (
+                  explainMissing(moduleMissing, state.message)
+                ) : moduleMissing && detailLoad.status === "error" ? (
+                  explainMissing(moduleMissing, detailLoad.message)
+                ) : (
+                  <ResultPanel
+                    state={state}
+                    initialHint="Refresh data reads the first rows of this object."
+                    fetchPage={fetchPage}
+                    onCancel={preview.cancel}
+                    onRetry={preview.refresh}
+                    context={{ connectionName: open.name, statement: null }}
+                    footerNote={previewFooterNote(
+                      preview.pagination,
+                      state.status === "populated" ? state.rows : 0
+                    )}
+                    density={density}
+                    gridMenu={gridMenu}
+                    // Compact: the export sits in `Actions`, and the footer shows
+                    // only a running export's progress and its Cancel.
+                    footerActions={
+                      <>
+                        {preview.pagination?.type === "needsOrder" &&
+                        sortable ? (
+                          <SortToBrowsePages
+                            onClick={() => setSortOpen(true)}
+                          />
+                        ) : null}
+                        {!compact || exporter.state.status === "exporting"
+                          ? exportMenu
+                          : null}
+                      </>
+                    }
+                    compactActions={
+                      compact ? (
+                        <>
+                          <ExportSubmenu
+                            {...exportChoice}
+                            exporting={exporter.state.status === "exporting"}
+                            onExport={exporter.run}
+                          />
+                          <DropdownMenuItem
+                            disabled={!selected || !onInspectRow}
+                            onClick={onInspectRow}
+                          >
+                            <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                            Inspect row
+                          </DropdownMenuItem>
+                        </>
+                      ) : undefined
+                    }
+                    {...gridInspection({
+                      source,
+                      open,
+                      result,
+                      columns:
+                        state.status === "populated" ? state.columns : [],
+                    })}
+                  />
+                )}
+              </div>
+              {!moduleMissing ? (
+                <PreviewPagination
+                  applied={preview.applied}
+                  pagination={preview.pagination}
+                  error={preview.paginationError}
+                  onRetry={preview.retryPagination}
+                  status={preview.status}
+                  rows={state.status === "populated" ? state.rows : null}
+                  onPage={preview.page}
+                  onPageSize={preview.resizePage}
+                />
+              ) : null}
+              <ValueInspectionDialog source={source} />
+            </>
+          ) : null,
 
         structure:
           detailLoad.status === "error" && detailLoad.missingModule ? (
@@ -556,7 +599,12 @@ export function ObjectView({
               <RelationStructure
                 detail={data.detail.value}
                 renameColumn={{
-                  offer: operationOffer("rename", node, open.capabilities),
+                  offer: sessionScoped
+                    ? {
+                        state: "greyed",
+                        reason: "Manage this object from its owning console",
+                      }
+                    : operationOffer("rename", node, open.capabilities),
                   onRename: (column) =>
                     columnOperation.start(node, "rename", column),
                 }}

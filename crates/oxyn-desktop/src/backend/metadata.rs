@@ -10,6 +10,7 @@
 //! the dialect and never executed by this module
 //! ([I-10](../../../../CLAUDE.md#i-10)).
 
+#[cfg(test)]
 use oxyn_catalog::model::Relation;
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, SearchOptions, quote_identifier};
 use oxyn_core::{
@@ -29,6 +30,8 @@ use crate::ipc::metadata::{
     parameter_placeholder,
 };
 use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, RelationDetail};
+
+mod session;
 
 /// Results one catalog search returns, the catalog tree's bound.
 pub const SEARCH_LIMIT: usize = 200;
@@ -57,7 +60,8 @@ impl Backend {
             .clone()
             .ok_or_else(|| IpcError::invalid("A preview needs a relation"))?;
         let path = address.to_path()?;
-        let described = self.described_relation(connection, &path);
+        let cache = self.catalog_for(connection, Some(session))?;
+        let described = cache.read().relation(&path).cloned();
         let page_size = shape.page_size;
         let shape = shape.into_shape(described.as_ref())?;
         self.run(
@@ -81,16 +85,32 @@ impl Backend {
     ///
     /// # Errors
     /// An invalid address, or a connection without a catalog cache.
-    pub fn preview_pagination(
+    pub fn preview_pagination_for_session(
         &self,
         connection: ConnectionId,
         address: &CatalogAddress,
         applied: &PreviewShapeDraft,
         rows: u64,
+        owner: Option<SessionId>,
+        result: Option<oxyn_core::ResultId>,
     ) -> Result<Pagination, IpcError> {
         let page_size = applied.checked_page_size()?;
         let path = address.to_path()?;
-        let relation = self.described_relation(connection, &path);
+        let cache = self.catalog_for(connection, owner)?;
+        if let (Some(owner), Some(result)) = (owner, result)
+            && self
+                .inner
+                .executor
+                .retains_preview_result(connection, owner, result, &path)
+                .map_err(IpcError::from)?
+        {
+            return Ok(Pagination::Retained {
+                previous: applied.offset > 0,
+                next: rows >= u64::from(page_size),
+                first_row: applied.offset.saturating_add(1),
+            });
+        }
+        let relation = cache.read().relation(&path).cloned();
         // Only what decides the order is carried over: the columns of the
         // sort and the page. Validation belongs to the read, not to the
         // question « may I offer a page ».
@@ -122,9 +142,18 @@ impl Backend {
     ) -> Result<CommandOutcome, IpcError> {
         let capabilities = self.session_capabilities(session)?;
         let path = address.as_ref().map(CatalogAddress::to_path).transpose()?;
+        let command = catalog::refresh_command(connection, path.as_ref(), capabilities);
+        let scope = match command {
+            Command::RefreshCatalogScope { scope, .. } => scope,
+            _ => CatalogRefreshScope::Root,
+        };
         self.run(
             id,
-            catalog::refresh_command(connection, path.as_ref(), capabilities),
+            Command::RefreshSessionCatalog {
+                connection,
+                session,
+                scope,
+            },
         )
         .await
     }
@@ -176,20 +205,31 @@ impl Backend {
                 relation,
             },
         };
-        self.run(id, Command::RefreshCatalogScope { connection, scope })
-            .await
+        self.run(
+            id,
+            Command::RefreshSessionCatalog {
+                connection,
+                session,
+                scope,
+            },
+        )
+        .await
     }
 
     /// The catalog tree as the cache holds it now.
-    pub fn catalog_tree(&self, connection: ConnectionId) -> Result<Vec<CatalogNode>, IpcError> {
-        let cache = self.catalog_cache(connection)?;
+    pub fn catalog_tree_for_session(
+        &self,
+        connection: ConnectionId,
+        owner: Option<SessionId>,
+    ) -> Result<Vec<CatalogNode>, IpcError> {
+        let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         Ok(catalog::tree(&cache))
     }
 
     /// What the editor's completion reads of the cache, in one pass.
     ///
-    /// A cache read like [`Self::catalog_tree`], and nothing more: no driver,
+    /// A cache read like [`Self::catalog_tree_for_session`], and nothing more: no driver,
     /// no round trip. What the cache lacks is read by the bus, in bounded
     /// passes ([ADR-0057](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
     pub fn completion_catalog(
@@ -204,13 +244,14 @@ impl Backend {
     }
 
     /// A relation's structure, if it has been loaded.
-    pub fn relation_detail(
+    pub fn relation_detail_for_session(
         &self,
         connection: ConnectionId,
         address: &CatalogAddress,
+        owner: Option<SessionId>,
     ) -> Result<Option<RelationDetail>, IpcError> {
         let path = address.to_path()?;
-        let cache = self.catalog_cache(connection)?;
+        let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         Ok(catalog::relation_detail(&cache, &path))
     }
@@ -219,10 +260,11 @@ impl Backend {
     ///
     /// Reads nothing from the server: a facet never loaded comes back
     /// `never`, and the tab that shows it asks for it.
-    pub fn relation_facets(
+    pub fn relation_facets_for_session(
         &self,
         connection: ConnectionId,
         address: &CatalogAddress,
+        owner: Option<SessionId>,
     ) -> Result<RelationFacets, IpcError> {
         let path = address.to_path()?;
         if path.relation().is_none() {
@@ -231,7 +273,7 @@ impl Backend {
         let config = self.config(connection)?;
         let dialect = oxyn_query::dialect_for(&config.driver);
         let language = self.language_of(&config.driver);
-        let cache = self.catalog_cache(connection)?;
+        let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         let mut facets = facets(&cache, &path, dialect);
         if let Some(name) = console_name(&path, language) {
@@ -243,15 +285,16 @@ impl Backend {
     /// Relations among what is already loaded whose name, columns or comment
     /// match. Never introspects: the front says the search covers loaded
     /// objects only.
-    pub fn search_catalog(
+    pub fn search_catalog_for_session(
         &self,
         connection: ConnectionId,
         query: &str,
+        owner: Option<SessionId>,
     ) -> Result<Vec<CatalogSearchHit>, IpcError> {
         if query.len() > MAX_SEARCH_BYTES {
             return Err(IpcError::invalid("This search text is too long"));
         }
-        let cache = self.catalog_cache(connection)?;
+        let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         let options = SearchOptions::default().with_limit(SEARCH_LIMIT);
         Ok(oxyn_catalog::search(&cache, query, &options)
@@ -273,17 +316,24 @@ impl Backend {
     /// string would not be the stored one. Values are bound, never written
     /// into the SQL ([I-10](../../../../CLAUDE.md#i-10)), and a row whose key
     /// column is absent becomes `IS NULL`, which `= ?` would never match.
-    pub fn related_rows_template(
+    pub fn related_rows_template_for_session(
         &self,
         connection: ConnectionId,
         address: &CatalogAddress,
         incoming: bool,
         index: usize,
         source: Option<RelatedRowsSource>,
+        owner: Option<SessionId>,
     ) -> Result<Option<RelatedRowsQuery>, IpcError> {
+        if let Some(source) = &source {
+            self.inner
+                .executor
+                .result_on(connection, source.result)
+                .map_err(IpcError::from)?;
+        }
         let path = address.to_path()?;
         let dialect = self.dialect_of(connection)?;
-        let cache = self.catalog_cache(connection)?;
+        let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         let key: Option<(CatalogPath, Vec<String>, Vec<String>)> = if incoming {
             cache
@@ -307,7 +357,7 @@ impl Backend {
         };
         drop(cache);
         let conditions = source
-            .and_then(|source| self.key_values(source, &value_columns))
+            .and_then(|source| self.key_values(connection, source, &value_columns))
             .unwrap_or_else(|| vec![Condition::Open; fields.len()]);
         Ok(related_rows_query(&holder, &fields, dialect, &conditions))
     }
@@ -317,11 +367,12 @@ impl Backend {
     /// Reads the store (the dialect) and the catalog cache, never the server:
     /// an `INSERT` template whose columns were never read is refused, not
     /// guessed. Call off the runtime worker.
-    pub fn compose_object_sql(
+    pub fn compose_object_sql_for_session(
         &self,
         connection: ConnectionId,
         address: &CatalogAddress,
         form: ObjectSqlForm,
+        owner: Option<SessionId>,
     ) -> Result<String, IpcError> {
         let path = address.to_path()?;
         if path.relation().is_none() {
@@ -340,7 +391,7 @@ impl Backend {
         let dialect = oxyn_query::dialect_for(&config.driver);
         let columns = match form {
             ObjectSqlForm::InsertTemplate => {
-                let cache = self.catalog_cache(connection)?;
+                let cache = self.catalog_for(connection, owner)?;
                 let cache = cache.read();
                 let relation = cache.relation(&path).ok_or_else(|| {
                     IpcError::invalid(
@@ -364,8 +415,17 @@ impl Backend {
     /// column is not in it, or one value has no type a parameter carries:
     /// the template then keeps its placeholders, rather than binding some
     /// values to the wrong positions.
-    fn key_values(&self, source: RelatedRowsSource, columns: &[String]) -> Option<Vec<Condition>> {
-        let buffer = self.inner.executor.result(source.result)?;
+    fn key_values(
+        &self,
+        connection: ConnectionId,
+        source: RelatedRowsSource,
+        columns: &[String],
+    ) -> Option<Vec<Condition>> {
+        let buffer = self
+            .inner
+            .executor
+            .result_on(connection, source.result)
+            .ok()??;
         let schema = buffer.schema();
         let indexes: Vec<usize> = columns
             .iter()
@@ -407,6 +467,7 @@ impl Backend {
     }
 
     /// The relation's description, when the cache holds one.
+    #[cfg(test)]
     fn described_relation(&self, connection: ConnectionId, path: &CatalogPath) -> Option<Relation> {
         let cache = self.inner.executor.catalog(connection)?;
         let cache = cache.read();

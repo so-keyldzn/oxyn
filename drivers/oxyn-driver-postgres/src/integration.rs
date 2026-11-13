@@ -34,9 +34,9 @@
 //!
 //! The session context ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md))
 //! adds a third of the same kind: `search_path` is a **per-connection** state,
-//! and an Oxyn session is a pool of four. These tests therefore saturate the
-//! pool and record `pg_backend_pid()` inside the execution itself — a test that
-//! exercised only one connection would be green without proving anything.
+//! retained on one physical backend (ADR-0079). These tests record
+//! `pg_backend_pid()` inside the execution itself to prove that context reset
+//! reuses the original backend rather than silently opening a fresh one.
 
 use std::time::Duration;
 
@@ -707,18 +707,12 @@ async fn cancellation_really_stops_the_query_server_side() {
     drop(cursor);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let mut remaining = session
-        .execute(
-            read_request(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE query LIKE '%pg_sleep%' AND state = 'active' AND pid <> pg_backend_pid()",
-            ),
-            &CancelToken::new(),
-        )
-        .await
-        .expect("execution");
-    let (rows, _) = drain(&mut remaining).await;
-    assert_eq!(rows, 1, "one count row");
+    assert_lost_session(&*session).await;
+    let observer = self::session().await.expect("configured observer");
+    assert_eq!(first_text(&*observer,
+        "SELECT count(*)::text FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND state = 'active' AND pid <> pg_backend_pid()"
+    ).await, "0", "no query remains active on the server");
+    observer.close().await.expect("observer close");
 
     session.close().await.expect("close");
 }
@@ -731,15 +725,22 @@ async fn closing_a_cursor_stops_the_query_without_being_asked() {
     let Some(session) = session().await else {
         return;
     };
+    session.close().await.expect("initial close");
     for _ in 0..10 {
+        let session = self::session().await.expect("new tab session");
         let cursor = session
             .execute(read_request("SELECT pg_sleep(30)"), &CancelToken::new())
             .await
             .expect("execution");
         drop(cursor);
+        assert_lost_session(&*session).await;
+        session.close().await.expect("tab close");
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
 
+    let session = self::session()
+        .await
+        .expect("new connection after closed tabs");
     let mut cursor = session
         .execute(read_request("SELECT 1"), &CancelToken::new())
         .await
@@ -978,10 +979,10 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
         count == "0" || count == WRITTEN.to_string(),
         "a write is atomic: {count} rows"
     );
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
+    apply(witness.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
-    apply(session.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     session.close().await.expect("close");
 }
 
@@ -1071,9 +1072,9 @@ async fn a_long_write_without_returning_stopped_mid_run_is_cancelled_and_changes
     )
     .await;
     assert_eq!(touched, "0", "a cancelled write changed the table");
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_stopped_write").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP TABLE oxyn_stopped_write").await;
     session.close().await.expect("close");
 }
 
@@ -1170,10 +1171,10 @@ async fn a_call_stopped_after_its_procedure_committed_is_not_cancelled() {
         "1",
         "the row the procedure committed before the stop is there"
     );
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP PROCEDURE oxyn_commits_then_waits").await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_call_log").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP PROCEDURE oxyn_commits_then_waits").await;
-    apply(session.as_ref(), "DROP TABLE oxyn_call_log").await;
     session.close().await.expect("close");
 }
 
@@ -1202,8 +1203,9 @@ async fn a_stop_racing_the_commit_never_reports_a_write_that_ran_as_cancelled() 
                 .await
                 .parse()
                 .expect("a counter");
+            let trial = self::session().await.expect("fresh stop-race session");
             let token = CancelToken::new();
-            let mut cursor = session
+            let mut cursor = trial
                 .execute(write_request("UPDATE oxyn_stop_race SET n = n + 1"), &token)
                 .await
                 .expect("execution");
@@ -1218,6 +1220,7 @@ async fn a_stop_racing_the_commit_never_reports_a_write_that_ran_as_cancelled() 
                 .parse()
                 .expect("a counter");
 
+            trial.close().await.expect("trial close");
             let context = format!("round {round}, stop after {delay_us} us");
             match issue {
                 Err(error) if error.is_cancelled() => {
@@ -1746,12 +1749,9 @@ fn resolution_query(name: &str) -> String {
 /// The query must return `value@pid` in its first column, and enough rows to
 /// keep its connection busy — see [`MARKER_QUERY`].
 ///
-/// The four executions are alive at the same time: `execute` holds its
-/// connection from start to end and the cursor channel is bounded to one batch,
-/// so until we drain, each cursor ties one up. The pool has four
-/// ([`MAX_CONNECTIONS`]), so all four are exercised. The final drain leaves
-/// them healthy: a dropped cursor leaves unread bytes, its connection is
-/// closed, and the next call would not find the same ones.
+/// `execute` holds its physical connection through the bounded cursor. The
+/// final drain leaves it healthy, so the next operation must reuse its PID.
+/// [`MAX_CONNECTIONS`] is one since ADR-0079; the helper keeps that bound explicit.
 async fn on_whole_pool(
     session: &dyn Session,
     sql: &str,
@@ -1846,14 +1846,8 @@ async fn the_resolution_path_is_the_servers_default_whatever_a_console_declared(
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn the_context_applies_to_every_connection_of_the_pool() {
-    // The test that decides the design (ADR-0019). An Oxyn PostgreSQL session
-    // is a pool of four connections and `search_path` is a **per-connection**
-    // state: a `SET` issued once would only apply to the connection that
-    // received it, and every other query would resolve in another schema with
-    // nothing to signal it. That is the worst possible outcome — a control that
-    // looks like it works —, and the fixture is built to make it visible:
-    // `shared_target` exists in both schemas, with a different marker. A wrong
-    // resolution returns `b`, not an error.
+    // Context is physical state. The homonyms return different markers, so a
+    // wrong namespace would silently return different data rather than an error.
     let Some(session) = session().await else {
         return;
     };
@@ -1866,8 +1860,8 @@ async fn the_context_applies_to_every_connection_of_the_pool() {
     let seen_count = on_whole_pool(&*session, MARKER_QUERY).await;
     assert_eq!(
         seen_count.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({seen_count:?}): \
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection ({seen_count:?}): \
          it then proves nothing about per-connection state"
     );
     for (process, marker) in &seen_count {
@@ -1955,8 +1949,8 @@ async fn going_back_to_the_default_undoes_the_context_on_the_connection_that_car
     let sub_context = on_whole_pool(&*session, &resolution_query(SHARED_TABLE)).await;
     assert_eq!(
         sub_context.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections: {sub_context:?}"
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection: {sub_context:?}"
     );
     assert!(
         sub_context.values().all(|seen| seen == SHARED_TABLE),
@@ -2367,36 +2361,22 @@ async fn introspection_does_not_depend_on_a_console_context() {
         .await
         .expect("the context must be accepted");
 
-    // The four pool connections carried the `SET`, then gave it back.
+    // The physical backend carried the `SET`, then restored the default.
     let seen_count = on_whole_pool(&*session, DEFINED_QUERY).await;
     assert_eq!(
         seen_count.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({seen_count:?}): \
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection ({seen_count:?}): \
          it then proves nothing about what the pool keeps"
     );
 
-    // The hardest case, and it is **deterministic**: the pool is capped at
-    // four, all four just served an execution under a context, and three stay
-    // tied up by live cursors. Introspection can therefore only borrow a
-    // recycled connection — it has no choice.
-    let mut held = Vec::new();
-    for _ in 1..MAX_CONNECTIONS {
-        held.push(
-            session
-                .execute(read_request(DEFINED_QUERY), &CancelToken::new())
-                .await
-                .expect("execution"),
-        );
-    }
+    // One physical backend makes reuse deterministic without occupying siblings.
     assert_eq!(
         definition_fingerprint(&*session, &path).await,
         reference,
         "introspection followed the console context"
     );
-    drop(held);
-
-    // Then alternating, to cover the connections as the pool rotates them.
+    // Alternate execution and introspection to catch a leaking context reset.
     for round in 0..4 {
         let _ = on_whole_pool(&*session, DEFINED_QUERY).await;
         assert_eq!(
@@ -2895,4 +2875,21 @@ async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement()
     apply(&*session, "DROP TABLE oxyn_preview_page").await;
     apply(&*session, "DROP TABLE oxyn_preview_witness").await;
     session.close().await.expect("close");
+}
+
+#[path = "original_preview_tests.rs"]
+mod original_previews;
+
+/// Losing physical ownership is explicit; reconnecting must create a new logical session.
+async fn assert_lost_session(session: &dyn Session) {
+    let issue = tokio::time::timeout(
+        Duration::from_secs(10),
+        session.execute(read_request("SELECT 1"), &CancelToken::new()),
+    )
+    .await
+    .expect("lost session refuses promptly");
+    assert!(
+        matches!(issue, Err(OxynError::Config(_))),
+        "no silent replacement backend"
+    );
 }

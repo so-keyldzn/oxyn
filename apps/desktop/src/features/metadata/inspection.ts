@@ -28,7 +28,11 @@ export interface InspectedValue {
 
 export interface InspectionState {
   /** The relation the object view shows, for the object inspector. */
-  object: { connection: string; address: CatalogAddress } | null
+  object: {
+    connection: string
+    session?: string
+    address: CatalogAddress
+  } | null
   selectedRow: SelectedRow | null
   inspected: InspectedValue | null
 }

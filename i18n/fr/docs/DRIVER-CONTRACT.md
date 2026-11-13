@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="42bb08827e0a" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="f9d25ac62aa6" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -114,7 +114,7 @@ une lecture conservée si disponible ([ADR-0078](adr/0078-page-keyless-relations
 
 `PreviewShape::continuable` vaut false par défaut : les échantillons utilisent
 `preview_request` et libèrent leur curseur borné. Data demande `prepare_preview`,
-dont `PreviewMode` distingue `Bounded`, `Retained` et `Dedicated`.
+dont `PreviewMode` distingue `Bounded`, `Retained`, `Dedicated` et `Original`.
 `Session::open_preview_session` ouvre un lecteur privé depuis les paramètres
 d’ouverture vivants et le contexte de noms reproductible. Il ne doit pas relire
 les réglages enregistrés modifiés, copier un état temporaire non reproductible,
@@ -127,8 +127,24 @@ y compris les noms/valeurs encodés en pourcentage, sans canonicaliser le nom de
 fichier ni modifier les autres options VFS/cache. Les URI mémoire partagées
 nommées gardent leur identité et leur mode mémoire. Les bases mémoire privées
 et temporaires sans nom ne sont pas reproductibles sur une autre connexion ;
-leurs objets sans clé gardent une lecture bornée sur la session originale,
-sans ouvrir de lecteur sur une nouvelle base vide.
+leurs objets sans clé utilisent `Original` sur la session propriétaire,
+jamais une nouvelle base vide.
+
+`Original` réserve exclusivement cette session pendant la lecture
+([ADR-0079](adr/0079-retain-temporary-previews-on-their-owning-session.md)).
+Les opérations incompatibles échouent rapidement, annulation et fermeture restent
+possibles, et `finish_original_preview` acquitte le nettoyage physique après
+la destruction du curseur. Il ne ferme jamais la session propriétaire ni une
+transaction utilisateur. SQLite et DuckDB acquittent la file de leur worker ;
+MySQL son bail de connexion ; PostgreSQL rejoint le nettoyage du portail.
+L’appelant garde capacité et occupation jusqu’à cet acquittement. Un driver
+ne peut annoncer une continuation originale en remplaçant silencieusement son
+contexte physique. Les limites de lecture seule existantes restent applicables :
+une source MySQL ou DuckDB ayant une transaction utilisateur ouverte doit la
+terminer avant de parcourir les données ; le nettoyage de l’aperçu ne doit jamais
+l’annuler. DuckDB retire la cible d’interruption de la lecture terminée avant
+d’annuler sa propre transaction de lecture seule : une destruction tardive du
+curseur ne peut donc pas interrompre ce nettoyage.
 
 **Panne concrète :** un driver qui se porte garant d'une table `vec0` de
 SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette

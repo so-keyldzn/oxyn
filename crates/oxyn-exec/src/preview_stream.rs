@@ -16,7 +16,9 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::sessions::{SessionRegistry, SessionSlot};
 
+mod admission;
 mod page;
+mod resources;
 mod sessions;
 use page::Page;
 
@@ -32,6 +34,7 @@ pub(crate) struct Read {
     pub shape: PreviewShape,
     pub size: usize,
     pub dedicated: bool,
+    pub original: bool,
 }
 
 impl Read {
@@ -48,6 +51,8 @@ pub(crate) struct Registry {
     limits: BufferLimits,
     capacity: Arc<Semaphore>,
     owners: sessions::Owners,
+    admission: admission::Admission,
+    resources: resources::Resources,
 }
 impl Default for Registry {
     fn default() -> Self {
@@ -70,7 +75,34 @@ impl Registry {
                 .with_max_spill_bytes(SPILL),
             capacity: Arc::new(Semaphore::new(IDENTITIES)),
             owners: sessions::Owners::new(sessions),
+            admission: admission::Admission::default(),
+            resources: resources::Resources::default(),
         }
+    }
+
+    pub async fn mutation(
+        &self,
+        connection: ConnectionId,
+        cancel: &CancelToken,
+        closing: &CancelToken,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        self.admission
+            .mutation(connection, cancel, closing, deadline)
+            .await
+    }
+
+    pub fn stop_connection(&self, connection: ConnectionId) {
+        self.admission.stop(connection);
+    }
+    pub async fn closing_connection(
+        &self,
+        connection: ConnectionId,
+    ) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        self.admission.closing(connection).await
+    }
+    pub fn forget_connection(&self, connection: ConnectionId) {
+        self.admission.forget(connection);
     }
 
     pub async fn join_sessions(
@@ -78,6 +110,7 @@ impl Registry {
         connection: Option<ConnectionId>,
         session: Option<SessionId>,
     ) {
+        self.resources.join(connection, session).await;
         self.owners.join(connection, session).await;
     }
 
@@ -89,10 +122,34 @@ impl Registry {
         }
     }
     #[cfg(test)]
+    pub fn held_stream(&self, result: ResultId) -> Option<Arc<Stream>> {
+        self.held.lock().pages.get(&result).cloned()
+    }
+
+    #[cfg(test)]
     pub fn history_usage(&self, result: ResultId) -> Option<(usize, u64)> {
         let held = self.held.lock();
         let history = &held.pages.get(&result)?.history;
         Some((history.resident_bytes(), history.spilled_bytes()))
+    }
+
+    pub fn retains_result(
+        &self,
+        connection: ConnectionId,
+        session: SessionId,
+        result: ResultId,
+        path: &CatalogPath,
+    ) -> Result<bool> {
+        let held = self.held.lock();
+        let Some(stream) = held.pages.get(&result) else {
+            return Ok(false);
+        };
+        if stream.connection != connection || stream.session != session || &stream.path != path {
+            return Err(OxynError::Config(
+                "the preview result belongs to another session or object".into(),
+            ));
+        }
+        Ok(!stream.cancel.is_cancelled())
     }
 
     fn find(&self, slot: &SessionSlot, read: &Read) -> Result<Arc<Stream>> {
@@ -142,6 +199,10 @@ impl Registry {
                 ));
             }
             let token = slot.closing_token().child();
+            let admission = self
+                .admission
+                .read(slot.connection(), cancel, &token, deadline)
+                .await?;
             let mut opening = Opening(Some(token.clone()));
             let permit = Arc::clone(&self.capacity).try_acquire_owned().map_err(|_| {
                 OxynError::Config("too many retained previews are open; close another preview before starting this read".into())
@@ -154,9 +215,11 @@ impl Registry {
                 permit: None,
             }));
             let mut state_guard = Arc::clone(&state).lock_owned().await;
+            self.resources
+                .register(slot.connection(), slot.id(), &state, &token)?;
             let (cursor, execution_session) = {
                 let open = async {
-                    let execution = if read.dedicated {
+                    let execution = if read.dedicated || read.original {
                         let lease = self
                             .owners
                             .open(
@@ -165,6 +228,7 @@ impl Registry {
                                 Arc::downgrade(&state),
                                 token.clone(),
                                 permit,
+                                read.original,
                             )
                             .await?;
                         let execution = Arc::clone(&lease.slot);
@@ -174,7 +238,13 @@ impl Registry {
                         state_guard.permit = Some(permit);
                         Arc::clone(slot)
                     };
-                    let cursor = execution.execute_preview(request.clone(), &token).await?;
+                    let cursor = if read.original {
+                        execution
+                            .execute_original_preview(request.clone(), &token)
+                            .await?
+                    } else {
+                        execution.execute_preview(request.clone(), &token).await?
+                    };
                     Ok::<_, OxynError>((cursor, execution.id()))
                 };
                 tokio::pin!(open);
@@ -187,6 +257,11 @@ impl Registry {
                 tokio::select! {
                     biased;
                     result = &mut open => result?,
+                    () = admission.stopped.cancelled() => {
+                        token.cancel();
+                        drop(open.await);
+                        return Err(OxynError::Cancelled);
+                    }
                     () = cancel.cancelled() => {
                         token.cancel();
                         drop(open.await);
@@ -238,6 +313,7 @@ impl Registry {
             let stream = Arc::new(Stream {
                 connection: slot.connection(),
                 session: slot.id(),
+                admission: Mutex::new(Some(admission)),
                 execution_session,
                 path: read.path.clone(),
                 shape: read.identity(),
@@ -266,10 +342,19 @@ impl Registry {
         Ok((Box::new(page), stream))
     }
 
-    pub fn bind(&self, result: ResultId, stream: Arc<Stream>) {
+    pub fn bind(&self, result: ResultId, stream: Arc<Stream>) -> Result<()> {
         let evicted = {
             let mut held = self.held.lock();
-            held.pages.insert(result, stream);
+            let mut admission = stream.admission.lock();
+            if stream.cancel.is_cancelled()
+                || admission
+                    .as_ref()
+                    .is_some_and(|lease| lease.stopped.is_cancelled())
+            {
+                return Err(expired());
+            }
+            held.pages.insert(result, Arc::clone(&stream));
+            admission.take();
             held.order.push_back(result);
             let mut gone = Vec::new();
             while held.order.len() > IDENTITIES {
@@ -280,6 +365,7 @@ impl Registry {
             gone
         };
         drop(evicted);
+        Ok(())
     }
 
     pub fn delivery(&self, result: Option<ResultId>) -> Delivery<'_> {
@@ -305,7 +391,33 @@ impl Registry {
         drop(gone);
     }
 
+    pub async fn release(
+        &self,
+        connection: ConnectionId,
+        session: SessionId,
+        result: ResultId,
+    ) -> Result<()> {
+        let stream = self.held.lock().pages.get(&result).cloned();
+        let Some(stream) = stream else { return Ok(()) };
+        if stream.connection != connection || stream.session != session {
+            return Err(OxynError::Config(
+                "the preview belongs to another session".into(),
+            ));
+        }
+        stream.cancel.cancel();
+        let mut state = stream.state.lock().await;
+        state.cursor.take();
+        let lease = state.lease.take();
+        state.permit.take();
+        drop(state);
+        if let Some(lease) = lease {
+            lease.finish().await?;
+        }
+        Ok(())
+    }
+
     pub fn close(&self, connection: ConnectionId, session: Option<SessionId>) {
+        self.resources.cancel(Some(connection), session);
         self.owners.cancel(Some(connection), session);
         let gone = {
             let mut held = self.held.lock();
@@ -329,6 +441,8 @@ impl Registry {
     }
 
     pub fn clear(&self) {
+        self.admission.clear();
+        self.resources.stop_opening();
         self.capacity.close();
         self.owners.stop_opening();
         let gone = std::mem::take(&mut *self.held.lock());
@@ -340,6 +454,7 @@ impl Registry {
 }
 
 pub(crate) struct Stream {
+    admission: Mutex<Option<admission::Read>>,
     connection: ConnectionId,
     session: SessionId,
     pub execution_session: SessionId,

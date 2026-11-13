@@ -53,6 +53,8 @@ use crate::error::{
     Bound, is_unresolvable_type, map_connect_error, map_exec_error, map_stream_error,
 };
 use crate::lease::Lease;
+
+mod portal;
 use crate::options::ConnectSpec;
 use crate::transaction_text::{controls_transaction, opens_transaction};
 
@@ -137,6 +139,8 @@ const SQL_NAMESPACE_EXISTS: &str = "SELECT 1 FROM pg_catalog.pg_namespace WHERE 
 pub struct PostgresSession {
     driver: DriverId,
     pool: PgPool,
+    identity: Arc<crate::backend_identity::BackendIdentity>,
+    portals: portal::Owners,
     spec: ConnectSpec,
     canceller: Arc<BackendCanceller>,
     statements: Arc<StatementRegistry>,
@@ -196,12 +200,23 @@ impl PostgresSession {
             statements: Arc::new(StatementRegistry::default()),
             driver,
             pool,
+            identity: Arc::default(),
+            portals: portal::Owners::default(),
             variant,
             capabilities,
             catalog,
             database,
             context: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn with_backend_identity(
+        mut self,
+        identity: Arc<crate::backend_identity::BackendIdentity>,
+    ) -> Self {
+        self.catalog.set_backend_identity(Arc::clone(&identity));
+        self.identity = identity;
+        self
     }
 
     /// Stops on the server a pre-cursor round trip that the token interrupted.
@@ -291,13 +306,16 @@ impl PostgresSession {
     /// Borrows a connection from the pool, without ever becoming
     /// uncancellable.
     async fn acquire(&self, cancel: &CancelToken) -> Result<PoolConnection<Postgres>> {
-        race_cancel(cancel, async {
+        self.identity.check()?;
+        let connection = race_cancel(cancel, async {
             self.pool
                 .acquire()
                 .await
                 .map_err(|error| map_connect_error(&error))
         })
-        .await
+        .await?;
+        self.identity.check()?;
+        Ok(connection)
     }
 }
 
@@ -414,6 +432,7 @@ impl Session for PostgresSession {
         let arguments = bind_params(&params)?;
 
         let mut connection = Lease::new(self.acquire(cancel).await?);
+        self.identity.preserve();
 
         let pid = race_cancel(cancel, async {
             backend_pid(&mut connection)
@@ -502,20 +521,18 @@ impl Session for PostgresSession {
                     .iter()
                     .any(|c| lacks_binary_output(c.type_info())) =>
             {
-                Source::Prepared {
+                Ok(Source::Prepared {
                     statement,
                     arguments,
-                }
+                })
             }
-            Ok(_) => simple_source(params.is_empty(), fallback_text, NO_BINARY_OUTPUT)?,
+            Ok(_) => simple_source(params.is_empty(), fallback_text, NO_BINARY_OUTPUT),
             Err(error) if is_unresolvable_type(&error) => {
-                simple_source(params.is_empty(), fallback_text, UNRESOLVABLE_TYPE)?
+                simple_source(params.is_empty(), fallback_text, UNRESOLVABLE_TYPE)
             }
-            // A failed preparation closes the connection if it is already
-            // dirty: the transaction opened above would keep locks and block
-            // the `VACUUM` of the whole database, and a console's `search_path`
-            // would leave with it. A typo in a table name in a writable console
-            // is enough.
+            // A normal SQL refusal is synchronized: restore our own read-only
+            // transaction/context so a typo does not destroy temporary data.
+            // Unproven cleanup still closes the dirty physical connection.
             //
             // `Bound::Internal`, whatever the request's values: `prepare` only
             // issues Parse and Describe, which carry the SQL text and the
@@ -525,6 +542,11 @@ impl Session for PostgresSession {
             // diagnostic of a parameterized query: the name of the object that
             // does not exist.
             Err(error) => {
+                if matches!(error, sqlx::Error::Database(_)) {
+                    connection
+                        .restore_setup(limits.read_only, restore_context)
+                        .await;
+                }
                 return Err(map_stream_error(
                     &self.driver,
                     intent,
@@ -532,6 +554,15 @@ impl Session for PostgresSession {
                     Bound::Internal,
                     error,
                 ));
+            }
+        };
+        let source = match source {
+            Ok(source) => source,
+            Err(error) => {
+                connection
+                    .restore_setup(limits.read_only, restore_context)
+                    .await;
+                return Err(error);
             }
         };
         // The user's statement is about to run, and it can itself change the
@@ -616,6 +647,18 @@ impl Session for PostgresSession {
             .await
     }
 
+    async fn execute_original_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.original_preview(request, cancel).await
+    }
+
+    async fn finish_original_preview(&self, cancel: &CancelToken) -> Result<()> {
+        self.portals.wait(cancel).await
+    }
+
     async fn open_preview_session(
         &self,
         path: &oxyn_catalog::CatalogPath,
@@ -673,6 +716,7 @@ impl Session for PostgresSession {
     /// signature stays fallible because the trait shares it with drivers that,
     /// for their part, have something to say.
     async fn close(self: Box<Self>) -> Result<()> {
+        self.portals.close().await;
         self.pool.close().await;
         Ok(())
     }

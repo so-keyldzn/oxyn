@@ -87,12 +87,12 @@ async fn private_memory_and_temporary_uris_never_read_a_fresh_empty_database() {
             .describe_relation(&path, &CancelToken::new())
             .await
             .expect("source metadata");
-        assert!(!relation.retained_preview, "{uri}");
+        assert!(relation.retained_preview, "{uri}");
         let prepared = source
             .prepare_preview(&path, 50, &PreviewShape::default(), &CancelToken::new())
             .await
-            .expect("bounded source preview");
-        assert_eq!(prepared.mode, PreviewMode::Bounded);
+            .expect("original source preview");
+        assert_eq!(prepared.mode, PreviewMode::Original);
         let mut cursor = source
             .execute_preview(prepared.request, &CancelToken::new())
             .await

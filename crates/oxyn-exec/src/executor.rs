@@ -85,6 +85,8 @@ use crate::cancel::{CancelRegistry, CancelReport, RunningStatement};
 use crate::events::EventBus;
 use crate::sessions::{CredentialResolver, NoCredentials, SessionRegistry, SessionSlot};
 
+mod session_catalog;
+
 /// What a command produced.
 ///
 /// `#[non_exhaustive]`: new outcomes will appear with new commands, and a
@@ -125,6 +127,9 @@ pub enum Outcome {
         /// How many sessions were closed.
         closed: usize,
     },
+
+    /// A preview cursor was released; retained result rows remain available.
+    PreviewReleased { result: ResultId },
 
     /// Metadata was refreshed without including its contents in the outcome.
     CatalogRefreshed {
@@ -797,7 +802,10 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         match command {
-            Command::Connect { connection } => self.connect(*connection, cancel).await,
+            Command::Connect { connection } => self.connect(*connection, cancel, false).await,
+            Command::OpenConsoleSession { connection } => {
+                self.connect(*connection, cancel, true).await
+            }
             Command::TestConnection { config } => self.test_connection(config, cancel).await,
 
             Command::Disconnect { connection } => self.disconnect(*connection).await,
@@ -906,10 +914,11 @@ impl Executor {
                     path: path.clone(),
                     shape: shape.clone(),
                     dedicated: false,
+                    original: false,
                     size: usize::try_from(*limit)
                         .map_err(|_| OxynError::Config("preview size exceeds platform".into()))?,
                 };
-                let prepared = if shape.continuation.is_some() {
+                let mut prepared = if shape.continuation.is_some() {
                     oxyn_driver::PreparedPreview {
                         request: self.previews.request(&slot, &read)?,
                         mode: oxyn_driver::PreviewMode::Retained,
@@ -925,7 +934,14 @@ impl Executor {
                     )
                     .await?
                 };
+                // Arbitrary SQL can change variables or settings beyond temporary tables.
+                if slot.has_private_context()
+                    && prepared.mode == oxyn_driver::PreviewMode::Dedicated
+                {
+                    prepared.mode = oxyn_driver::PreviewMode::Original;
+                }
                 read.dedicated = prepared.mode == oxyn_driver::PreviewMode::Dedicated;
+                read.original = prepared.mode == oxyn_driver::PreviewMode::Original;
                 let retained = prepared.mode.retains_cursor().then_some(read);
                 let mut request = reclassified_request(prepared.request, Some(&slot));
                 if request.is_mutating() {
@@ -985,6 +1001,24 @@ impl Executor {
                 Ok(Outcome::Cancelled { report })
             }
 
+            Command::RefreshSessionCatalog {
+                connection,
+                session,
+                scope,
+            } => {
+                self.refresh_session_catalog(id, *connection, *session, scope, cancel)
+                    .await
+            }
+            Command::ReleasePreview {
+                connection,
+                session,
+                result,
+            } => {
+                self.previews
+                    .release(*connection, *session, *result)
+                    .await?;
+                Ok(Outcome::PreviewReleased { result: *result })
+            }
             Command::RefreshCatalog { connection } => {
                 self.refresh_catalog(id, *connection, &CatalogRefreshScope::Root, cancel)
                     .await
@@ -1427,28 +1461,44 @@ impl Executor {
     }
 
     /// Opens a session.
-    async fn connect(&self, connection: ConnectionId, cancel: &CancelToken) -> Result<Outcome> {
+    async fn connect(
+        &self,
+        connection: ConnectionId,
+        cancel: &CancelToken,
+        console: bool,
+    ) -> Result<Outcome> {
         let config = self.connection_config(connection, cancel).await?;
         let session = self.open_driver_session(&config, cancel).await?;
-        let slot = self.sessions.insert(SessionSlot::new(connection, session));
+        let slot = self.sessions.insert(if console {
+            SessionSlot::console(connection, session)
+        } else {
+            SessionSlot::new(connection, session)
+        });
         // Read, not assumed: a fresh SQLite connection is in autocommit, and
         // the console starts `Idle` because the engine said so. Before any
         // lock below: none may be held across this await.
         let transaction_state = slot.transaction_state().await;
-        let catalog = self
-            .catalogs
-            .write()
-            .entry(connection)
-            .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()))
-            .clone();
-        let mut preferred = catalog.session.write();
-        if preferred
-            .and_then(|id| self.sessions.get(id))
-            .is_none_or(|session| !session.is_open())
         {
-            *preferred = Some(slot.id());
+            let mut catalogs = self.catalogs.write();
+            let current = catalogs
+                .entry(connection)
+                .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()));
+            let preferred = *current.session.read();
+            if slot.is_catalog()
+                && preferred
+                    .and_then(|id| self.sessions.get(id))
+                    .is_none_or(|source| !source.is_open())
+            {
+                let next = crate::catalog::ConnectionCatalog {
+                    cache: Arc::clone(&slot.catalog.cache),
+                    refresh: Arc::clone(&current.refresh),
+                    closed: CancelToken::new(),
+                    session: RwLock::new(Some(slot.id())),
+                };
+                current.closed.cancel();
+                *current = Arc::new(next);
+            }
         }
-        drop(preferred);
         Ok(Outcome::Connected {
             connection,
             session: slot.id(),
@@ -1500,6 +1550,12 @@ impl Executor {
 
     /// Closes the sessions of a connection, after cancelling what runs on them.
     async fn disconnect(&self, connection: ConnectionId) -> Result<Outcome> {
+        self.previews.stop_connection(connection);
+        // Transaction-state reads are cancelled by source closing, not by a
+        // statement token. Signal that before waiting for mutation admission.
+        for slot in self.sessions.for_connection(connection) {
+            slot.begin_close();
+        }
         self.previews.close(connection, None);
         // Cancellation first: closing without cancelling leaves the queries
         // running server-side, connection taken and lock held.
@@ -1507,6 +1563,9 @@ impl Executor {
             .cancel_connection(&self.sessions, connection)
             .await;
 
+        let _closing = self.previews.closing_connection(connection).await;
+        self.previews.close(connection, None);
+        self.previews.join_sessions(Some(connection), None).await;
         if let Some(catalog) = self.catalogs.write().remove(&connection) {
             catalog.closed.cancel();
         }
@@ -1520,6 +1579,7 @@ impl Executor {
             closed += 1;
         }
         self.previews.join_sessions(Some(connection), None).await;
+        self.previews.forget_connection(connection);
         Ok(Outcome::Disconnected { connection, closed })
     }
 
@@ -1537,11 +1597,15 @@ impl Executor {
         for running in self.running.for_session(session) {
             self.running.cancel(&self.sessions, running.statement).await;
         }
-        self.sessions.remove(session);
-        let closed = slot.close().await;
         self.previews
             .join_sessions(Some(connection), Some(session))
             .await;
+        self.sessions.remove(session);
+        let closed = slot.close().await;
+        let catalog = self.catalogs.read().get(&connection).cloned();
+        if let Some(catalog) = catalog {
+            catalog.refresh.lock().await.release_owner(session);
+        }
         closed?;
         Ok(Outcome::SessionClosed { session })
     }
@@ -1578,12 +1642,7 @@ impl Executor {
                 capability: "session context".to_owned(),
             });
         }
-        let reserved = self
-            .catalogs
-            .read()
-            .get(&connection)
-            .and_then(|state| *state.session.read());
-        if reserved == Some(session) {
+        if slot.is_catalog() {
             return Err(OxynError::PolicyDenied {
                 reason: "this session serves the catalog and previews; \
                          open a console to change context"
@@ -1626,6 +1685,9 @@ impl Executor {
     /// [`Invalidated`](oxyn_catalog::Freshness::Invalidated) — the next read
     /// re-fetches it.
     fn invalidate_catalog(&self, connection: ConnectionId) {
+        for slot in self.sessions.for_connection(connection) {
+            slot.catalog.cache.write().invalidate_all();
+        }
         if let Some(state) = self.catalogs.read().get(&connection).cloned() {
             state.cache.write().invalidate_all();
         }
@@ -1658,7 +1720,7 @@ impl Executor {
                     self.sessions
                         .for_connection(connection)
                         .into_iter()
-                        .find(|slot| slot.is_open() && !slot.is_preview())
+                        .find(|slot| slot.is_open() && slot.is_catalog())
                 } else {
                     None
                 }
@@ -1688,13 +1750,11 @@ impl Executor {
         {
             return Err(OxynError::Cancelled);
         }
-        let evicted = budget.reserve(scope, &patch)?;
-        {
-            let mut cache = state.cache.write();
-            for scope in &evicted {
-                cache.evict(scope);
-            }
-            patch.apply(&mut cache)?;
+        let evicted = budget.reserve_for(slot.id(), scope, &patch)?;
+        self.evict_session_catalogs(evicted);
+        if let Err(error) = slot.catalog.publish(patch) {
+            budget.release_owner(slot.id());
+            return Err(error);
         }
         self.events
             .publish(id, Some(connection), Event::CatalogUpdated);
@@ -1742,9 +1802,35 @@ impl Executor {
             ));
         }
 
+        if preview_limit.is_none() {
+            slot.note_user_execution();
+        }
+
+        let admission_deadline = request
+            .limits
+            .timeout
+            .and_then(|after| Deadline::starting_at(started, after));
+        let _mutation = if request.is_mutating() {
+            Some(
+                self.previews
+                    .mutation(
+                        connection,
+                        cancel,
+                        slot.closing_token(),
+                        admission_deadline.map(|deadline| deadline.at),
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
         if request.is_mutating() {
             self.previews.close(connection, None);
             self.previews.join_sessions(Some(connection), None).await;
+            if admission_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline.at)
+            {
+                return Err(OxynError::Config("the statement timed out before execution while closing previews; no statement was sent".into()));
+            }
         }
         let retained_read = retained.is_some();
         // Captured before `request` is moved into `slot.execute`: it is the
@@ -1848,7 +1934,7 @@ impl Executor {
                 )
                 .await?;
             execution_session = stream.execution_session;
-            self.previews.bind(result, stream);
+            self.previews.bind(result, stream)?;
             cursor
         } else {
             Self::execute_within(slot, request, ct, deadline).await?

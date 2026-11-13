@@ -66,20 +66,14 @@ pub struct SqliteCatalog {
     worker: WorkerHandle,
     capabilities: Capabilities,
     version: &'static str,
-    shares_memory: bool,
 }
 
 impl SqliteCatalog {
     /// Builds a session's catalog.
-    pub(crate) fn new(
-        worker: WorkerHandle,
-        capabilities: Capabilities,
-        shares_memory: bool,
-    ) -> Self {
+    pub(crate) fn new(worker: WorkerHandle, capabilities: Capabilities) -> Self {
         Self {
             worker,
             capabilities,
-            shares_memory,
             // The version of the **linked** engine, not the file's: it decides what
             // the session can do.
             version: rusqlite::version(),
@@ -242,7 +236,6 @@ impl CatalogProvider for SqliteCatalog {
         let database = Self::database_of(relation).to_owned();
         let name = Self::relation_of(relation)?.to_owned();
         let visible = name.clone();
-        let shares_memory = self.shares_memory;
 
         let described: Option<RawRelation> = self
             .worker
@@ -261,9 +254,6 @@ impl CatalogProvider for SqliteCatalog {
                 Ok(Some(RawRelation {
                     kind,
                     is_virtual,
-                    isolatable: database != "temp"
-                        && crate::preview_context::Context::read(connection, shares_memory)?
-                            .reproducible(),
                     key,
                     columns: table_info(connection, &database, &name)?,
                 }))
@@ -307,10 +297,7 @@ impl CatalogProvider for SqliteCatalog {
             relation
         };
         Ok(
-            if described.isolatable
-                && !relation.previews_in_key_order()
-                && relation.kind.holds_records()
-            {
+            if !relation.previews_in_key_order() && relation.kind.holds_records() {
                 relation.with_retained_preview(true)
             } else {
                 relation
@@ -428,7 +415,6 @@ struct RawRelation {
     /// A virtual table: its module, not the engine, decides what reading it in
     /// key order costs.
     is_virtual: bool,
-    isolatable: bool,
     /// How the primary key's index orders the table.
     key: KeyIndex,
     columns: Vec<RawColumn>,

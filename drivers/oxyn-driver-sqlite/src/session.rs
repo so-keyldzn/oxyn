@@ -85,11 +85,7 @@ impl SqliteSession {
         spec: OpenSpec,
     ) -> Self {
         Self {
-            catalog: SqliteCatalog::new(
-                worker.clone(),
-                capabilities,
-                crate::preview_uri::shares_memory(&spec),
-            ),
+            catalog: SqliteCatalog::new(worker.clone(), capabilities),
             spec,
             worker,
             thread: Some(thread),
@@ -236,6 +232,10 @@ impl Session for SqliteSession {
     ) -> Result<oxyn_driver::PreparedPreview> {
         self.prepare_data_preview(path, limit, shape, cancel, true)
             .await
+    }
+
+    async fn finish_original_preview(&self, cancel: &CancelToken) -> Result<()> {
+        self.worker.call(cancel, |_| Ok(())).await
     }
 
     async fn open_preview_session(

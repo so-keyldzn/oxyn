@@ -6,13 +6,11 @@ import { addressKey } from "@/components/oxyn/catalog-tree"
 import { sameShape } from "@/components/oxyn/preview-controls"
 import type { PreviewStatus } from "@/components/oxyn/preview-controls"
 import type { ResultState } from "@/components/oxyn/result-panel"
-import {
-  createPreviewStore,
-  previewKey,
-} from "@/features/metadata/preview-store"
+import { previewKey } from "@/features/metadata/preview-store"
+import { previews } from "@/features/metadata/preview-state"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
-import { executionProgress, forget, watch } from "@/lib/ipc/events"
+import { BackendError } from "@/lib/ipc/client"
+import { executionProgress } from "@/lib/ipc/events"
 import { PLAIN_SHAPE, metadata } from "@/lib/ipc/metadata"
 import type {
   PreviewPageSize,
@@ -21,6 +19,8 @@ import type {
 } from "@/lib/ipc/metadata"
 import { results } from "@/lib/ipc/results"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
+
+export { previews } from "@/features/metadata/preview-state"
 
 /** The preview area's state, from the result panel's. Pure, so it is tested. */
 export function previewStatus(state: ResultState): PreviewStatus {
@@ -36,35 +36,14 @@ export function previewStatus(state: ResultState): PreviewStatus {
   }
 }
 
-/** The previews of this window, kept across the object view's mounts. */
-export const previews = createPreviewStore({
-  read: (id, entry, shape) =>
-    metadata.previewRelation(
-      id,
-      entry.connection,
-      entry.session,
-      entry.address,
-      shape
-    ),
-  cancel: (id) => void backend.cancel(id).catch(() => undefined),
-  refuse: (command) =>
-    void backend.decide(command, false).catch(() => undefined),
-  forgetResult: (result) =>
-    void results.forgetResult(result).catch(() => undefined),
-  watch,
-  unwatch: forget,
-  newId: newCommandId,
-  now: () => Date.now(),
-})
-
 /**
  * A relation preview with its shape: the order, the predicate and the page
  * (ADR-0020, ADR-0028).
  *
  * The preview lives in [`previews`], not in the view: coming back to an object
  * shows what was read, without reading it again, until something changes on
- * the connection. Leaving mid-read cancels the read, and so does hiding the
- * view while it reads by itself: the read starts again when it shows.
+ * the connection. SQL reads keep their owner across navigation, including
+ * while pending. Other automatic reads stop when hidden and restart on return.
  *
  * Reads again by itself only after a write or a DDL succeeded on this
  * connection, only while `visible`, never after its own error, and with the
@@ -76,6 +55,8 @@ export function usePreview({
   enabled,
   visible,
   described,
+  ready = true,
+  rememberShape = true,
 }: {
   open: OpenConnection
   address: CatalogAddress
@@ -87,11 +68,15 @@ export function usePreview({
    * the pagination is asked again when it arrives.
    */
   described: string | null
+  /** Initial metadata is read before an exclusive source is reserved. */
+  ready?: boolean
+  rememberShape?: boolean
 }) {
-  const key = previewKey(open.connection, addressKey(address))
+  const key = previewKey(open.connection, addressKey(address), open.session)
   const entry = useSelector(previews.store, (all) => all[key])
   const addressRef = React.useRef(address)
   addressRef.current = address
+  const preserveOwner = open.capabilities.includes("SQL")
 
   React.useEffect(() => {
     if (!enabled) return
@@ -100,9 +85,13 @@ export function usePreview({
       session: open.session,
       address: addressRef.current,
       serverCancel: open.capabilities.includes("SERVER_SIDE_CANCEL"),
+      preserveOwner,
+      shapeGroup: rememberShape
+        ? previewKey(open.connection, addressKey(addressRef.current))
+        : undefined,
     })
     return () => previews.detach(key)
-  }, [enabled, key, open.session])
+  }, [enabled, key, open.session, rememberShape, preserveOwner])
 
   const state: ResultState = entry?.state ?? { status: "initial" }
   const status = previewStatus(state)
@@ -120,8 +109,7 @@ export function usePreview({
       automatic
     )
 
-  // Out of sight, an automatic read stops holding the shared session; the
-  // effect below reads again when the view shows. Loaded results stay.
+  // Only reproducible, non-SQL reads may stop merely because they became hidden.
   React.useEffect(() => {
     if (!visible) previews.pause(key)
   }, [visible, key])
@@ -129,13 +117,13 @@ export function usePreview({
   // First visit, or back on a preview something changed since: read once,
   // with the shape in force. Never after an error, which a new read would hide.
   React.useEffect(() => {
-    if (!entry || !visible || entry.running) return
+    if (!ready || !entry || !visible || entry.running) return
     // The shape in force: plain on a first visit, kept across a reconnection.
     if (entry.state.status === "initial" && !entry.approvalRefused)
       read(entry.applied, true)
     else if (entry.stale && entry.state.status !== "error")
       read(entry.applied, true)
-  }, [entry?.state.status, entry?.stale, entry?.running, visible])
+  }, [ready, entry?.state.status, entry?.stale, entry?.running, visible])
 
   useRefreshSignal(open.connection, (signal) => {
     // A DDL sends `rowsChanged` too: the catalog signal alone adds nothing.
@@ -184,7 +172,14 @@ export function usePreview({
     ] as const,
     enabled: enabled && (status === "loaded" || status === "empty"),
     queryFn: () =>
-      metadata.previewPagination(open.connection, address, applied, rows),
+      metadata.previewPagination(
+        open.connection,
+        address,
+        applied,
+        rows,
+        open.session,
+        state.status === "populated" ? state.result : null
+      ),
   })
 
   return {

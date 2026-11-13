@@ -383,6 +383,7 @@ struct Fixture {
     host: Arc<ScriptedConfirm>,
     connection: ConnectionId,
     session: SessionId,
+    console: SessionId,
 }
 
 impl Fixture {
@@ -405,6 +406,7 @@ impl Fixture {
         let mut fixture = Self {
             connection: config.id,
             session: SessionId::new(),
+            console: SessionId::new(),
             runtime,
             backend,
             host,
@@ -418,6 +420,7 @@ impl Fixture {
             .block_on(fixture.backend.reconnect(CommandId::new(), config.id))
             .expect("the connection opens");
         fixture.session = open.session.parse().expect("session id");
+        fixture.console = open.console.session.parse().expect("console id");
         for sql in [
             "CREATE TABLE t (id INTEGER, amount INTEGER)",
             "INSERT INTO t VALUES (1, 10), (2, 20)",
@@ -466,7 +469,7 @@ impl Fixture {
             .block_on(self.backend.execute(
                 CommandId::new(),
                 self.connection,
-                self.session,
+                self.console,
                 sql.to_owned(),
             ))
             .expect("the statement answers")
@@ -557,7 +560,7 @@ impl Fixture {
             .block_on(self.backend.execute(
                 CommandId::new(),
                 self.connection,
-                self.session,
+                self.console,
                 format!("SELECT 1 FROM {table} LIMIT 0"),
             ))
             .is_ok()

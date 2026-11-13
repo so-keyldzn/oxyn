@@ -90,7 +90,15 @@ SELECT n.nspname::text, \
        pg_catalog.obj_description(n.oid, 'pg_namespace'), \
        (n.nspname = 'information_schema' OR n.nspname LIKE 'pg\\_%') \
 FROM pg_catalog.pg_namespace n \
+WHERE (n.nspname NOT LIKE 'pg\\_temp\\_%' OR n.oid = pg_catalog.pg_my_temp_schema()) \
+  AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%' \
 ORDER BY n.nspname";
+
+// Redshift does not expose PostgreSQL's temporary-schema identity function.
+const SQL_REDSHIFT_NAMESPACES: &str = "SELECT n.nspname::text, \
+pg_catalog.obj_description(n.oid, 'pg_namespace'), \
+(n.nspname = 'information_schema' OR n.nspname LIKE 'pg\\_%') \
+FROM pg_catalog.pg_namespace n ORDER BY n.nspname";
 
 /// The schemas an unqualified name resolves in, first match first.
 ///
@@ -251,6 +259,7 @@ ORDER BY con.conname";
 pub struct PostgresCatalog {
     driver: DriverId,
     pool: PgPool,
+    identity: Arc<crate::backend_identity::BackendIdentity>,
     /// The database the session is connected to. Any other is inaccessible.
     database: String,
     variant: PostgresVariant,
@@ -272,11 +281,19 @@ impl PostgresCatalog {
         Self {
             driver,
             pool,
+            identity: Arc::default(),
             database,
             variant,
             capabilities,
             canceller,
         }
+    }
+
+    pub(crate) fn set_backend_identity(
+        &mut self,
+        identity: Arc<crate::backend_identity::BackendIdentity>,
+    ) {
+        self.identity = identity;
     }
 
     /// The database this session is connected to.
@@ -305,12 +322,14 @@ impl PostgresCatalog {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
+        self.identity.check()?;
         let mut connection = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(OxynError::Cancelled),
             connection = self.pool.acquire() =>
                 connection.map_err(|error| map_connect_error(&error))?,
         };
+        self.identity.check()?;
         let pid = tokio::select! {
             biased;
             () = cancel.cancelled() => {
@@ -451,10 +470,7 @@ impl PostgresCatalog {
         let (columns, facts) = self
             .typed_columns(&rows)
             .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
-        let retained = allow_retained
-            && !facts.independent_pages()
-            && namespace != "pg_temp"
-            && !namespace.starts_with("pg_temp_");
+        let retained = allow_retained && !facts.independent_pages();
         Ok(oxyn_driver::PreparedPreview {
             request: if retained {
                 crate::preview::stream_request(
@@ -478,7 +494,11 @@ impl PostgresCatalog {
                 )?
             },
             mode: if retained {
-                oxyn_driver::PreviewMode::Dedicated
+                if namespace == "pg_temp" || namespace.starts_with("pg_temp_") {
+                    oxyn_driver::PreviewMode::Original
+                } else {
+                    oxyn_driver::PreviewMode::Dedicated
+                }
             } else {
                 oxyn_driver::PreviewMode::Bounded
             },
@@ -610,7 +630,12 @@ impl CatalogProvider for PostgresCatalog {
         self.check_catalog(catalog)?;
         let parent = CatalogPath::for_catalog(self.database.clone())?;
 
-        let rows = self.fetch(cancel, SQL_NAMESPACES, &[]).await?;
+        let sql = if self.variant.flavor == PostgresFlavor::Redshift {
+            SQL_REDSHIFT_NAMESPACES
+        } else {
+            SQL_NAMESPACES
+        };
+        let rows = self.fetch(cancel, sql, &[]).await?;
         let mut namespaces = Vec::with_capacity(rows.len());
         for row in &rows {
             let name: String = read_text(row, 0)?;
@@ -809,8 +834,6 @@ impl CatalogProvider for PostgresCatalog {
         Ok(
             if described_relation.kind.holds_records()
                 && !described_relation.previews_in_key_order()
-                && ns != "pg_temp"
-                && !ns.starts_with("pg_temp_")
             {
                 described_relation.with_retained_preview(true)
             } else {

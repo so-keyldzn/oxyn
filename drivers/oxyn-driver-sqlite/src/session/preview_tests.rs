@@ -84,9 +84,9 @@ async fn temporary_or_attached_memory_state_never_substitutes_another_object() {
         let prepared = session
             .prepare_preview(&path, 50, &PreviewShape::default(), &CancelToken::new())
             .await
-            .expect("bounded fallback");
-        assert_eq!(prepared.mode, PreviewMode::Bounded);
-        assert!(prepared.request.text.contains("LIMIT 50"));
+            .expect("original session preview");
+        assert_eq!(prepared.mode, PreviewMode::Original);
+        assert!(!prepared.request.text.contains("LIMIT 50"));
         assert!(
             session
                 .open_preview_session(&path, &CancelToken::new())

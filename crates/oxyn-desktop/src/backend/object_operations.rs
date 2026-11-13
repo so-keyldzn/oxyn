@@ -287,6 +287,15 @@ impl Backend {
         address: &CatalogAddress,
         operation: &ObjectOperation,
     ) -> Result<ObjectOperationReview, IpcError> {
+        if !self
+            .inner
+            .executor
+            .is_reproducible_catalog_source(connection, session)
+        {
+            return Err(IpcError::invalid(
+                "Manage session-local objects from their owning console; this operation uses a separate session",
+            ));
+        }
         let config = self.config(connection)?;
         let dialect = oxyn_query::dialect_for(&config.driver);
         let capabilities = self
@@ -303,8 +312,8 @@ impl Backend {
         let cache = self
             .inner
             .executor
-            .catalog(connection)
-            .ok_or_else(|| IpcError::invalid("This connection has no catalog cache"))?;
+            .session_catalog(connection, session)
+            .map_err(IpcError::from)?;
         let cache = cache.read();
         let kind = cache
             .relation_summary(&path)
@@ -483,7 +492,11 @@ impl Backend {
     ) -> Result<SessionId, ObjectOperationOutcome> {
         let executor = &self.inner.executor;
         let session = match executor
-            .dispatch(Actor::Human, Command::Connect { connection }, cancel)
+            .dispatch(
+                Actor::Human,
+                Command::OpenConsoleSession { connection },
+                cancel,
+            )
             .await
         {
             Ok(Outcome::Connected { session, .. }) => session,

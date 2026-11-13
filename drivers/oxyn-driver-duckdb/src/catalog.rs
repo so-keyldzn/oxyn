@@ -478,13 +478,7 @@ impl CatalogProvider for DuckDbCatalog {
             described
         };
         Ok(
-            if !described.previews_in_key_order()
-                && described.kind.holds_records()
-                && self
-                    .worker
-                    .call(cancel, crate::preview_context::reproducible)
-                    .await?
-            {
+            if !described.previews_in_key_order() && described.kind.holds_records() {
                 described.with_retained_preview(true)
             } else {
                 described
