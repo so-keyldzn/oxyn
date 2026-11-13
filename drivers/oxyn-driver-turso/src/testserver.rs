@@ -48,12 +48,20 @@ pub(crate) enum Reply {
     Json(u16, String),
     /// A status and raw bytes.
     Raw(u16, Vec<u8>),
+    /// Deliberately split UTF-8 and JSON across HTTP chunks.
+    Chunks(Vec<Vec<u8>>),
     /// Never answers; waits for the client to hang up.
     Hang,
     /// A 200 with no length, then `total` bytes as fast as the client reads.
     Flood(usize),
     /// A 200 that announces a long body, sends a few bytes and hangs up.
     Truncated,
+    /// Generate a cursor without constructing its complete response in memory.
+    Cursor {
+        rows: usize,
+        value_bytes: usize,
+        before_header: Option<Arc<Notify>>,
+    },
 }
 
 type Script = dyn Fn(&Recorded) -> Reply + Send + Sync;
@@ -98,6 +106,9 @@ impl Server {
         Self::start(move |request| {
             if request.authorization.as_deref() != Some(&format!("Bearer {TOKEN}")) {
                 return Reply::Json(401, json!({"error": "Unauthorized"}).to_string());
+            }
+            if request.path == "/v3" {
+                return Reply::Raw(404, Vec::new());
             }
             database(request)
         })
@@ -156,8 +167,63 @@ async fn serve(mut socket: TcpStream, shared: Arc<Shared>, script: Arc<Script>) 
         .push(request.clone());
     shared.arrived.notify_waiters();
     match script(&request) {
+        Reply::Cursor {
+            rows,
+            value_bytes,
+            before_header,
+        } => {
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
+            if socket.write_all(head.as_bytes()).await.is_err() {
+                return;
+            }
+            if let Some(gate) = before_header {
+                gate.notified().await;
+            }
+            let start = concat!(
+                "{\"baton\":\"cursor-private-identity\",\"base_url\":null}\n",
+                "{\"type\":\"step_begin\",\"step\":0,\"cols\":[{\"name\":\"id\",\"decltype\":\"INTEGER\"},{\"name\":\"label\",\"decltype\":\"TEXT\"}]}\n"
+            );
+            if socket.write_all(start.as_bytes()).await.is_err() {
+                return;
+            }
+            let payload = "x".repeat(value_bytes);
+            for index in 0..rows {
+                let mut line = serde_json::to_vec(&json!({"type":"row", "row":[
+                    {"type":"integer", "value":index.to_string()}, {"type":"text", "value":payload}
+                ]}))
+                .expect("fixture JSON");
+                line.push(b'\n');
+                if socket.write_all(&line).await.is_err() {
+                    return;
+                }
+            }
+            let _ = socket.write_all(b"{\"type\":\"step_end\",\"affected_row_count\":0,\"last_insert_rowid\":null}\n").await;
+            let _ = socket.shutdown().await;
+        }
         Reply::Json(status, body) => {
             write_response(&mut socket, status, "application/json", body.as_bytes()).await;
+        }
+        Reply::Chunks(chunks) => {
+            if socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
+            for chunk in chunks {
+                let head = format!("{:X}\r\n", chunk.len());
+                if socket.write_all(head.as_bytes()).await.is_err()
+                    || socket.write_all(&chunk).await.is_err()
+                    || socket.write_all(b"\r\n").await.is_err()
+                {
+                    return;
+                }
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
         }
         Reply::Raw(status, body) => {
             write_response(&mut socket, status, "text/html", &body).await;

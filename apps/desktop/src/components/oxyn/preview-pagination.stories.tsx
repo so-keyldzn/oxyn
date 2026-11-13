@@ -150,6 +150,19 @@ export const Failed: Story = {
 
 export const WithoutUniqueKey: Story = {
   args: { pagination: { type: "noUniqueKey" } },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText(/Only a bounded preview is available/)
+    ).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Next page" })).toBeNull()
+    await expect(
+      canvas.queryByRole("button", { name: "Previous page" })
+    ).toBeNull()
+    await expect(canvas.queryByText(/Page 1/)).toBeNull()
+    await expect(
+      canvas.getByRole("combobox", { name: "Preview rows" })
+    ).toBeEnabled()
+  },
 }
 export const NeedsSort: Story = { args: { pagination: { type: "needsOrder" } } }
 
@@ -212,5 +225,47 @@ export const NativeOrderRequired: Story = {
     await expect(
       canvas.getByRole("button", { name: "Next page" })
     ).toBeDisabled()
+  },
+}
+
+export const AvailabilityFailed: Story = {
+  args: {
+    pagination: null,
+    error: {
+      message: "Catalog metadata is temporarily unavailable",
+      retryable: true,
+    },
+    onRetry: fn(),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "Page navigation unavailable"
+    )
+    await expect(canvas.queryByText(/waits for the relation/)).toBeNull()
+    await expect(
+      canvas.getByRole("button", { name: "Next page" })
+    ).toBeDisabled()
+    await expect(
+      canvas.getByRole("button", { name: "Previous page" })
+    ).toBeDisabled()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Retry page navigation" })
+    )
+    await expect(args.onRetry).toHaveBeenCalledOnce()
+    await expect(args.onPage).not.toHaveBeenCalled()
+  },
+}
+
+export const ScalarOrSummary: Story = {
+  args: { pagination: { type: "notApplicable" }, rows: 1 },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.queryByRole("combobox", { name: "Rows per page" })
+    ).toBeNull()
+    await expect(canvas.queryByRole("button", { name: "Next page" })).toBeNull()
+    await expect(
+      canvas.queryByRole("button", { name: "Previous page" })
+    ).toBeNull()
+    await expect(canvas.queryByText(/Page 1/)).toBeNull()
   },
 }

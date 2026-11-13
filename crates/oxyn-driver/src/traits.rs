@@ -215,7 +215,23 @@ pub trait Session: Send + Sync {
     ) -> Result<PreparedPreview> {
         Ok(PreparedPreview {
             request: self.preview_request(path, limit, shape, cancel).await?,
-            retained: false,
+            mode: PreviewMode::Bounded,
+        })
+    }
+
+    /// Opens an isolated read session bound to this session's original target.
+    ///
+    /// Called only for `PreviewMode::Dedicated`. Preserve credentials, access
+    /// options and relevant namespaces from this session, never from newly
+    /// edited saved settings. Refuse session-local state that cannot be copied
+    /// faithfully. The executor owns the returned session and awaits its close.
+    async fn open_preview_session(
+        &self,
+        _path: &CatalogPath,
+        _cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        Err(OxynError::NotSupported {
+            capability: "isolated relation preview".to_owned(),
         })
     }
 
@@ -459,8 +475,30 @@ pub trait Session: Send + Sync {
 /// A composed preview and whether its cursor must survive a page boundary.
 #[derive(Debug)]
 pub struct PreparedPreview {
+    /// Composed and subsequently reclassified by the executor.
     pub request: ExecRequest,
-    pub retained: bool,
+    /// Who owns the resources that survive a page boundary.
+    pub mode: PreviewMode,
+}
+
+/// Resource ownership of a relation preview; no protocol cursor crosses IPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreviewMode {
+    /// An independent, server-limited request with no retained cursor.
+    Bounded,
+    /// The cursor owns an independent protocol read on the current session.
+    Retained,
+    /// A retained cursor needs a separate session to leave its owner usable.
+    Dedicated,
+}
+
+impl PreviewMode {
+    /// Whether another page resumes the same execution.
+    #[must_use]
+    pub const fn retains_cursor(self) -> bool {
+        matches!(self, Self::Retained | Self::Dedicated)
+    }
 }
 
 /// A stream of Arrow batches.

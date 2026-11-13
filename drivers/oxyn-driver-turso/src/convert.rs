@@ -252,7 +252,7 @@ impl Batches {
 }
 
 impl Plan {
-    fn build(&self, rows: &[Vec<Cell>]) -> Result<RecordBatch> {
+    pub(crate) fn build(&self, rows: &[Vec<Cell>]) -> Result<RecordBatch> {
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.kinds.len());
         for (index, kind) in self.kinds.iter().enumerate() {
             columns.push(column(*kind, rows.iter().map(|row| row.get(index)))?);

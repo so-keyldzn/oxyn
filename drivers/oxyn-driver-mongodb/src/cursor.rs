@@ -149,10 +149,10 @@ impl Feed {
     ///
     /// # Errors
     /// The server's, classified.
-    pub(crate) async fn fill_sample(&mut self) -> Result<()> {
+    pub(crate) async fn fill_sample(&mut self, row_limit: usize) -> Result<()> {
         let mut bytes = 0_usize;
         loop {
-            if self.pending.len() >= SAMPLE_DOCUMENTS || bytes >= SAMPLE_BYTES {
+            if self.pending.len() >= row_limit.clamp(1, SAMPLE_DOCUMENTS) || bytes >= SAMPLE_BYTES {
                 return Ok(());
             }
             let before = self.pending.len();
@@ -300,6 +300,7 @@ pub struct MongoCursor {
     done: bool,
     /// A failure met after rows were accumulated, reported once they are.
     failed: Option<OxynError>,
+    row_ceiling: usize,
 }
 
 impl std::fmt::Debug for MongoCursor {
@@ -334,7 +335,13 @@ impl MongoCursor {
             started,
             done: false,
             failed: None,
+            row_ceiling: BATCH_ROW_CEILING,
         }
+    }
+
+    pub(crate) fn with_batch_rows(mut self, rows: usize) -> Self {
+        self.row_ceiling = rows.clamp(1, BATCH_ROW_CEILING);
+        self
     }
 
     fn close_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -388,7 +395,7 @@ impl Cursor for MongoCursor {
         loop {
             if self.assembler.rows() > 0
                 && (self.assembler.bytes() >= BATCH_BYTE_BUDGET
-                    || self.assembler.rows() >= BATCH_ROW_CEILING)
+                    || self.assembler.rows() >= self.row_ceiling)
             {
                 return self.close_batch();
             }

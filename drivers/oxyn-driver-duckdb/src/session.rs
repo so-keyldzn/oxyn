@@ -24,11 +24,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use duckdb::Connection;
+use oxyn_catalog::CatalogProvider;
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
-use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
-    CancelToken, Capabilities, ExecRequest, OxynError, PreviewShape, Result, StatementHandle,
-    TransactionState,
+    CancelToken, Capabilities, ExecRequest, OxynError, Result, StatementHandle, TransactionState,
 };
 use oxyn_driver::{Cursor, Session, SessionContext};
 use parking_lot::Mutex;
@@ -37,16 +36,20 @@ use tokio::sync::{mpsc, oneshot};
 use crate::catalog::DuckDbCatalog;
 use crate::cursor::{DuckDbCursor, Opened};
 use crate::error::{self, Effect};
+use crate::open::OpenSpec;
 use crate::options::BatchLimits;
 use crate::query;
 use crate::stream::StreamJob;
 use crate::transaction;
 use crate::worker::WorkerHandle;
 
+mod preview;
+
 /// An open DuckDB session.
 #[derive(Debug)]
 pub struct DuckDbSession {
     worker: WorkerHandle,
+    spec: OpenSpec,
     /// Kept so the thread is never orphaned; not joined on close, the thread
     /// releases the connection before it replies.
     thread: Option<JoinHandle<()>>,
@@ -66,9 +69,11 @@ impl DuckDbSession {
         limits: BatchLimits,
         origin: SessionContext,
         version: String,
+        spec: OpenSpec,
     ) -> Self {
         Self {
             catalog: DuckDbCatalog::new(worker.clone(), capabilities, version, origin.clone()),
+            spec,
             worker,
             thread: Some(thread),
             capabilities,
@@ -76,6 +81,35 @@ impl DuckDbSession {
             context: Mutex::new(None),
             origin,
         }
+    }
+
+    pub(crate) async fn open(
+        spec: OpenSpec,
+        capabilities: Capabilities,
+        limits: BatchLimits,
+        cancel: &CancelToken,
+    ) -> Result<Self> {
+        let (worker, thread) = crate::worker::spawn(spec.clone(), cancel).await?;
+        let (origin, version) = worker
+            .call(cancel, |connection| {
+                let origin = current_context(connection)?;
+                let version = query::read(connection, "SELECT version()", &[])?
+                    .rows()
+                    .next()
+                    .and_then(|row| row.text(0))
+                    .unwrap_or_default();
+                Ok((origin, version))
+            })
+            .await?;
+        Ok(Self::new(
+            worker,
+            thread,
+            capabilities,
+            limits,
+            origin,
+            version,
+            spec,
+        ))
     }
 
     /// The bounds of an Arrow batch, for this session.
@@ -195,17 +229,34 @@ impl Session for DuckDbSession {
     /// [`OxynError::Cancelled`], those of the composition, and the engine's.
     async fn preview_request(
         &self,
-        path: &CatalogPath,
+        path: &oxyn_catalog::CatalogPath,
         limit: u32,
-        shape: &PreviewShape,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        if cancel.is_cancelled() {
-            return Err(OxynError::Cancelled);
-        }
-        let facts =
-            crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?);
-        crate::preview::request(path, limit, shape, &facts)
+        Ok(self
+            .prepare_data_preview(path, limit, shape, cancel, false)
+            .await?
+            .request)
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        self.prepare_data_preview(path, limit, shape, cancel, true)
+            .await
+    }
+
+    async fn open_preview_session(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        self.fork_preview(path, cancel).await
     }
 
     /// Runs `USE` on the quoted database and schema, then reads back what the

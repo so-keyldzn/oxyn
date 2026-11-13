@@ -41,11 +41,15 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
-            key: relation
-                .primary_key()
-                .iter()
-                .map(|field| field.name.clone())
-                .collect(),
+            key: if relation.has_preview_key() {
+                relation
+                    .primary_key()
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             ordered_by_default: relation.previews_in_key_order(),
         }
     }
@@ -63,6 +67,30 @@ pub(crate) fn request(
     limit: u32,
     shape: &PreviewShape,
     facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    compose(path, limit, shape, facts, false)
+}
+
+pub(crate) fn stream_request(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    if shape.offset != 0 {
+        return Err(OxynError::Config(
+            "a retained preview starts on page one".into(),
+        ));
+    }
+    compose(path, limit, shape, facts, true)
+}
+
+fn compose(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+    retained: bool,
 ) -> Result<ExecRequest> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
@@ -99,9 +127,11 @@ pub(crate) fn request(
         text.push_str(&order);
         text.push(' ');
     }
-    text.push_str(&format!("LIMIT {limit}"));
-    if shape.offset > 0 {
-        text.push_str(&format!(" OFFSET {}", shape.offset));
+    if !retained {
+        text.push_str(&format!("LIMIT {limit}"));
+        if shape.offset > 0 {
+            text.push_str(&format!(" OFFSET {}", shape.offset));
+        }
     }
 
     Ok(ExecRequest::new(LANGUAGE, text)

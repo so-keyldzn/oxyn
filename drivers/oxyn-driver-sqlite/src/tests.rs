@@ -1456,7 +1456,7 @@ async fn a_composite_key_is_ordered_as_its_index_not_as_its_table() {
     let session = workshop().await;
     run_to_end(
         session.as_ref(),
-        "CREATE TABLE grants (a INTEGER, b INTEGER, note TEXT, PRIMARY KEY (b, a))",
+        "CREATE TABLE grants (a INTEGER NOT NULL, b INTEGER NOT NULL, note TEXT, PRIMARY KEY (b, a))",
     )
     .await;
     run_to_end(

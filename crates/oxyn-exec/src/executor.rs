@@ -386,7 +386,7 @@ pub struct Executor {
     store: Arc<Store>,
     policy: Arc<dyn PolicyGate>,
     credentials: Arc<dyn CredentialResolver>,
-    sessions: SessionRegistry,
+    sessions: Arc<SessionRegistry>,
     running: CancelRegistry,
     approvals: ApprovalRegistry,
     events: EventBus,
@@ -896,17 +896,23 @@ impl Executor {
                         capability: "preview filter".to_owned(),
                     });
                 }
+                if shape.continuation.is_some() && !shape.continuable {
+                    return Err(OxynError::Config(
+                        "this preview did not request a continuable read".into(),
+                    ));
+                }
                 let budget = ExecLimits::DEFAULT_TIMEOUT;
-                let read = crate::preview_stream::Read {
+                let mut read = crate::preview_stream::Read {
                     path: path.clone(),
                     shape: shape.clone(),
+                    dedicated: false,
                     size: usize::try_from(*limit)
                         .map_err(|_| OxynError::Config("preview size exceeds platform".into()))?,
                 };
                 let prepared = if shape.continuation.is_some() {
                     oxyn_driver::PreparedPreview {
                         request: self.previews.request(&slot, &read)?,
-                        retained: true,
+                        mode: oxyn_driver::PreviewMode::Retained,
                     }
                 } else {
                     Self::prepare_within(
@@ -919,7 +925,8 @@ impl Executor {
                     )
                     .await?
                 };
-                let retained = prepared.retained.then_some(read);
+                read.dedicated = prepared.mode == oxyn_driver::PreviewMode::Dedicated;
+                let retained = prepared.mode.retains_cursor().then_some(read);
                 let mut request = reclassified_request(prepared.request, Some(&slot));
                 if request.is_mutating() {
                     // Two distinct refusals, because they call for two different
@@ -1512,6 +1519,7 @@ impl Executor {
             }
             closed += 1;
         }
+        self.previews.join_sessions(Some(connection), None).await;
         Ok(Outcome::Disconnected { connection, closed })
     }
 
@@ -1530,7 +1538,11 @@ impl Executor {
             self.running.cancel(&self.sessions, running.statement).await;
         }
         self.sessions.remove(session);
-        slot.close().await?;
+        let closed = slot.close().await;
+        self.previews
+            .join_sessions(Some(connection), Some(session))
+            .await;
+        closed?;
         Ok(Outcome::SessionClosed { session })
     }
 
@@ -1646,7 +1658,7 @@ impl Executor {
                     self.sessions
                         .for_connection(connection)
                         .into_iter()
-                        .find(|slot| slot.is_open())
+                        .find(|slot| slot.is_open() && !slot.is_preview())
                 } else {
                     None
                 }
@@ -1730,6 +1742,11 @@ impl Executor {
             ));
         }
 
+        if request.is_mutating() {
+            self.previews.close(connection, None);
+            self.previews.join_sessions(Some(connection), None).await;
+        }
+        let retained_read = retained.is_some();
         // Captured before `request` is moved into `slot.execute`: it is the
         // only signal kept from the executed text (I-10).
         let intent = request.intent;
@@ -1768,7 +1785,9 @@ impl Executor {
             // in silence (ADR-0039 §3). Read with the guard still armed, so a
             // future dropped during this await still announces `Cancelled`;
             // and no `.await` between `settle` and the terminal event.
-            self.publish_transaction_state(id, &slot).await;
+            if !retained_read {
+                self.publish_transaction_state(id, &slot).await;
+            }
             guard.settle();
             self.conclude(id, connection, intent, run, started)
         };
@@ -1789,7 +1808,7 @@ impl Executor {
     /// transaction state read next would wait behind it.
     async fn run_statement(
         &self,
-        slot: &SessionSlot,
+        slot: &Arc<SessionSlot>,
         id: CommandId,
         request: ExecRequest,
         ct: &CancelToken,
@@ -1816,6 +1835,7 @@ impl Executor {
             .and_then(|after| Deadline::starting_at(started, after));
         let calling = tokio::time::Instant::now();
         let result = ResultId::new();
+        let mut execution_session = slot.id();
         let cursor = if let Some(read) = retained {
             let (cursor, stream) = self
                 .previews
@@ -1827,6 +1847,7 @@ impl Executor {
                     deadline.map(|deadline| deadline.at),
                 )
                 .await?;
+            execution_session = stream.execution_session;
             self.previews.bind(result, stream);
             cursor
         } else {
@@ -1838,8 +1859,12 @@ impl Executor {
             statement,
             id,
             connection,
-            slot.id(),
-            slot.capabilities(),
+            execution_session,
+            self.sessions
+                .get(execution_session)
+                .map_or(oxyn_core::Capabilities::empty(), |session| {
+                    session.capabilities()
+                }),
             ct.clone(),
         ));
 
@@ -2504,7 +2529,7 @@ impl Executor {
 
     /// The open sessions.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionRegistry {
+    pub fn sessions(&self) -> &SessionRegistry {
         &self.sessions
     }
 
@@ -2609,6 +2634,7 @@ impl Executor {
                 tracing::warn!(error = %err, "the server refused a clean session close");
             }
         }
+        self.previews.join_sessions(None, None).await;
         // Again, last: closing may have abandoned more, and nothing after this
         // point runs the periodic writer.
         self.journal_abandoned_off_runtime().await;
@@ -3080,17 +3106,19 @@ impl ExecutorBuilder {
     /// Builds the executor.
     #[must_use]
     pub fn build(self) -> Executor {
+        let sessions = Arc::new(SessionRegistry::new());
+        let previews = crate::preview_stream::Registry::new(Arc::clone(&sessions));
         Executor {
             drivers: self.drivers,
             store: self.store,
             policy: self.policy,
             credentials: self.credentials,
-            sessions: SessionRegistry::new(),
+            sessions,
             running: CancelRegistry::new(),
             approvals: self.approvals,
             events: self.events,
             results: RwLock::new(crate::retained::RetainedResults::default()),
-            previews: crate::preview_stream::Registry::default(),
+            previews,
             catalogs: RwLock::new(HashMap::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_writes: Arc::new(Mutex::new(())),

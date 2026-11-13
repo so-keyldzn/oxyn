@@ -920,7 +920,7 @@ holds:
 * **default order** — the rows come in key order and pages are offered at
   once: "Rows come in the order of the primary key (a, b). Sort the preview to
   choose another order.", naming the key columns;
-* **a key, but no default order** — a virtual table, Amazon Redshift, where
+* **a key, but no default order** — a proven unique key whose default order is not cheap, where
   ordering may mean reading the whole relation: "Rows come in no guaranteed
   order, and putting this relation in order may mean reading all of it first.
   Sort the preview to browse it page by page.", followed by a `Sort…` action.
@@ -931,7 +931,7 @@ holds:
   an `OFFSET` on an uncertain order would show the same row twice and omit
   another one, without signaling anything.
 
-The page bar stays below the result panel, outside the grid's scroll area,
+For a pageable record source, the page bar stays below the result panel, outside the grid's scroll area,
 including on a single page, an empty result, a loading read or an error.
 It carries `Rows per page`, `Page N`, the actual received range (`Rows 1–2`
 for two rows), and `Previous page` / `Next page`. Zero rows say `No rows`;
@@ -943,7 +943,7 @@ If that next page is empty, Previous still returns to the preceding page.
 There is no page count or Last action: neither can be known without counting
 the table. The bar wraps on narrow windows and remains reachable by keyboard.
 
-For ClickHouse, Elasticsearch/OpenSearch and iterable Redis collections, pages instead follow one retained read ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). The footer says "Pages follow one read. Refresh starts a new read." Previous returns the same rows; refresh, filter, sort, size change and reconnection discard continuation and start at page one. Expiry or the history budget produces an explicit error with refresh available. Redis strings and JSON documents have one value; probabilistic structure summaries are not member collections. Older OpenSearch without `_shard_doc` visits index/shard partitions successively; sorting keeps the bounded first-page preview; the footer asks to clear the sort to browse native pages. Future partitions may reflect concurrent changes. OpenSearch 2.0–2.3 keeps its original first-page preview because PIT was introduced in 2.4. No preview issues a total-hit or row count.
+For views and other SQL relations without a proven paging key, MongoDB collections/views/time-series, Hrana 3 Turso relations, ClickHouse, Elasticsearch/OpenSearch and iterable Redis collections, pages follow one retained read ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). The footer says the read stays open between pages and closing the preview releases it. Previous returns the same rows; refresh, filter, sort, size change and reconnection discard continuation and start at page one. Expiry or the history budget produces an explicit error with refresh available. Redis strings and JSON documents have one value; probabilistic structure summaries are not member collections. Older OpenSearch without `_shard_doc` visits index/shard partitions successively; sorting keeps the bounded first-page preview; the footer asks to clear the sort to browse native pages. Future partitions may reflect concurrent changes. OpenSearch 2.0–2.3 keeps its original first-page preview because PIT was introduced in 2.4. No preview issues a total-hit or row count. Single values and structural summaries have no pager. A record source without supported continuation has only a `Preview rows` limit selector and an explanation, with no `Page N` or Previous/Next controls. Routines and metadata-only objects do not gain automatic execution. Availability errors are displayed with retry only when classified transient; the query key includes the session and displayed result, so stale availability never attaches to replacement rows.
 
 For independent SQL/key-order previews, on a later page, the line under the filter reads "Page 7 of this order. Each
 page is a new read: the server may have changed between two of them.", and

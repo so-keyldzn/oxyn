@@ -254,6 +254,8 @@ impl CatalogProvider for SqliteCatalog {
                 Ok(Some(RawRelation {
                     kind,
                     is_virtual,
+                    isolatable: database != "temp"
+                        && crate::preview_context::Context::read(connection)?.reproducible(),
                     key,
                     columns: table_info(connection, &database, &name)?,
                 }))
@@ -279,11 +281,33 @@ impl CatalogProvider for SqliteCatalog {
         // until the user asks for an order. So is a table whose key index mixes
         // directions: `ORDER BY a ASC, b ASC` cannot be walked in it, and
         // opening the table would sort all of it.
-        Ok(if described.is_virtual || !described.key.walkable {
-            relation
+        let keys = relation.primary_key();
+        let rowid = described.key.rowid
+            && keys.len() == 1
+            && keys
+                .first()
+                .is_some_and(|key| key.raw_type.eq_ignore_ascii_case("INTEGER"));
+        let unique = !keys.is_empty() && (rowid || keys.iter().all(|key| !key.nullable));
+        let relation = if !described.is_virtual && unique {
+            relation.with_preview_key()
         } else {
+            relation
+        };
+        let relation = if !described.is_virtual && described.key.walkable && unique {
             relation.with_key_order_preview()
-        })
+        } else {
+            relation
+        };
+        Ok(
+            if described.isolatable
+                && !relation.previews_in_key_order()
+                && relation.kind.holds_records()
+            {
+                relation.with_retained_preview(true)
+            } else {
+                relation
+            },
+        )
     }
 
     async fn list_indexes(
@@ -396,6 +420,7 @@ struct RawRelation {
     /// A virtual table: its module, not the engine, decides what reading it in
     /// key order costs.
     is_virtual: bool,
+    isolatable: bool,
     /// How the primary key's index orders the table.
     key: KeyIndex,
     columns: Vec<RawColumn>,

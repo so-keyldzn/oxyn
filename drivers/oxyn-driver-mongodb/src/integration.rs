@@ -583,7 +583,8 @@ async fn the_catalog_lists_databases_collections_views_and_indexes() {
     assert!(described.has_inferred_schema());
     assert_eq!(described.estimated_rows, Some(1));
     assert!(described.field("_id").is_some_and(|f| f.is_primary_key));
-    assert!(described.previews_in_key_order());
+    assert!(!described.has_preview_key());
+    assert!(described.retained_preview);
     let recent = CatalogPath::for_relation(None, Some(&database), "recent").expect("path");
     let recent = catalog
         .describe_relation(&recent, &token)
@@ -724,7 +725,6 @@ async fn a_preview_is_bounded_ordered_by_id_when_sorted_and_read_only() {
     let path = CatalogPath::for_relation(None, Some(&database), "items").expect("path");
     let shape = PreviewShape {
         sort: vec![PreviewSort::descending("g")],
-        offset: 5,
         ..PreviewShape::unordered()
     };
     let request = session
@@ -741,8 +741,8 @@ async fn a_preview_is_bounded_ordered_by_id_when_sorted_and_read_only() {
     let ids = batch
         .column(batch.schema().index_of("_id").expect("_id"))
         .as_primitive::<arrow::datatypes::Int32Type>();
-    // g = 2 for ids 2, 5, 8, …, 29 (ten of them), ordered by _id: skip five.
-    assert_eq!(ids.value(0), 17);
+    // The bounded sample starts with g = 2, then orders ties by _id.
+    assert_eq!(ids.value(0), 2);
     drop(cursor);
     drop_database(&*session, &database).await;
     session.close().await.expect("close");

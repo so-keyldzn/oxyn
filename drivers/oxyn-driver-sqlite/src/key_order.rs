@@ -28,6 +28,7 @@ pub(crate) struct KeyIndex {
     /// Whether `ORDER BY key ASC` is answered from the index, forwards or
     /// backwards. False for a mixed-direction index.
     pub(crate) walkable: bool,
+    pub(crate) rowid: bool,
     /// The columns whose index collation is not the one the column was
     /// declared with: they must be named in the `ORDER BY`.
     pub(crate) collations: Vec<(String, String)>,
@@ -50,13 +51,16 @@ impl KeyIndex {
             .iter()
             .filter_map(|column| {
                 let name = column.name.as_deref()?;
-                let declared = default_collation(name)?;
-                (!declared.eq_ignore_ascii_case(&column.collation))
-                    .then(|| (name.to_owned(), column.collation.clone()))
+                let declared = default_collation(name);
+                (declared
+                    .as_deref()
+                    .is_none_or(|declared| !declared.eq_ignore_ascii_case(&column.collation)))
+                .then(|| (name.to_owned(), column.collation.clone()))
             })
             .collect();
         Self {
             walkable,
+            rowid: false,
             collations,
         }
     }
@@ -65,6 +69,7 @@ impl KeyIndex {
     pub(crate) fn unconstrained() -> Self {
         Self {
             walkable: true,
+            rowid: true,
             collations: Vec::new(),
         }
     }
@@ -113,8 +118,8 @@ pub(crate) fn read(connection: &Connection, database: &str, table: &str) -> Resu
         .map_err(engine)?;
 
     Ok(KeyIndex::of(&columns, |column| {
-        // A column the metadata call cannot resolve keeps the default: the
-        // preview then names no collation, which is today's behavior.
+        // When the column default is unreadable, name the index collation
+        // explicitly: silently assuming it could invalidate a total order.
         let (_, collation, _, _, _) = connection
             .column_metadata(Some(database), table, column)
             .ok()?;

@@ -73,3 +73,7 @@ phase 4:
 - the format and granularity of the permissions manifest.
 
 To be written with [`/adr`](../.claude/commands/adr.md).
+
+## Preview resources
+
+`Session::open_preview_session` is an optional resource-opening boundary, not implicit shared state. Its default refuses support; a future WIT adapter must expose an owned session handle with explicit cancellation and close. `PreviewShape::continuable` defaults to false, preserving bounded samples. The host owns retained history and private-session quotas ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)); protocol identities stay outside the webview.

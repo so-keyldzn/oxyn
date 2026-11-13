@@ -127,6 +127,26 @@ fn the_first_and_the_next_pages_of_a_collection_share_one_order() {
 }
 
 #[test]
+fn declared_id_metadata_does_not_prove_globally_unique_independent_pages() {
+    let mut relation = collection(&["_id", "total"]);
+    relation.preview_key = false;
+    let page = PreviewShape {
+        offset: 200,
+        ..PreviewShape::unordered()
+    };
+    assert!(request(&path("orders"), 200, &page, Some(&relation), true).is_err());
+    let sorted = PreviewShape {
+        sort: vec![PreviewSort::descending("total")],
+        ..PreviewShape::unordered()
+    };
+    let request = super::stream_request(&path("orders"), 50, &sorted, Some(&relation), true)
+        .expect("one cursor can retain ties");
+    assert!(!request.text.contains("\"skip\""));
+    assert!(!request.text.contains("\"limit\""));
+    assert!(request.text.contains("\"batchSize\":50"));
+}
+
+#[test]
 fn a_view_or_a_time_series_has_no_total_order_to_sort_or_page_by() {
     for kind in [RelationKind::View, RelationKind::Collection] {
         let relation = unkeyed(kind);

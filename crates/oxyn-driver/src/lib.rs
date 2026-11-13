@@ -90,7 +90,7 @@ pub use credentials::Credentials;
 pub use dsn::{Dsn, DsnBuilder, DsnError, DsnParts, ParsedDsn};
 pub use metadata::{ConnectionField, DriverFamily, DriverMetadata, FieldKind, looks_like_secret};
 pub use registry::DriverRegistry;
-pub use traits::{Cursor, Driver, PreparedPreview, Session};
+pub use traits::{Cursor, Driver, PreparedPreview, PreviewMode, Session};
 
 /// Re-exports of `secrecy`, because they are part of the signature of
 /// [`Driver::connect`] and of [`Dsn::expose`].

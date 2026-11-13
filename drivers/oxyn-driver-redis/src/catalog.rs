@@ -295,6 +295,11 @@ impl CatalogProvider for RedisCatalog {
             .with_comment(facts.comment());
         if crate::preview_cursor::collection(&facts.kind) {
             described = described.with_retained_preview(false);
+        } else if matches!(
+            facts.kind.as_str(),
+            "string" | "ReJSON-RL" | "MBbloom--" | "MBbloomCF" | "CMSk-TYPE" | "TDIS-TYPE"
+        ) {
+            described = described.with_single_page_preview();
         }
         if let Some(length) = facts.length {
             described = described.with_estimated_rows(length);

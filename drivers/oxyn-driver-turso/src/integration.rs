@@ -87,7 +87,7 @@ async fn drain(cursor: &mut Box<dyn Cursor>) -> Vec<RecordBatch> {
 /// server. The plaintext client is test-only and restricted to the loopback.
 #[tokio::test]
 #[ignore = "requires a disposable local libSQL server in OXYN_TURSO_TEST_URL"]
-async fn a_real_libsql_server_pages_a_composite_key_at_each_desktop_size() {
+async fn a_real_libsql_server_streams_tables_and_views_at_each_desktop_size() {
     let base = std::env::var("OXYN_TURSO_TEST_URL").expect("a disposable server URL is set");
     let endpoint = url::Url::parse(&base).expect("a local test URL");
     assert_eq!(endpoint.scheme(), "http", "a test-only plaintext client");
@@ -124,23 +124,32 @@ async fn a_real_libsql_server_pages_a_composite_key_at_each_desktop_size() {
         .await
         .expect("seed synthetic rows");
     drain(&mut cursor).await;
-    let mut ordered: Vec<i64> = (1..=201).collect();
-    ordered.sort_by_key(|id| ((id - 1) % 3, *id));
-    let path = CatalogPath::for_relation(None, Some("main"), &table).expect("our table path");
-    for size in [50_u32, 100, 200] {
-        for offset in [0, size, 2 * size, 0] {
+    let view = format!("{table}_view");
+    let mut cursor = session
+        .execute(
+            write(&format!("CREATE VIEW {view} AS SELECT * FROM {table}")),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("own view");
+    drain(&mut cursor).await;
+    for name in [&table, &view] {
+        let path = CatalogPath::for_relation(None, Some("main"), name).expect("own path");
+        for size in [50_u32, 100, 200] {
             let shape = PreviewShape {
-                offset: u64::from(offset),
-                ..PreviewShape::unordered()
+                continuable: true,
+                sort: vec![oxyn_core::PreviewSort::ascending("id")],
+                ..PreviewShape::default()
             };
-            let request = session
-                .preview_request(&path, size, &shape, &CancelToken::new())
+            let prepared = session
+                .prepare_preview(&path, size, &shape, &CancelToken::new())
                 .await
-                .expect("a page request");
+                .expect("retained preparation");
+            assert_eq!(prepared.mode, oxyn_driver::PreviewMode::Retained);
             let mut cursor = session
-                .execute(request, &CancelToken::new())
+                .execute_preview(prepared.request, &CancelToken::new())
                 .await
-                .expect("read a real page");
+                .expect("real Hrana cursor");
             let batches = drain(&mut cursor).await;
             let ids: Vec<i64> = batches
                 .iter()
@@ -153,15 +162,14 @@ async fn a_real_libsql_server_pages_a_composite_key_at_each_desktop_size() {
                         .copied()
                 })
                 .collect();
-            let expected: Vec<i64> = ordered
-                .iter()
-                .copied()
-                .skip(usize::try_from(offset).expect("small offset"))
-                .take(usize::try_from(size).expect("small page"))
-                .collect();
-            assert_eq!(ids, expected, "size {size}, offset {offset}");
+            assert_eq!(ids, (1..=201).collect::<Vec<i64>>());
         }
     }
+    let mut cursor = session
+        .execute(write(&format!("DROP VIEW {view}")), &CancelToken::new())
+        .await
+        .expect("remove own view");
+    drain(&mut cursor).await;
     let mut cursor = session
         .execute(write(&format!("DROP TABLE {table}")), &CancelToken::new())
         .await
@@ -715,6 +723,8 @@ mod catalog {
                     ],
                 ],
             )
+        } else if sql.contains("AS rowid_key") {
+            rows(&[("rowid_key", None)], vec![vec![value::int(1)]])
         } else if sql.contains("pragma_index_list") {
             rows(
                 &[("name", None)],
@@ -880,7 +890,7 @@ mod catalog {
             .requests()
             .into_iter()
             .skip(1)
-            .filter(|request| !request.sql().contains("WHERE pk > 0"))
+            .filter(|request| request.path != "/v3" && !request.sql().contains("WHERE pk > 0"))
             .collect();
         assert!(sent.len() >= 3);
         for request in sent {

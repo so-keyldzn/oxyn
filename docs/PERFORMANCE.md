@@ -363,3 +363,9 @@ the gain is assumed.
 The corollary also holds the other way: a `.clone()` on a path called
 once per window opening is not a performance problem, and
 turning it into a borrow that contaminates five signatures is a net loss.
+
+## Retained preview resource bounds
+
+[ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md): per executor, 16 active/opening reads reserved before session creation and held through async cleanup. Per read: five minutes, 8 MiB Arrow history, 128 MiB spill, 8192 batches; the registry retains at most 16 result identities. Limits fail explicitly. Driver batching can read ahead of the displayed page.
+
+Turso framing: 32 MiB per frame, 1 MiB headers, 4096 columns. Samples/batches stop at 200 rows or 1 MiB estimated cell storage plus one bounded row. Request/reply channels hold one item each. Header acquisition and close each have a 10-second bound. Ordinary pipeline responses keep their 32 MiB whole-response cap. These are enforced limits, not a new process RSS measurement.

@@ -4,7 +4,7 @@
 //! [ADR-0069](../../../docs/adr/0069-turso-driver-hrana-over-http.md).
 //!
 //! Turso Cloud is not a SQLite file: it is a server, queried with
-//! `POST /v2/pipeline`. Its SQL is SQLite's, so the catalog reads
+//! `POST /v2/pipeline` or, for retained previews, `/v3/cursor`. Its SQL is SQLite's, so the catalog reads
 //! `sqlite_master` and the `pragma_*` functions and the types follow SQLite's
 //! storage classes, but nothing is shared with `oxyn-driver-sqlite`, and
 //! **nothing links `libsql` or `libsqlite3-sys`**: the workspace holds one
@@ -27,17 +27,17 @@
 //!
 //! # The choices that govern this crate
 //!
-//! **One statement, one stream.** Each statement opens a Hrana stream, runs
-//! and closes it in the same request. No transaction, no `PRAGMA` setting, no
+//! **One statement, one stream.** Ordinary statements close in their pipeline
+//! request; retained previews own their stream through EOF or bounded cleanup. No transaction, no `PRAGMA` setting, no
 //! `ATTACH`: they would last one request and be forgotten, so they are
 //! refused naming the way out.
 //!
 //! **A stop is a dropped request, and a stopped write is never "cancelled".**
 //! Turso has no interrupt call; `SERVER_SIDE_CANCEL` is not declared.
 //!
-//! **The answer is one JSON document**, read under a budget
-//! ([`http::MAX_RESPONSE_BYTES`]); a result past it is refused with a pointer
-//! to `LIMIT`.
+//! **Pipeline answers have a whole-response budget** ([`http::MAX_RESPONSE_BYTES`]).
+//! Hrana 3 previews instead stream byte-bounded NDJSON frames into Arrow batches
+//! ([ADR-0078](../../../docs/adr/0078-page-keyless-relations-with-isolated-retained-reads.md)).
 //!
 //! **The token is a secret in the keyring**, sent as a sensitive header,
 //! scrubbed from every message, absent from every `Debug`.
@@ -61,6 +61,7 @@ mod options;
 mod params;
 mod preview;
 mod refuse;
+mod streaming;
 mod wire;
 
 #[cfg(test)]

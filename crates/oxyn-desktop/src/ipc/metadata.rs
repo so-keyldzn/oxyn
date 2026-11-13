@@ -161,6 +161,7 @@ impl PreviewShapeDraft {
             )));
         }
         let shape = PreviewShape {
+            continuable: true,
             sort,
             predicate: self.predicate,
             offset: self.offset,
@@ -173,6 +174,9 @@ impl PreviewShapeDraft {
             // of an order nobody can name is what ADR-0028 refuses, and the
             // order a relation comes in by default is the one ADR-0068 names.
             match pagination(&shape, relation, 0, page_size) {
+                Pagination::NotApplicable => {
+                    return Err(IpcError::invalid("this object has no pageable collection"));
+                }
                 Pagination::Unknown => {
                     return Err(IpcError::invalid(
                         "A page other than the first needs the relation to be described: \
@@ -212,6 +216,8 @@ impl PreviewShapeDraft {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Pagination {
+    /// A value or structural summary has no collection to traverse.
+    NotApplicable,
     /// The relation has not been described, so its key is not known. Not the
     /// same as having no key: nothing is said, and a page is not offered.
     Unknown,
@@ -268,6 +274,9 @@ pub fn pagination(
     let Some(relation) = relation else {
         return Pagination::Unknown;
     };
+    if relation.single_page_preview || !relation.kind.holds_records() {
+        return Pagination::NotApplicable;
+    }
     if relation.retained_preview {
         if !applied.sort.is_empty() && !relation.retained_preview_sort {
             return Pagination::NeedsNativeOrder;
@@ -279,7 +288,7 @@ pub fn pagination(
         };
     }
     let key = relation.primary_key();
-    if key.is_empty() {
+    if !relation.has_preview_key() {
         return Pagination::NoUniqueKey;
     }
     let by_default = applied.sort.is_empty();

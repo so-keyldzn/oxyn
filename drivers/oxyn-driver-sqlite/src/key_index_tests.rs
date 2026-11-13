@@ -95,7 +95,7 @@ async fn an_index_collation_that_differs_from_the_column_is_named_in_the_order()
     // order needs no clause for it.
     run(
         &*session,
-        "CREATE TABLE labels (name TEXT COLLATE NOCASE PRIMARY KEY, note TEXT)",
+        "CREATE TABLE labels (name TEXT COLLATE NOCASE PRIMARY KEY NOT NULL, note TEXT)",
     )
     .await;
     let labels = previewed(&*session, "labels").await;
@@ -105,6 +105,30 @@ async fn an_index_collation_that_differs_from_the_column_is_named_in_the_order()
         labels.sql
     );
     assert!(!labels.plan.contains("TEMP B-TREE"), "{}", labels.plan);
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn a_requested_sort_keeps_the_unique_comparison_even_without_a_cheap_default_order() {
+    let session = open().await;
+    run(&*session, "CREATE TABLE mixed (name TEXT COLLATE NOCASE NOT NULL, rank INTEGER NOT NULL, PRIMARY KEY (name COLLATE BINARY, rank DESC))").await;
+    let shape = oxyn_core::PreviewShape {
+        sort: vec![oxyn_core::PreviewSort::ascending("name")],
+        offset: 200,
+        ..Default::default()
+    };
+    let path = oxyn_catalog::CatalogPath::for_relation(None, Some("main"), "mixed").expect("path");
+    let request = session
+        .preview_request(&path, 50, &shape, &CancelToken::new())
+        .await
+        .expect("proven key");
+    assert!(
+        request
+            .text
+            .contains("ORDER BY \"name\" ASC, \"name\" COLLATE \"BINARY\" ASC, \"rank\" ASC"),
+        "{}",
+        request.text
+    );
     session.close().await.expect("close");
 }
 

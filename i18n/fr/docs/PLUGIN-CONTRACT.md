@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/PLUGIN-CONTRACT.md" sha256="aa8099200ea3" -->
+<!-- oxyn-translation source="docs/PLUGIN-CONTRACT.md" sha256="70cef6253735" -->
 
 > Traduction française de [docs/PLUGIN-CONTRACT.md](../../../docs/PLUGIN-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -76,3 +76,7 @@ phase 4 :
 - le format et la granularité du manifeste de permissions.
 
 À écrire avec [`/adr`](../claude/commands/adr.md).
+
+## Ressources d’aperçu
+
+`Session::open_preview_session` est une frontière optionnelle d’ouverture de ressource, pas un état partagé implicite. Son défaut refuse la capacité ; un futur adaptateur WIT doit exposer une poignée de session détenue avec annulation et fermeture explicites. `PreviewShape::continuable` vaut false par défaut, gardant les échantillons bornés. L’hôte détient historique et quotas privés ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)) ; les identités protocolaires restent hors de la webview.

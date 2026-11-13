@@ -141,7 +141,9 @@ WHERE n.nspname = $1 AND c.relname = $2";
 /// column to refuse.
 const SQL_RELATION_POSTGRES: &str = "\
 SELECT c.relkind::text, pg_catalog.obj_description(c.oid, 'pg_class'), c.reltuples, \
-       c.relhassubclass \
+       c.relhassubclass, \
+       EXISTS(SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid \
+              AND i.indisprimary AND i.indisvalid AND i.indisready) \
 FROM pg_catalog.pg_class c \
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
 WHERE n.nspname = $1 AND c.relname = $2";
@@ -374,6 +376,30 @@ impl PostgresCatalog {
         shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<oxyn_core::ExecRequest> {
+        Ok(self
+            .compose_preview(path, limit, shape, cancel, false)
+            .await?
+            .request)
+    }
+
+    pub(crate) async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        self.compose_preview(path, limit, shape, cancel, true).await
+    }
+
+    async fn compose_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+        allow_retained: bool,
+    ) -> Result<oxyn_driver::PreparedPreview> {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
@@ -382,12 +408,37 @@ impl PostgresCatalog {
         // column list, so a projection is checked against the description. The
         // predicate, for its part, goes out as is and needs no metadata.
         if self.variant.flavor == PostgresFlavor::Redshift {
-            let facts = if shape.needs_total_order() || shape.columns.is_some() {
-                crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
+            let relation = if allow_retained || shape.needs_total_order() || shape.columns.is_some()
+            {
+                Some(self.describe_relation(path, cancel).await?)
             } else {
-                crate::preview::RelationFacts::default()
+                None
             };
-            return crate::preview::request(&self.database, dialect, path, limit, shape, &facts);
+            let retained = allow_retained && relation.as_ref().is_some_and(|r| r.retained_preview);
+            let facts = relation
+                .as_ref()
+                .map(crate::preview::RelationFacts::of)
+                .unwrap_or_default();
+            return Ok(oxyn_driver::PreparedPreview {
+                request: if retained {
+                    crate::preview::stream_request(
+                        &self.database,
+                        dialect,
+                        path,
+                        limit,
+                        &[],
+                        shape,
+                        &facts,
+                    )?
+                } else {
+                    crate::preview::request(&self.database, dialect, path, limit, shape, &facts)?
+                },
+                mode: if retained {
+                    oxyn_driver::PreviewMode::Dedicated
+                } else {
+                    oxyn_driver::PreviewMode::Bounded
+                },
+            });
         }
         let (Some(namespace), Some(relation)) = (path.namespace(), path.relation()) else {
             return Err(OxynError::CatalogUnavailable(
@@ -400,15 +451,38 @@ impl PostgresCatalog {
         let (columns, facts) = self
             .typed_columns(&rows)
             .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
-        crate::preview::request_with_columns(
-            &self.database,
-            dialect,
-            path,
-            limit,
-            &columns,
-            shape,
-            &facts,
-        )
+        let retained = allow_retained
+            && !facts.independent_pages()
+            && namespace != "pg_temp"
+            && !namespace.starts_with("pg_temp_");
+        Ok(oxyn_driver::PreparedPreview {
+            request: if retained {
+                crate::preview::stream_request(
+                    &self.database,
+                    dialect,
+                    path,
+                    limit,
+                    &columns,
+                    shape,
+                    &facts,
+                )?
+            } else {
+                crate::preview::request_with_columns(
+                    &self.database,
+                    dialect,
+                    path,
+                    limit,
+                    &columns,
+                    shape,
+                    &facts,
+                )?
+            },
+            mode: if retained {
+                oxyn_driver::PreviewMode::Dedicated
+            } else {
+                oxyn_driver::PreviewMode::Bounded
+            },
+        })
     }
 
     /// Reads the rows of [`crate::preview::SQL_COLUMNS`]: the columns to
@@ -652,6 +726,7 @@ impl CatalogProvider for PostgresCatalog {
         // default. Unreadable is read as "has children", like the preview reads
         // it: the two must reach the same answer.
         let key_order = !redshift
+            && header.try_get::<bool, _>(4).unwrap_or(false)
             && previews_in_key_order(
                 self.variant.flavor,
                 &kind,
@@ -726,11 +801,22 @@ impl CatalogProvider for PostgresCatalog {
         }
 
         let described_relation = described_relation.with_fields(fields);
-        Ok(if key_order {
+        let described_relation = if key_order {
             described_relation.with_key_order_preview()
         } else {
             described_relation
-        })
+        };
+        Ok(
+            if described_relation.kind.holds_records()
+                && !described_relation.previews_in_key_order()
+                && ns != "pg_temp"
+                && !ns.starts_with("pg_temp_")
+            {
+                described_relation.with_retained_preview(true)
+            } else {
+                described_relation
+            },
+        )
     }
 
     /// The indexes of a relation.

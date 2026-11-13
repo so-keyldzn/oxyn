@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use bson::{Document, RawDocumentBuf, doc};
+use bson::doc;
 use mongodb::Client;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
@@ -44,13 +44,13 @@ use oxyn_core::{
 use oxyn_driver::{Cursor, Session, SessionContext};
 use parking_lot::Mutex;
 
-use crate::cancel::{self, Leased, Quarantine, Registry, Running};
+use crate::cancel::{self, Quarantine, Registry, Running};
 use crate::catalog::MongoCatalog;
-use crate::command::{self, BsonCommand};
-use crate::cursor::{Feed, MongoCursor};
-use crate::decode::Plan;
-use crate::error::{map_error, map_statement_error, stopped, write_concern_failure};
+use crate::command;
+use crate::error::{map_error, stopped};
 use crate::preview;
+
+mod execution;
 
 /// The commands whose reply is a cursor: their results stream through
 /// `getMore`. Every other command's reply is one document, the whole result.
@@ -126,98 +126,6 @@ impl MongoSession {
             .unwrap_or_else(|| DEFAULT_DATABASE.to_owned())
     }
 
-    /// Runs one command and reads its sample, racing `cancel`.
-    async fn run(
-        &self,
-        command: BsonCommand,
-        intent: StatementIntent,
-        cancel: &CancelToken,
-    ) -> Result<Box<dyn Cursor>> {
-        let started = Instant::now();
-        let driver = &self.shared.driver;
-        let database = command
-            .database
-            .clone()
-            .unwrap_or_else(|| self.target_database());
-        let raw = RawDocumentBuf::try_from(&command.document).map_err(|error| {
-            OxynError::Query(format!("the command cannot be encoded as BSON: {error}"))
-        })?;
-        let session = self
-            .shared
-            .client
-            .start_session()
-            .causal_consistency(false)
-            .await
-            .map_err(|error| map_error(driver, intent, &error, false))?;
-        let mut leased = Leased::new(session, &self.shared.quarantine);
-        let running = Arc::clone(leased.running());
-        let handle = StatementHandle::new();
-        self.registry.insert(handle, Arc::clone(&running));
-        let withheld = command.carries_credential;
-        let fail = |error: mongodb::error::Error| {
-            map_statement_error(driver, intent, &error, running.was_killed(), withheld)
-        };
-        let outcome = async {
-            let db = self.shared.client.database(&database);
-            let session = leased.session()?;
-            let mut feed = if CURSOR_COMMANDS.contains(&command.name.as_str()) {
-                let cursor = cancel::race(&self.shared.stopper, &running, cancel, async {
-                    db.run_raw_cursor_command(raw)
-                        .session(session)
-                        .batch()
-                        .await
-                })
-                .await
-                .map_err(fail)?;
-                let summarized = command.name == BULK_WRITE;
-                Feed::server(cursor, leased, driver.clone(), intent, withheld, summarized)
-            } else {
-                let reply: Document = cancel::race(&self.shared.stopper, &running, cancel, async {
-                    db.run_raw_command(raw).session(session).await
-                })
-                .await
-                .map_err(fail)?;
-                let reply = RawDocumentBuf::try_from(&reply).map_err(|error| {
-                    OxynError::Internal(format!("the server's reply cannot be re-encoded: {error}"))
-                })?;
-                if !intent.is_read_only()
-                    && let Some(failure) = write_concern_failure(&reply, withheld)
-                {
-                    return Err(failure);
-                }
-                Feed::reply(reply, driver.clone(), intent, Arc::clone(&running))
-            };
-            self.race_oxyn(&running, intent, cancel, feed.fill_sample())
-                .await?;
-            // The command already ran: after a write, a reply that cannot be
-            // read leaves its outcome unknown.
-            let plan = Plan::infer(feed.sample()).map_err(|error| {
-                let class = if intent.is_read_only() {
-                    oxyn_core::ErrorClass::Permanent
-                } else {
-                    oxyn_core::ErrorClass::Ambiguous
-                };
-                OxynError::driver(driver.clone(), class, error)
-            })?;
-            Ok(MongoCursor::new(
-                handle,
-                plan,
-                feed,
-                Arc::clone(&self.registry),
-                driver.clone(),
-                started,
-            ))
-        }
-        .await;
-        match outcome {
-            Ok(cursor) => Ok(Box::new(cursor)),
-            Err(error) => {
-                self.registry.remove(handle);
-                Err(error)
-            }
-        }
-    }
-
     /// [`cancel::race`] for the sample read, whose errors are already mapped:
     /// any failure after the stop is the stop's verdict.
     async fn race_oxyn<T>(
@@ -248,35 +156,15 @@ impl Session for MongoSession {
     }
 
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
-        self.capabilities().require_language(request.language)?;
-        if !request.params.is_empty() {
-            return Err(OxynError::NotSupported {
-                capability: "bound parameters: a MongoDB command carries its values in its \
-                             own document"
-                    .to_owned(),
-            });
-        }
-        let classification = oxyn_query::classify_mongo(&request.text);
-        if classification.transaction_control {
-            return Err(OxynError::NotSupported {
-                capability: "transactions: each execution runs in its own logical session, so \
-                             there is no transaction for this command to end"
-                    .to_owned(),
-            });
-        }
-        let intent = classification.intent;
-        if request.limits.read_only && !classification.is_read_only() {
-            return Err(OxynError::PolicyDenied {
-                reason: "this execution is bounded to read-only, and the command is not one \
-                         Oxyn can prove only reads"
-                    .to_owned(),
-            });
-        }
-        let command = command::parse(&request.text)?;
-        if cancel.is_cancelled() {
-            return Err(OxynError::Cancelled);
-        }
-        self.run(command, intent, cancel).await
+        self.execute_request(request, cancel, false).await
+    }
+
+    async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.execute_request(request, cancel, true).await
     }
 
     /// The reading of [`oxyn_query::classify_mongo`], the one `execute`
@@ -323,12 +211,38 @@ impl Session for MongoSession {
         // sample of documents a description reads.
         let (relation, ordered_by_id) = if shape.needs_total_order() || shape.columns.is_some() {
             let relation = self.catalog.describe_relation(path, cancel).await?;
-            let ordered = relation.previews_in_key_order();
+            let ordered = relation
+                .primary_key()
+                .iter()
+                .any(|field| field.name == "_id");
             (Some(relation), ordered)
         } else {
             (None, self.catalog.previews_in_id_order(path, cancel).await?)
         };
         preview::request(path, limit, shape, relation.as_ref(), ordered_by_id)
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        let (relation, ordered) = if !shape.sort.is_empty() || shape.columns.is_some() {
+            let relation = self.catalog.describe_relation(path, cancel).await?;
+            let ordered = relation
+                .primary_key()
+                .iter()
+                .any(|field| field.name == "_id");
+            (Some(relation), ordered)
+        } else {
+            (None, self.catalog.previews_in_id_order(path, cancel).await?)
+        };
+        Ok(oxyn_driver::PreparedPreview {
+            request: preview::stream_request(path, limit, shape, relation.as_ref(), ordered)?,
+            mode: oxyn_driver::PreviewMode::Retained,
+        })
     }
 
     async fn set_context(&self, context: &SessionContext, _cancel: &CancelToken) -> Result<()> {

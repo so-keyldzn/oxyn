@@ -526,6 +526,8 @@ export function ObjectView({
               <PreviewPagination
                 applied={preview.applied}
                 pagination={preview.pagination}
+                error={preview.paginationError}
+                onRetry={preview.retryPagination}
                 status={preview.status}
                 rows={state.status === "populated" ? state.rows : null}
                 onPage={preview.page}

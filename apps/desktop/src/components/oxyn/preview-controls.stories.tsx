@@ -149,7 +149,8 @@ export const NoUniqueKey: Story = {
     pagination: { type: "noUniqueKey" },
   },
   play: async ({ canvas }) => {
-    await expect(canvas.getByText(/no unique key is known/)).toBeVisible()
+    // The bounded-preview explanation belongs to the page footer.
+    await expect(canvas.queryByText(/no unique key is known/)).toBeNull()
     await expect(canvas.queryByRole("button", { name: /Next page/ })).toBeNull()
   },
 }

@@ -27,6 +27,7 @@ fn preview_is_a_remote_read_with_its_own_audit_name() {
         // A non-trivial shape, so that the serialized round trip really
         // covers it: a `Default` would pass without proving anything.
         shape: crate::preview::PreviewShape {
+            continuable: false,
             sort: vec![crate::preview::PreviewSort::descending("id")],
             predicate: Some("note LIKE '100%'".into()),
             offset: 200,

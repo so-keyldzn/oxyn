@@ -198,7 +198,7 @@ oxyn/
 │   ├── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
 │   │                             #   (ADR-0063); depends on oxyn-query to read a command
 │   ├── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
-│   └── oxyn-driver-turso/        # Turso Cloud: Hrana over HTTP (`/v2/pipeline`), SQLite's
+│   └── oxyn-driver-turso/        # Turso Cloud: Hrana over HTTP (pipeline and cursor), SQLite's
 │                                 #   dialect, no libsql, one stream per statement (ADR-0069)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
@@ -272,6 +272,8 @@ databases. The preview's grid and its cancellation are distinct from those of
 the SQL editor.
 
 Native collection previews additionally use `Session::prepare_preview` and `execute_preview` ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). Their defaults preserve the existing bounded execution. A retained request uses the same policy, reclassification, read-only enforcement, execution events and bounded page sink. `preview_stream::Registry` keeps one cursor and Arrow history behind page result IDs; each continuation is checked against connection, session, relation, size, filter, sort and projection. A page is read on demand and Previous reads history. History is bounded to 8 MiB memory, 128 MiB spill and 8192 batches per stream; at most 16 page identities are retained, for at most five minutes. Overflow or expiry is explicit. Closing a session, forgetting its last page, or abandoning a read cancels and releases the stream. An opening guard owns cancellation before the first schema. Native driver resources stay in Rust; their cleanup tasks are owned and time-bounded. A UI refresh or shape change starts a new stream on page one.
+
+Retained SQL reads may request `PreviewMode::Dedicated` ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)). The registry reserves one of 16 active/opening slots before calling the live driver's `open_preview_session`. Private sessions are excluded from catalog fallback. Cancellation addresses the actual execution session while continuations remain bound to the logical source. No transaction-state poll runs behind a suspended preview. Owned tasks drop the cursor before closing, hold capacity through cleanup, and are joined on source close, disconnect and shutdown. Authorized writes release retained reads on their connection before execution. Samples leave `continuable` false and never enter this lifecycle.
 
 For independent previews, the preview's receive bound reserves one extra row to
 confirm that the cursor of the already-limited query is exhausted. The `ResultBuffer`
@@ -473,6 +475,8 @@ pub trait Session: Send + Sync {
         shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
     async fn prepare_preview(&self, path: &CatalogPath, limit: u32,
         shape: &PreviewShape, cancel: &CancelToken) -> Result<PreparedPreview>;
+    async fn open_preview_session(&self, path: &CatalogPath,
+        cancel: &CancelToken) -> Result<Box<dyn Session>>;
     async fn execute_preview(&self, request: ExecRequest, cancel: &CancelToken)
         -> Result<Box<dyn Cursor>>;
     async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)

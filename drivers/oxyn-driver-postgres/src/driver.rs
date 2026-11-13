@@ -153,56 +153,62 @@ impl Driver for PostgresDriver {
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>> {
         let spec = ConnectSpec::from_config(&self.metadata, config, credentials)?;
-        let base = spec.database().to_owned();
-
-        let opened = race_cancel(cancel, async {
-            Ok(PgPoolOptions::new()
-                .max_connections(MAX_CONNECTIONS)
-                .min_connections(0)
-                .acquire_timeout(ACQUIRE_TIMEOUT)
-                // A connection taken from the pool after a network cut must
-                // fail here, not in the middle of the user's query.
-                .test_before_acquire(true)
-                .connect_with(spec.options().clone())
-                .await)
-        })
-        .await?;
-        let pool = match opened {
-            Ok(pool) => pool,
-            // `sqlx` retries a refused connection until the deadline, then
-            // reports only the timeout: « pool timed out » when the tunnel is
-            // down tells the user nothing they can act on.
-            Err(sqlx::Error::PoolTimedOut) => {
-                return Err(race_cancel(cancel, timeout_cause(spec.options())).await?);
-            }
-            Err(error) => return Err(map_connect_error(&error)),
-        };
-
-        let variant = match race_cancel(cancel, detect_variant(&pool)).await {
-            Ok(variant) => variant,
-            Err(error) => {
-                // An open pool nobody will hold must be closed: otherwise the
-                // connection stays established on the server.
-                pool.close().await;
-                return Err(error);
-            }
-        };
-
-        tracing::debug!(
-            target: "oxyn::driver::postgres",
-            product = %variant.product(),
-            version = %variant.server_version,
-            "session opened"
-        );
-
-        Ok(Box::new(PostgresSession::new(
-            self.id(),
-            pool,
-            spec,
-            variant,
-            base,
-        )))
+        connect_spec(self.id(), spec, MAX_CONNECTIONS, cancel).await
     }
+}
+
+/// Opens from the live session's original parameters, without consulting saved edits.
+pub(crate) async fn connect_spec(
+    driver: DriverId,
+    spec: ConnectSpec,
+    max_connections: u32,
+    cancel: &CancelToken,
+) -> Result<Box<dyn Session>> {
+    let base = spec.database().to_owned();
+
+    let opened = race_cancel(cancel, async {
+        Ok(PgPoolOptions::new()
+            .max_connections(max_connections)
+            .min_connections(0)
+            .acquire_timeout(ACQUIRE_TIMEOUT)
+            // A connection taken from the pool after a network cut must
+            // fail here, not in the middle of the user's query.
+            .test_before_acquire(true)
+            .connect_with(spec.options().clone())
+            .await)
+    })
+    .await?;
+    let pool = match opened {
+        Ok(pool) => pool,
+        // `sqlx` retries a refused connection until the deadline, then
+        // reports only the timeout: « pool timed out » when the tunnel is
+        // down tells the user nothing they can act on.
+        Err(sqlx::Error::PoolTimedOut) => {
+            return Err(race_cancel(cancel, timeout_cause(spec.options())).await?);
+        }
+        Err(error) => return Err(map_connect_error(&error)),
+    };
+
+    let variant = match race_cancel(cancel, detect_variant(&pool)).await {
+        Ok(variant) => variant,
+        Err(error) => {
+            // An open pool nobody will hold must be closed: otherwise the
+            // connection stays established on the server.
+            pool.close().await;
+            return Err(error);
+        }
+    };
+
+    tracing::debug!(
+        target: "oxyn::driver::postgres",
+        product = %variant.product(),
+        version = %variant.server_version,
+        "session opened"
+    );
+
+    Ok(Box::new(PostgresSession::new(
+        driver, pool, spec, variant, base,
+    )))
 }
 
 /// How long [`timeout_cause`] may add to a connect that already waited

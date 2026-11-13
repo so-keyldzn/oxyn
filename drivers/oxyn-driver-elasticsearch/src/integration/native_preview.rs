@@ -45,7 +45,7 @@ async fn native_preview_abandonment_reaches_the_server() {
             .prepare_preview(&path, 50, &PreviewShape::default(), &CancelToken::new())
             .await
             .expect("bounded first page");
-        assert!(!bounded.retained);
+        assert!(!bounded.mode.retains_cursor());
         let mut cursor = session
             .execute(bounded.request, &CancelToken::new())
             .await

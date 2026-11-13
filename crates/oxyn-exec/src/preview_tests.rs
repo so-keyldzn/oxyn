@@ -73,7 +73,10 @@ fn preview(connection: ConnectionId, session: SessionId, limit: u32) -> Command 
         namespace: Some("main".into()),
         relation: HOSTILE.into(),
         limit,
-        shape: oxyn_core::PreviewShape::unordered(),
+        shape: oxyn_core::PreviewShape {
+            continuable: true,
+            ..Default::default()
+        },
     }
 }
 
@@ -425,6 +428,10 @@ struct Probe {
     cancelled: AtomicBool,
     mutating: bool,
     retained: bool,
+    sibling: Option<Arc<Probe>>,
+    closed: AtomicBool,
+    fork_started: AtomicBool,
+    wait_during_fork: bool,
     wait_during_open: bool,
     batch_gate: Option<Arc<tokio::sync::Notify>>,
     opening_token: Mutex<Option<CancelToken>>,
@@ -496,8 +503,28 @@ impl Session for PreviewSession {
     ) -> Result<oxyn_driver::PreparedPreview> {
         Ok(oxyn_driver::PreparedPreview {
             request: self.preview_request(path, limit, shape, cancel).await?,
-            retained: self.0.retained,
+            mode: if self.0.sibling.is_some() {
+                oxyn_driver::PreviewMode::Dedicated
+            } else if self.0.retained {
+                oxyn_driver::PreviewMode::Retained
+            } else {
+                oxyn_driver::PreviewMode::Bounded
+            },
         })
+    }
+    async fn open_preview_session(
+        &self,
+        _: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        self.0.fork_started.store(true, Ordering::SeqCst);
+        if self.0.wait_during_fork {
+            cancel.cancelled().await;
+            return Err(OxynError::Cancelled);
+        }
+        Ok(Box::new(PreviewSession(Arc::clone(
+            self.0.sibling.as_ref().expect("dedicated fixture"),
+        ))))
     }
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.0.executed.lock().push(request);
@@ -526,6 +553,7 @@ impl Session for PreviewSession {
         Ok(Duration::ZERO)
     }
     async fn close(self: Box<Self>) -> Result<()> {
+        self.0.closed.store(true, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -981,3 +1009,6 @@ async fn the_total_latency_counts_the_wait_the_sql_time_does_not() {
 
 #[path = "retained_preview_tests.rs"]
 mod retained;
+
+#[path = "isolated_preview_tests.rs"]
+mod isolated;

@@ -8,9 +8,9 @@
 //!
 //! # The answer is read under a budget
 //!
-//! Hrana over HTTP sends the whole result in one JSON document, so the
-//! driver cannot read it row by row. What it can do is refuse to hold more
-//! than [`MAX_RESPONSE_BYTES`]: the body is read chunk by chunk, and the
+//! Ordinary requests use the pipeline, whose result is one JSON document.
+//! Retained previews use Hrana 3 cursor framing instead (ADR-0078). For a
+//! pipeline response the driver refuses to hold more than [`MAX_RESPONSE_BYTES`]: the body is read chunk by chunk, and the
 //! request is dropped the moment the budget is crossed
 //! ([I-06](../../../CLAUDE.md#i-06)). A `Content-Length` over the budget is
 //! refused before the first byte is read.
@@ -25,10 +25,12 @@
 //! `OutcomeUnknown`, never `Cancelled`
 //! ([DRIVER-CONTRACT §4](../../../docs/DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)).
 
+use std::sync::Arc;
 use std::time::Duration;
 
+mod stream;
+
 use oxyn_core::{CancelToken, DriverId, OxynError, Result, StatementIntent};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use reqwest::{Client, Response, StatusCode};
 
 use crate::error::{self, MAX_MESSAGE_BYTES, RESULT_TOO_LARGE};
@@ -40,7 +42,7 @@ use crate::wire::{self, Answer, StmtResult};
 /// The parsed rows weigh several times the text: about 3× for ordinary cells,
 /// up to 9× for a body of empty rows (a 24-byte `Vec` header for 3 bytes of
 /// JSON), so at the limit the order is 100 to 300 MiB, for one statement the
-/// user asked for. Raised by ADR-0069 only if Turso offers a streamed result.
+/// user asked for. Cursor previews have separate frame and batch budgets.
 pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// How long opening the TCP and TLS connection may take.
@@ -56,6 +58,7 @@ pub struct Http {
     client: Client,
     spec: ConnectSpec,
     max_response: usize,
+    cursor_support: Arc<tokio::sync::OnceCell<bool>>,
 }
 
 impl Http {
@@ -86,6 +89,7 @@ impl Http {
             client,
             spec,
             max_response: MAX_RESPONSE_BYTES,
+            cursor_support: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -144,15 +148,8 @@ impl Http {
             .endpoint()
             .join(wire::PIPELINE_PATH)
             .map_err(|_| OxynError::Internal("the pipeline URL cannot be joined".to_owned()))?;
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| OxynError::Config("the database token cannot be sent".to_owned()))?;
-        authorization.set_sensitive(true);
-
         let response = self
-            .client
-            .post(url)
-            .header(AUTHORIZATION, authorization)
-            .header(CONTENT_TYPE, "application/json")
+            .authenticated(reqwest::Method::POST, url)?
             .body(body)
             .send()
             .await

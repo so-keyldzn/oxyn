@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="8ef5e329d490" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c80f5e0de587" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -102,12 +102,25 @@ est vrai, et aucun ordre sinon. Les colonnes de la clé viennent dans l'ordre
 de l'**index**, pas dans celui de la table : le driver remplit
 `Field::primary_key_rank` avec le rang du moteur, d'après lequel
 `Relation::primary_key()` ordonne — une clé composite ordonnée dans l'ordre de
-la table peut trier toute la relation. L'interface offre les pages d'après ce
-même drapeau, si bien qu'un ordre sans le drapeau, ou le drapeau sans l'ordre,
-montre une page qui répète ou saute des lignes. Un driver qui ne sait pas
-laisse le drapeau à sa valeur par défaut, `false`.
+la table peut trier toute la relation. `Relation::preview_key` prouve séparément
+l’unicité de cette clé pour la relation réellement interrogée, avec ses règles
+sur NULL et l’héritage. Les métadonnées seules ne la prouvent pas.
+`with_key_order_preview` pose les deux garanties ; `with_preview_key` ne pose
+que l’unicité. Toutes deux valent false par défaut. Les pages indépendantes
+exigent une clé prouvée et un ordre total ; les autres sources de lignes utilisent
+une lecture conservée si disponible ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)).
 
 **La continuation native est une promesse distincte** ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). `Relation::retained_preview` déclare le parcours d’un curseur, pas une clé unique ; `retained_preview_sort` garantit séparément les tris demandés. Sans cette dernière garantie, le serveur conserve la première page triée et la continuation est refusée tant que le tri n’est pas effacé. `Session::prepare_preview` marque cette requête comme conservée ; l’ordonnanceur la reclassifie toujours et impose la lecture seule avant `execute_preview`. Il garde les restes de lots et un historique Arrow borné, ne réexécute jamais une page précédente et lie chaque continuation à sa connexion, sa session, sa relation et sa forme. Les méthodes par défaut conservent les aperçus indépendants bornés. Fermer, laisser expirer ou abandonner une lecture native libère son curseur ; une future de curseur abandonnée n’est jamais reprise. Le driver détient le nettoyage du protocole, y compris les identités distantes reçues après annulation. Les doublons SCAN Redis sont supprimés dans un budget d’identités de 16 Mio, avec erreur explicite en cas de dépassement ; une identité de continuation tronquée est refusée.
+
+`PreviewShape::continuable` vaut false par défaut : les échantillons utilisent
+`preview_request` et libèrent leur curseur borné. Data demande `prepare_preview`,
+dont `PreviewMode` distingue `Bounded`, `Retained` et `Dedicated`.
+`Session::open_preview_session` ouvre un lecteur privé depuis les paramètres
+d’ouverture vivants et le contexte de noms reproductible. Il ne doit pas relire
+les réglages enregistrés modifiés, copier un état temporaire non reproductible,
+ni substituer un objet homonyme. Par défaut, il refuse cette capacité.
+`single_page_preview` marque les valeurs et résumés structurels, pour lesquels
+une navigation par pages n’a pas de sens.
 
 **Panne concrète :** un driver qui se porte garant d'une table `vec0` de
 SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette
