@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import { Badge } from "@/components/ui/badge"
 import type { Cell } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 
@@ -72,9 +73,12 @@ export function CellValue({
         data-truncated
       >
         <span className="min-w-0 truncate">{cell.text}</span>
-        <span className="shrink-0 rounded-sm bg-muted px-1 font-sans text-[length:var(--reading-caption)] leading-4 text-muted-foreground tabular-nums">
+        <Badge
+          variant="secondary"
+          className="h-4 px-1 font-sans text-[length:var(--reading-caption)] tabular-nums"
+        >
           {formatBytes(cell.fullBytes)}
-        </span>
+        </Badge>
       </span>
     )
   }

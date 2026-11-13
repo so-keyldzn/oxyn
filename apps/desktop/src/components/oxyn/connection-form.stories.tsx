@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, waitFor } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ConnectionForm } from "./connection-form"
+import { chooseSelectOption } from "./select-story"
 import {
   clickhouseDriver,
   duckdbDriver,
@@ -333,6 +334,85 @@ export const EditingASavedConnection: Story = {
   },
 }
 
+/** Driver choices use the app popup, including the driver's empty default. */
+export const ChoosesDriverDefault: Story = {
+  args: { existing: billing },
+  play: async ({ canvas, args }) => {
+    await chooseSelectOption(canvas.getByLabelText(/^TLS mode/), "Default")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "Default"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.not.objectContaining({ sslmode: expect.anything() }),
+        })
+      )
+    )
+  },
+}
+
+/** Saved choices remain visible even when the current driver omits one. */
+export const UnlistedDriverChoiceIsPreserved: Story = {
+  args: {
+    existing: {
+      ...billing,
+      values: { ...billing.values, sslmode: "legacy-mode" },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "legacy-mode"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.objectContaining({ sslmode: "legacy-mode" }),
+        })
+      )
+    )
+  },
+}
+
+/** A form behind Settings cannot lend its IDs to the edit form in front. */
+export const TwoFormsKeepTheirOwnLabels: Story = {
+  render: (args) => (
+    <>
+      <section aria-label="First connection">
+        <ConnectionForm {...args} existing={billing} />
+      </section>
+      <section aria-label="Second connection">
+        <ConnectionForm
+          {...args}
+          existing={{ ...billing, name: "Second database" }}
+        />
+      </section>
+    </>
+  ),
+  play: async ({ canvas }) => {
+    const first = within(
+      canvas.getByRole("region", { name: "First connection" })
+    )
+    const second = within(
+      canvas.getByRole("region", { name: "Second connection" })
+    )
+    for (const name of [/^Name/, /^Host/, /^TLS mode/]) {
+      await expect(first.getByLabelText(name).id).not.toBe(
+        second.getByLabelText(name).id
+      )
+    }
+    await expect(first.getByRole("switch", { name: "Read only" }).id).not.toBe(
+      second.getByRole("switch", { name: "Read only" }).id
+    )
+    await userEvent.clear(second.getByLabelText(/^Name/))
+    await userEvent.type(second.getByLabelText(/^Name/), "Updated second")
+    await expect(first.getByLabelText(/^Name/)).toHaveValue("billing")
+    await expect(second.getByLabelText(/^Name/)).toHaveValue("Updated second")
+  },
+}
+
 /**
  * `Duplicate`: a new connection starting from another's parameters. The
  * password is typed, not copied (I-03); the copy starts in production with
@@ -455,7 +535,9 @@ export const MySQL: Story = {
   play: async ({ canvas, args }) => {
     await expect(canvas.getByLabelText(/^Host/)).toHaveValue("localhost")
     await expect(canvas.getByLabelText(/^Port/)).toHaveValue("3306")
-    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "verify-full"
+    )
     await expect(canvas.getByLabelText(/^Database/)).not.toHaveAttribute(
       "aria-required",
       "true"
@@ -507,7 +589,9 @@ export const ClickHouse: Story = {
       "HTTP interface port. Empty: 8443 with TLS, 8123 without."
     )
     await expect(canvas.getByLabelText(/^User/)).toHaveValue("default")
-    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "verify-full"
+    )
     await expect(
       canvas.getByRole("radio", { name: /PRODUCTION/ })
     ).toBeChecked()
@@ -597,10 +681,12 @@ export const MongoDB: Story = {
       /comma-separated, for a replica set seed list/
     )
     await expect(canvas.getByLabelText(/^Port/)).toHaveValue("27017")
-    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "verify-full"
+    )
     await expect(
       canvas.getByLabelText(/^Authentication mechanism/)
-    ).toHaveValue("default")
+    ).toHaveTextContent("default")
     await expect(
       canvas.getByRole("switch", { name: /DNS seed list/ })
     ).not.toBeChecked()
@@ -697,6 +783,44 @@ export const MongoDBEditing: Story = {
   },
 }
 
+/** A compact settings panel keeps Save outside the scrollable fields. */
+export const EditingInCompactPanel: Story = {
+  args: MongoDBEditing.args,
+  decorators: [
+    (Story) => (
+      <div className="flex h-[520px] w-[360px] flex-col">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvas, canvasElement }) => {
+    const viewport = canvasElement.querySelector<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )!
+    const actions = canvasElement.querySelector<HTMLElement>(
+      '[data-slot="connection-form-actions"]'
+    )!
+    await expect(canvas.getByLabelText(/^Password/)).toHaveValue("")
+    const save = canvas.getByRole("button", { name: "Save" })
+    await expect(save).toBeEnabled()
+    const footerTop = actions.getBoundingClientRect().top
+    await expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight)
+    viewport.scrollTop = viewport.scrollHeight
+    await waitFor(() => {
+      expect(actions.getBoundingClientRect().top).toBe(footerTop)
+      expect(viewport.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        footerTop + 1
+      )
+      expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1)
+      expect(
+        canvasElement
+          .querySelector('[data-slot="privacy-disclosure"]')!
+          .getBoundingClientRect().bottom
+      ).toBeLessThanOrEqual(viewport.getBoundingClientRect().bottom + 1)
+    })
+  },
+}
+
 /**
  * Elasticsearch and OpenSearch are reached by URL; the API key travels as a
  * typed secret, never among the saved values (I-03), and the certificate is
@@ -708,7 +832,9 @@ export const Elasticsearch: Story = {
     await expect(canvas.getByLabelText(/^URL/)).toHaveValue(
       "https://localhost:9200"
     )
-    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveTextContent(
+      "verify-full"
+    )
     await expect(
       canvas.getByRole("radio", { name: /PRODUCTION/ })
     ).toBeChecked()

@@ -4,7 +4,7 @@ paths:
   - "crates/oxyn-desktop/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/front.md" sha256="dcebd1edb16c" -->
+<!-- oxyn-translation source=".claude/rules/front.md" sha256="0e726c1245ee" -->
 
 > Traduction française de [.claude/rules/front.md](../../../../.claude/rules/front.md). **La version anglaise fait foi.**
 
@@ -104,6 +104,10 @@ Ne pas la « simplifier ».
 | `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
 | `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` de `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` de `components/ui` — ESLint les refuse | macOS remplacerait `'` par `’` dans une chaîne de connexion ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8) ; un autre champ (CodeMirror, Lexical, `CommandInput`) reçoit `TEXT_FIELD_ATTRIBUTES` |
 | texte React (`{value}`) | `dangerouslySetInnerHTML` sur une donnée reçue | une cellule, un nom d'objet ou une réponse de modèle sont des entrées hostiles ([SECURITY](../../docs/SECURITY.md#surface-dentrée)) |
+| `Select`, `SelectTrigger`, `SelectValue`, `SelectContent`, `SelectGroup` et `SelectItem` pour les listes de choix | `NativeSelect` ou un `<select>` natif — ESLint refuse les imports des composants | un menu du système ne suit pas la palette du workspace ; conserver la navigation clavier et nommer le déclencheur et la liste |
+
+Cette règle concerne les listes de choix de l'interface. Les sélecteurs de fichiers
+natifs et les confirmations critiques de l'hôte conservent leur rôle de sécurité.
 
 `src/components/ui` est **généré** : il n'est ni formaté ni linté par le projet, et
 une retouche y est écrasée au prochain `shadcn add --overwrite`. Ce qui est propre à

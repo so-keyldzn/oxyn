@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle02Icon, Cancel01Icon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Field,
   FieldContent,
@@ -118,48 +119,51 @@ export function PrivacyTierBadge({
 export function PrivacyTierDisclosure({ tier }: { tier: PrivacyTier }) {
   const description = PRIVACY_TIERS[tier]
   return (
-    <div
+    <Alert
+      role="group"
       aria-live="polite"
       data-slot="privacy-disclosure"
-      className="flex flex-col gap-2 rounded-md border bg-card p-3 text-xs"
+      className="gap-2"
     >
-      <p className="font-medium text-foreground">
+      <AlertTitle>
         What leaves this machine under {description.label}
-      </p>
-      <ul className="flex flex-col gap-1" aria-label="Sent to the provider">
-        {description.leaves.length === 0 ? (
-          <li className="text-muted-foreground">Nothing.</li>
-        ) : (
-          description.leaves.map((item) => (
+      </AlertTitle>
+      <AlertDescription className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-1" aria-label="Sent to the provider">
+          {description.leaves.length === 0 ? (
+            <li className="text-muted-foreground">Nothing.</li>
+          ) : (
+            description.leaves.map((item) => (
+              <li key={item} className="flex items-center gap-1.5">
+                <HugeiconsIcon
+                  icon={CheckmarkCircle02Icon}
+                  strokeWidth={2}
+                  className="size-3.5 text-warning"
+                  aria-hidden
+                />
+                {item}
+              </li>
+            ))
+          )}
+        </ul>
+        <ul
+          className="flex flex-col gap-1 text-muted-foreground"
+          aria-label="Never sent"
+        >
+          {description.stays.map((item) => (
             <li key={item} className="flex items-center gap-1.5">
               <HugeiconsIcon
-                icon={CheckmarkCircle02Icon}
+                icon={Cancel01Icon}
                 strokeWidth={2}
-                className="size-3.5 text-warning"
+                className="size-3.5"
                 aria-hidden
               />
               {item}
             </li>
-          ))
-        )}
-      </ul>
-      <ul
-        className="flex flex-col gap-1 text-muted-foreground"
-        aria-label="Never sent"
-      >
-        {description.stays.map((item) => (
-          <li key={item} className="flex items-center gap-1.5">
-            <HugeiconsIcon
-              icon={Cancel01Icon}
-              strokeWidth={2}
-              className="size-3.5"
-              aria-hidden
-            />
-            {item}
-          </li>
-        ))}
-      </ul>
-    </div>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
   )
 }
 

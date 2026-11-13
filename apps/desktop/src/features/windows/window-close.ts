@@ -17,8 +17,8 @@ export interface WorkspaceConsoles {
   /** The connection's name, as the workspace shows it. */
   connection: string
   costs: () => Array<WindowCloseCost>
-  /** Stops before the next console, and cancels the one closing, on abort. */
-  closeAll: (signal: AbortSignal) => Promise<void>
+  /** Closes the snapshot together; false means at least one console stayed. */
+  closeAll: (signal: AbortSignal) => Promise<boolean>
 }
 
 const workspaces = new Map<string, WorkspaceConsoles>()
@@ -44,6 +44,7 @@ export interface WindowClose {
   rows: Array<WindowCloseRow>
   connections: Array<string>
   busy: boolean
+  error: string | null
 }
 
 /** `null` while no close of this window is being decided. */
@@ -71,7 +72,7 @@ export function windowCloseRows(
       })
     )
   }
-  return { rows, connections, busy: false }
+  return { rows, connections, busy: false, error: null }
 }
 
 /**
@@ -105,15 +106,37 @@ export function cancelWindowClose() {
  */
 export async function closeWindow() {
   const current = windowClose.state
-  if (!current) return
-  request?.abort()
-  const { signal } = (request = new AbortController())
-  windowClose.setState(() => ({ ...current, busy: true }))
-  await flushAllDrafts().catch(() => false)
-  for (const consoles of [...workspaces.values()]) {
-    if (signal.aborted) return
-    await consoles.closeAll(signal).catch(() => undefined)
+  if (!current || request) return
+  const controller = new AbortController()
+  request = controller
+  const { signal } = controller
+  const cancelled = () => signal.aborted
+  const fail = (error: string) =>
+    windowClose.setState(() => ({ ...windowCloseRows(), error }))
+  windowClose.setState(() => ({ ...current, busy: true, error: null }))
+  try {
+    await flushAllDrafts().catch(() => false)
+    if (cancelled()) return
+    const closing = [...workspaces.values()]
+    const outcomes = await Promise.allSettled(
+      closing.map((consoles) => consoles.closeAll(signal))
+    )
+    if (cancelled()) return
+    const failed = closing.filter((_, index) => {
+      const outcome = outcomes[index]
+      return outcome?.status !== "fulfilled" || !outcome.value
+    })
+    if (failed.length > 0) {
+      fail(
+        `Some consoles on ${failed.map((item) => item.connection).join(", ")} could not be closed. The window stays open. Check the remaining consoles before trying again.`
+      )
+      return
+    }
+    await windows.confirmClose()
+  } catch (error) {
+    if (!cancelled())
+      fail(error instanceof Error ? error.message : String(error))
+  } finally {
+    if (request === controller) request = null
   }
-  if (signal.aborted) return
-  await windows.confirmClose().catch(() => undefined)
 }

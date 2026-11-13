@@ -3,7 +3,7 @@ import { useSelector } from "@tanstack/react-store"
 import { UpdateIndicator } from "@/components/oxyn/update-indicator"
 import { pendingUpdate } from "@/components/oxyn/update-model"
 import type { PendingUpdate } from "@/components/oxyn/update-model"
-import { openSettings } from "@/features/settings/settings-dialog"
+import { openSettings } from "@/features/settings/settings-dialog-state"
 import { useCompact } from "@/features/workspace/use-compact"
 
 import { restartNow } from "./restart"

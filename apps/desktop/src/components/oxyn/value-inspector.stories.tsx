@@ -18,19 +18,23 @@ const meta = {
     target: {
       row: 3,
       columns: invoiceColumns,
-      cells: [
-        "4",
-        "Umbrella",
-        "237.57",
-        "2026-01-01T00:03:00.000Z",
-        null,
-        "NULL",
-        { unrenderable: "unsupported type: Dictionary" },
-      ],
+      state: {
+        status: "loaded",
+        cells: [
+          "4",
+          "Umbrella",
+          "237.57",
+          "2026-01-01T00:03:00.000Z",
+          null,
+          "NULL",
+          { unrenderable: "unsupported type: Dictionary" },
+        ],
+      },
     },
     column: 0,
     onSelectColumn: fn(),
     onInspect: fn(),
+    onRetry: fn(),
   },
 } satisfies Meta<typeof ValueInspector>
 
@@ -58,7 +62,70 @@ export const SelectedFieldIsNamed: Story = {
 
 /** The row page is read from the existing result: the fields wait for it. */
 export const Loading: Story = {
-  args: { target: { row: 3, columns: invoiceColumns, cells: null } },
+  args: {
+    target: { row: 3, columns: invoiceColumns, state: { status: "loading" } },
+  },
+}
+
+export const Unavailable: Story = {
+  args: {
+    target: {
+      row: 3,
+      columns: invoiceColumns,
+      state: { status: "unavailable" },
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Row no longer available")).toBeVisible()
+    await expect(canvas.queryByRole("listbox")).not.toBeInTheDocument()
+  },
+}
+
+export const Failed: Story = {
+  args: {
+    target: {
+      row: 3,
+      columns: invoiceColumns,
+      state: {
+        status: "error",
+        error: {
+          message: "The retained page could not be read.",
+          retryable: true,
+        },
+      },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "The retained page could not be read."
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }))
+    await expect(args.onRetry).toHaveBeenCalledOnce()
+  },
+}
+
+export const PermanentFailure: Story = {
+  args: {
+    target: {
+      row: 3,
+      columns: invoiceColumns,
+      state: {
+        status: "error",
+        error: {
+          message: "The retained page is unreadable.",
+          retryable: false,
+        },
+      },
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "Select another row"
+    )
+    await expect(
+      canvas.queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument()
+  },
 }
 
 /** An absent value and the text `NULL` are not the same thing. */

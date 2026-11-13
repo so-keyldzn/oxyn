@@ -2,11 +2,13 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CheckmarkCircle02Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { PalettePicker } from "@/components/oxyn/palette-picker"
 import {
   FieldDescription,
   FieldGroup,
   FieldLegend,
   FieldSet,
+  FieldSeparator,
 } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -44,21 +46,24 @@ export const DENSITIES: ReadonlyArray<{
  */
 export function AppearanceSettings({
   preferences,
+  palettesAvailable = true,
   onChange,
 }: {
   preferences: DisplayPreferences
+  palettesAvailable?: boolean
   onChange: (change: PreferencesChange) => void
 }) {
   return (
     <FieldGroup>
       <FieldSet>
-        <FieldLegend variant="label">Theme</FieldLegend>
+        <FieldLegend variant="label">Mode</FieldLegend>
         <FieldDescription>
           « System » follows the operating system as it changes.
         </FieldDescription>
         <ToggleGroup
           variant="outline"
-          spacing={0}
+          spacing={2}
+          className="w-full"
           value={[preferences.theme]}
           onValueChange={(next: Array<unknown>) => {
             const chosen = THEMES.find((theme) => theme.value === next[0])
@@ -67,19 +72,43 @@ export function AppearanceSettings({
           aria-label="Theme"
         >
           {THEMES.map((theme) => (
-            <ToggleGroupItem key={theme.value} value={theme.value}>
+            <ToggleGroupItem
+              key={theme.value}
+              value={theme.value}
+              className="h-11 flex-1"
+            >
               {theme.label}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
       </FieldSet>
+      <FieldSeparator />
 
+      <PalettePicker
+        mode="light"
+        value={preferences.lightPalette}
+        disabled={!palettesAvailable}
+        onChange={(lightPalette) => onChange({ lightPalette })}
+      />
+      <PalettePicker
+        mode="dark"
+        value={preferences.darkPalette}
+        disabled={!palettesAvailable}
+        onChange={(darkPalette) => onChange({ darkPalette })}
+      />
+      {!palettesAvailable ? (
+        <FieldDescription>
+          Color palettes are not available in this desktop build.
+        </FieldDescription>
+      ) : null}
+      <FieldSeparator />
       <FieldSet>
         <FieldLegend variant="label">Reading comfort</FieldLegend>
         <FieldDescription>Applies to text and result rows.</FieldDescription>
         <ToggleGroup
           variant="outline"
-          spacing={0}
+          spacing={2}
+          className="w-full"
           value={[preferences.readingDensity]}
           onValueChange={(next: Array<unknown>) => {
             const chosen = DENSITIES.find(
@@ -94,6 +123,7 @@ export function AppearanceSettings({
               key={density.value}
               value={density.value}
               aria-label={`${density.label}, ${density.detail}`}
+              className="h-11 flex-1"
             >
               {density.label}
             </ToggleGroupItem>
@@ -133,11 +163,11 @@ export function PreferencesSaveStatus({
     <div
       role="status"
       aria-live="polite"
-      className="flex min-h-7 items-center gap-2 text-xs text-muted-foreground"
+      className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground"
     >
       {save.status === "saving" ? (
         <>
-          <Spinner className="size-3" />
+          <Spinner className="size-3" aria-hidden />
           Saving preferences…
         </>
       ) : save.status === "saved" ? (
@@ -158,7 +188,11 @@ export function PreferencesSaveStatus({
             className="size-3.5 text-warning"
             aria-hidden
           />
-          <span data-selectable className="text-foreground">
+          <span
+            data-selectable
+            tabIndex={0}
+            className="max-h-24 min-w-0 flex-1 basis-40 overflow-auto wrap-anywhere text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             Applied here but not saved: {save.message}
           </span>
           <Button variant="outline" size="xs" onClick={onRetry}>

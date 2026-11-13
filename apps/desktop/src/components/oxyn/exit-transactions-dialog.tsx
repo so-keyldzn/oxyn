@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 
 import {
   AlertDialog,
@@ -155,9 +156,9 @@ export function ExitTransactionsDialog({
           </ul>
         )}
         {error ? (
-          <p className="text-xs wrap-anywhere text-destructive" role="alert">
-            {error}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
         <AlertDialogFooter className="flex-col sm:flex-row">
           <AlertDialogCancel ref={cancelRef}>Cancel</AlertDialogCancel>

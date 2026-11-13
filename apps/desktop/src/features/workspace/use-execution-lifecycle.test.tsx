@@ -7,7 +7,9 @@ import { executionProgress } from "@/lib/ipc/events"
 const calls = vi.hoisted(() => ({
   cancel: vi.fn(() => Promise.resolve(true)),
   forgetResult: vi.fn(() => Promise.resolve()),
-  decide: vi.fn(() => Promise.resolve({ type: "denied", reason: "no" })),
+  decide: vi.fn<() => Promise<CommandOutcome>>(() =>
+    Promise.resolve({ type: "denied", reason: "no" })
+  ),
   newCommandId: vi.fn(),
 }))
 
@@ -41,6 +43,41 @@ afterEach(() => {
 beforeEach(() => calls.newCommandId.mockReturnValue("run-1"))
 
 describe("useExecution lifecycle", () => {
+  it("dismisses an accepted review and lets Stop cancel its running command", async () => {
+    let answer: (outcome: CommandOutcome) => void = () => undefined
+    calls.decide.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const { result } = renderHook(() =>
+      useExecution({ connection: "c", serverCancel: true })
+    )
+    await act(async () =>
+      result.current.start(() =>
+        Promise.resolve({
+          type: "needsApproval",
+          command: "held",
+          reason: "production",
+          preview: null,
+        })
+      )
+    )
+    act(() => {
+      result.current.decide(true)
+      result.current.decide(true)
+    })
+    expect(result.current.approval).toBeNull()
+    expect(result.current.running).toBe(true)
+    expect(calls.decide).toHaveBeenCalledTimes(1)
+    act(() => result.current.cancel())
+    expect(calls.cancel).toHaveBeenCalledWith("held")
+    await act(async () => answer({ type: "cancelled" }))
+    expect(result.current.running).toBe(false)
+    expect(result.current.summary.status).toBe("cancelled")
+  })
+
   it("cancels a running command when its view goes, and forgets its late result", async () => {
     let answer: (outcome: CommandOutcome) => void = () => undefined
     const { result, unmount } = renderHook(() =>

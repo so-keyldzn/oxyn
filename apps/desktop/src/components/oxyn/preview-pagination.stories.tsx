@@ -1,8 +1,11 @@
+import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent } from "storybook/test"
 
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
+import { Button } from "@/components/ui/button"
 import { PreviewPagination } from "./preview-pagination"
+import { chooseSelectOption } from "./select-story"
 
 const meta = {
   title: "Oxyn/PreviewPagination",
@@ -38,8 +41,8 @@ export const OnePage: Story = {
       canvas.getByRole("button", { name: "Next page" })
     ).toBeDisabled()
     const size = canvas.getByRole("combobox", { name: "Rows per page" })
-    await expect(size).toHaveValue("200")
-    await userEvent.selectOptions(size, "50")
+    await expect(size).toHaveTextContent("200")
+    await chooseSelectOption(size, "50")
     await expect(args.onPageSize).toHaveBeenCalledWith(50)
   },
 }
@@ -267,5 +270,61 @@ export const ScalarOrSummary: Story = {
       canvas.queryByRole("button", { name: "Previous page" })
     ).toBeNull()
     await expect(canvas.queryByText(/Page 1/)).toBeNull()
+  },
+}
+
+/** The same component can gain and lose pagination as its result changes. */
+export const PaginationBecomesApplicable: Story = {
+  args: {
+    pagination: {
+      type: "ready",
+      previous: false,
+      next: true,
+      firstRow: 1,
+      orderedBy: ["id"],
+    },
+  },
+  render: function Render(args) {
+    const [applicable, setApplicable] = React.useState(false)
+    return (
+      <>
+        <Button onClick={() => setApplicable((shown) => !shown)}>
+          {applicable ? "Hide page navigation" : "Show page navigation"}
+        </Button>
+        <PreviewPagination
+          {...args}
+          pagination={applicable ? args.pagination : { type: "notApplicable" }}
+        />
+      </>
+    )
+  },
+  play: async ({ canvas, args }) => {
+    await expect(
+      canvas.queryByRole("combobox", { name: "Rows per page" })
+    ).toBeNull()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Show page navigation" })
+    )
+    const size = canvas.getByRole("combobox", { name: "Rows per page" })
+    await expect(size).toHaveTextContent("200")
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "Rows 1–2 · Page 1"
+    )
+    await chooseSelectOption(size, "50")
+    await expect(args.onPageSize).toHaveBeenCalledWith(50)
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await expect(args.onPage).toHaveBeenCalledWith(true)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Hide page navigation" })
+    )
+    await expect(
+      canvas.queryByRole("combobox", { name: "Rows per page" })
+    ).toBeNull()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Show page navigation" })
+    )
+    await expect(
+      canvas.getByRole("combobox", { name: "Rows per page" })
+    ).toHaveTextContent("200")
   },
 }

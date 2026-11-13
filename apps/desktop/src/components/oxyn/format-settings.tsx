@@ -9,7 +9,14 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   BinaryChoice,
@@ -71,6 +78,14 @@ export function FormatSettings({
     [preferences.nullText]
   )
   const tooLong = utf8Length(nullText) > NULL_TEXT_MAX_BYTES
+  const lengths = (
+    CELL_LENGTHS.includes(preferences.cellMaxChars)
+      ? CELL_LENGTHS
+      : [...CELL_LENGTHS, preferences.cellMaxChars].sort((a, b) => a - b)
+  ).map((value) => ({
+    value,
+    label: `${value.toLocaleString("en-US")} characters`,
+  }))
 
   return (
     <FieldGroup>
@@ -159,22 +174,30 @@ export function FormatSettings({
 
       <Field>
         <FieldLabel htmlFor="format-cell-length">Cell length</FieldLabel>
-        <NativeSelect
-          id="format-cell-length"
-          value={String(preferences.cellMaxChars)}
-          onChange={(event) =>
-            onChange({ cellMaxChars: Number(event.target.value) })
-          }
+        <Select
+          items={lengths}
+          value={preferences.cellMaxChars}
+          onValueChange={(value) => {
+            if (typeof value === "number") onChange({ cellMaxChars: value })
+          }}
         >
-          {(CELL_LENGTHS.includes(preferences.cellMaxChars)
-            ? CELL_LENGTHS
-            : [...CELL_LENGTHS, preferences.cellMaxChars].sort((a, b) => a - b)
-          ).map((length) => (
-            <NativeSelectOption key={length} value={String(length)}>
-              {length.toLocaleString("en-US")} characters
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          <SelectTrigger
+            id="format-cell-length"
+            aria-label="Cell length"
+            className="w-full"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectGroup>
+              {lengths.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         <FieldDescription>
           A longer value is cut in the grid; the value inspector shows it whole.
           Timestamps stay in RFC 3339, the format exports write.

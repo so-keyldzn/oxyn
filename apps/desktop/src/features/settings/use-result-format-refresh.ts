@@ -6,7 +6,7 @@ import { RESULT_PAGE_QUERY } from "@/components/oxyn/result-grid"
 import { preferencesStore } from "@/features/settings/preferences"
 
 /**
- * Reformats the result pages already held once a format change is saved.
+ * Reformats held pages once a format change settles, saved or not.
  *
  * Pages are cached with no expiry: without this, a grid keeps the pages it
  * holds in the old format and fetches the next ones in the new, mixing both.

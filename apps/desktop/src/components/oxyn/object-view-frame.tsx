@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs"
+import { ScrollableTabsList } from "@/components/oxyn/scrollable-tabs-list"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Tooltip,
@@ -186,11 +187,7 @@ export function ObjectViewFrame({
             {objectKindLabel(kind)}
           </span>
         </div>
-        <TabsList
-          variant="line"
-          aria-label={`Views of ${name}`}
-          className="max-w-full overflow-x-auto"
-        >
+        <ScrollableTabsList size="sm" aria-label={`Views of ${name}`}>
           {inTabBar.map((candidate) =>
             candidate.value === "data" && dataUnavailable ? (
               <Tooltip key={candidate.value}>
@@ -216,7 +213,7 @@ export function ObjectViewFrame({
               </TabsTrigger>
             )
           )}
-        </TabsList>
+        </ScrollableTabsList>
         {compact ? (
           // Beside the tab list, not inside it: a `tablist` holds tabs only.
           <DropdownMenu>

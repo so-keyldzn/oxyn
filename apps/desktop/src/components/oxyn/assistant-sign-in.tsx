@@ -1,4 +1,5 @@
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   ComputerTerminal01Icon,
   Login03Icon,
@@ -78,9 +79,11 @@ export function AssistantSignIn({
                   </p>
                 ) : null}
                 {state?.status === "error" ? (
-                  <p role="alert" className="text-destructive" data-selectable>
-                    {state.message}
-                  </p>
+                  <Alert variant="destructive">
+                    <AlertDescription data-selectable>
+                      {state.message}
+                    </AlertDescription>
+                  </Alert>
                 ) : null}
               </div>
             )

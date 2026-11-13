@@ -9,6 +9,7 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import type { PaletteEntry, PaletteSection } from "@/lib/actions/listings"
 import { TEXT_FIELD_ATTRIBUTES } from "./text-field"
 
@@ -134,9 +135,11 @@ function Search({
       {/* An empty listbox is not a list: hidden — the field still names it
           in `aria-controls` — and a status says there is none. */}
       {shown.length === 0 ? (
-        <p role="status" className="py-6 text-center text-sm">
-          No action matches.
-        </p>
+        <Empty role="status">
+          <EmptyHeader>
+            <EmptyTitle>No action matches.</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       ) : null}
       <CommandList className="max-h-96" hidden={shown.length === 0}>
         {shown.map((section) => (

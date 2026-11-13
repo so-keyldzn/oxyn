@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ProviderForm } from "./provider-form"
+import { chooseSelectOption } from "./select-story"
 import {
   externalAgent,
   remoteProvider,
@@ -40,9 +41,13 @@ type Story = StoryObj<typeof meta>
 export const NewDeclaration: Story = {
   play: async ({ canvasElement }) => {
     // Its provider cannot stream yet: declaring it would only fail later.
+    await userEvent.click(within(canvasElement).getByLabelText("Kind"))
+    const list = await within(document.body).findByRole("listbox")
     await expect(
-      within(canvasElement).queryByRole("option", { name: "Gemini" })
+      within(list).queryByRole("option", { name: "Gemini" })
     ).toBeNull()
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(list).not.toBeVisible())
   },
 }
 
@@ -59,7 +64,7 @@ export const Saving: Story = {
 export const SavedThenCleared: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
-    await userEvent.selectOptions(canvas.getByLabelText("Kind"), "agent")
+    await chooseSelectOption(canvas.getByLabelText("Kind"), "External agent")
     await userEvent.type(canvas.getByLabelText("Name"), "Local agent")
     await expect(canvas.getByLabelText("Program")).toHaveAttribute(
       "placeholder",
@@ -85,7 +90,7 @@ export const EnvironmentSentOnceThenForgotten: Story = {
   args: { onSaveAgent: fn(() => Promise.resolve(false)) },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
-    await userEvent.selectOptions(canvas.getByLabelText("Kind"), "agent")
+    await chooseSelectOption(canvas.getByLabelText("Kind"), "External agent")
     await userEvent.type(canvas.getByLabelText("Name"), "Gemini")
     await userEvent.type(canvas.getByLabelText("Program"), "gemini")
     await userEvent.type(
@@ -160,7 +165,7 @@ export const EditingAGeminiProvider: Story = {
   args: { target: { kind: "provider", provider: unresolvedProvider } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    await expect(canvas.getByLabelText("Kind")).toHaveDisplayValue("Gemini")
+    await expect(canvas.getByLabelText("Kind")).toHaveTextContent("Gemini")
   },
 }
 
@@ -197,7 +202,7 @@ const modelInput = () => page().getByRole("combobox", { name: "Default model" })
 /** Kind, name, endpoint, key: what a new remote provider needs to list. */
 async function fillRemoteProvider(canvasElement: HTMLElement) {
   const canvas = within(canvasElement)
-  await userEvent.selectOptions(canvas.getByLabelText("Kind"), "openai")
+  await chooseSelectOption(canvas.getByLabelText("Kind"), "OpenAI")
   await userEvent.type(canvas.getByLabelText("Name"), "Gateway")
   await userEvent.type(
     canvas.getByLabelText("Endpoint"),
@@ -413,9 +418,9 @@ export const StaleListingIgnored: Story = {
     const first = answerFor("http://localhost:11434/v1")
     const second = answerFor("http://127.0.0.1:1234/v1")
     const canvas = within(canvasElement)
-    await userEvent.selectOptions(
+    await chooseSelectOption(
       canvas.getByLabelText("Kind"),
-      "openai_compatible"
+      /^OpenAI-compatible/
     )
     const endpoint = canvas.getByLabelText("Endpoint")
     // Local: no key needed to list.

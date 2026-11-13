@@ -135,13 +135,19 @@ export const OneConsole: Story = {
   play: async ({ canvas }) => {
     const list = canvas.getByRole("tablist")
     const active = canvas.getByRole("tab", { selected: true })
-    const strip = list.getBoundingClientRect()
+    const viewport = list.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) throw new Error("No scrolling tab viewport")
+    const strip = viewport.getBoundingClientRect()
     await expect(active.getBoundingClientRect().bottom + 5 + 2).toBeLessThan(
       strip.bottom
     )
     // And the strip scrolls sideways only: a taller trigger than its box
     // would let the row slide up and down under the pointer.
-    await expect(list.scrollHeight).toBeLessThanOrEqual(list.clientHeight)
+    await expect(viewport.scrollHeight).toBeLessThanOrEqual(
+      viewport.clientHeight
+    )
   },
 }
 
@@ -184,11 +190,16 @@ export const ActiveTabIsBroughtIntoView: Story = {
     const list = canvas.getByRole("tablist")
     const active = canvas.getByRole("tab", { selected: true })
     await expect(active).toHaveAccessibleName(/console_12\.sql/)
+    const viewport = list.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) throw new Error("No scrolling tab viewport")
     await waitFor(() => {
-      const strip = list.getBoundingClientRect()
+      const strip = viewport.getBoundingClientRect()
       const tab = active.getBoundingClientRect()
       expect(tab.right).toBeLessThanOrEqual(strip.right + 1)
       expect(tab.left).toBeGreaterThanOrEqual(strip.left - 1)
+      expect(viewport.scrollLeft).toBeGreaterThan(0)
     })
   },
 }

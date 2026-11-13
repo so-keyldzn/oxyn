@@ -20,6 +20,8 @@ import { ResultPanel } from "./result-panel"
 import { StatusBar } from "./status-bar"
 import { WorkspaceAside } from "./workspace-aside"
 import { WorkspaceLayout } from "./workspace-layout"
+import { TextArea } from "./text-field"
+import { Button } from "@/components/ui/button"
 import type { LeftView } from "./workspace-layout"
 import { WorkspaceTabs, tabPanelValue } from "./workspace-tabs"
 import type { WorkspaceTabItem } from "./workspace-tabs"
@@ -163,6 +165,78 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+export const IndependentAssistantAndInspector: Story = {
+  render: function Render(args) {
+    const [inspectorOpen, setInspectorOpen] = React.useState(true)
+    const [assistantOpen, setAssistantOpen] = React.useState(true)
+    return (
+      <WorkspaceLayout
+        {...args}
+        aside={<div className="p-3">Object and value inspectors</div>}
+        asideOpen={inspectorOpen}
+        onAsideOpenChange={setInspectorOpen}
+        assistant={
+          <TextArea
+            aria-label="Independent question draft"
+            defaultValue="Keep this question"
+          />
+        }
+        assistantOpen={assistantOpen}
+        onAssistantOpenChange={setAssistantOpen}
+        aiEntry={
+          <Button onClick={() => setAssistantOpen(!assistantOpen)}>
+            Ask AI
+          </Button>
+        }
+      >
+        <TabsContent value="console:1">
+          <div data-testid="query-work-area">Query work area</div>
+        </TabsContent>
+      </WorkspaceLayout>
+    )
+  },
+  play: async ({ canvas }) => {
+    const draft = canvas.getByRole("textbox", {
+      name: "Independent question draft",
+    })
+    const content = canvas.getByTestId("query-work-area")
+    const work = content.closest<HTMLElement>('[data-slot="resizable-panel"]')
+    const group = work?.parentElement
+    if (!work || !group) throw new Error("Missing workspace panels")
+    const fillsWorkspace = async () =>
+      waitFor(() =>
+        expect(work.getBoundingClientRect().width).toBeGreaterThanOrEqual(
+          group.getBoundingClientRect().width - 2
+        )
+      )
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Close assistant panel" })
+    )
+    await expect(canvas.getByText("Object and value inspectors")).toBeVisible()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Toggle side panel" })
+    )
+    await fillsWorkspace()
+    await userEvent.click(canvas.getByRole("button", { name: "Ask AI" }))
+    await waitFor(() => expect(draft).toBeVisible())
+    await expect(draft).toHaveValue("Keep this question")
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Toggle side panel" })
+    )
+    await waitFor(() =>
+      expect(canvas.getByText("Object and value inspectors")).toBeVisible()
+    )
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Toggle side panel" })
+    )
+    await expect(draft).toBeVisible()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Close assistant panel" })
+    )
+    await fillsWorkspace()
+  },
+}
 
 /** Switching tabs keeps what a hidden tab holds: nothing is remounted. */
 export const Wide: Story = {

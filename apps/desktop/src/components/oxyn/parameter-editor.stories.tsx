@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fireEvent, fn, userEvent, within } from "storybook/test"
 
 import { ParameterEditor } from "./parameter-editor"
+import { chooseSelectOption } from "./select-story"
 import type { ParameterRow } from "./parameter-editor"
 
 const populated: Array<ParameterRow> = [
@@ -38,7 +39,9 @@ export const Empty: Story = {
   play: async ({ canvas }) => {
     await userEvent.click(canvas.getByRole("button", { name: "Add parameter" }))
     // A new row binds NULL, and its value cannot be typed until a type is set.
-    await expect(canvas.getByLabelText("Parameter 1 type")).toHaveValue("null")
+    await expect(canvas.getByLabelText("Parameter 1 type")).toHaveTextContent(
+      "NULL"
+    )
     await expect(canvas.getByLabelText("Parameter 1 value")).toHaveAttribute(
       "readonly"
     )
@@ -52,8 +55,25 @@ export const Populated: Story = {
       canvas.getByRole("button", { name: "Remove parameter 1" })
     )
     // The neighbour keeps its own type and value when a row above goes.
-    await expect(canvas.getByLabelText("Parameter 1 type")).toHaveValue("text")
+    await expect(canvas.getByLabelText("Parameter 1 type")).toHaveTextContent(
+      "Text"
+    )
     await expect(canvas.getByLabelText("Parameter 1 value")).toHaveValue("paid")
+  },
+}
+
+export const ChangeTypeKeepsTheValue: Story = {
+  args: { rows: populated },
+  play: async ({ canvas, args }) => {
+    await chooseSelectOption(
+      canvas.getByLabelText("Parameter 1 type"),
+      "Float64"
+    )
+    await expect(canvas.getByLabelText("Parameter 1 value")).toHaveValue("42")
+    await expect(args.onChange).toHaveBeenCalledWith([
+      { ...populated[0], type: "float64" },
+      populated[1],
+    ])
   },
 }
 

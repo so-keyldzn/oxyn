@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 
 /** A console that would lose work if its window closed. */
 export interface CloseWindowRow {
@@ -46,6 +47,7 @@ export function CloseWindowDialog({
   rows,
   connections,
   busy = false,
+  error = null,
   onCancel,
   onClose,
 }: {
@@ -55,6 +57,7 @@ export function CloseWindowDialog({
   connections: ReadonlyArray<string>
   /** The consoles are closing: only Cancel of the wait remains. */
   busy?: boolean
+  error?: string | null
   onCancel: () => void
   onClose: () => void
 }) {
@@ -87,36 +90,51 @@ export function CloseWindowDialog({
             Close {named}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            Closing this window closes its consoles.{" "}
-            {rows?.length === 1
-              ? "This one would lose work:"
-              : "These would lose work:"}{" "}
-            unsaved SQL is discarded and running operations are cancelled.
-            Committed database changes are not undone.
+            {rows && rows.length > 0 ? (
+              <>
+                Closing this window closes its consoles.{" "}
+                {rows.length === 1
+                  ? "This one would lose work:"
+                  : "These would lose work:"}{" "}
+                unsaved SQL is discarded and running operations are cancelled.
+                Committed database changes are not undone.
+              </>
+            ) : (
+              "The window stays open until its consoles have closed."
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <ul
-          aria-label="Consoles that would lose work"
-          className="flex max-h-64 flex-col gap-2 overflow-y-auto"
-        >
-          {rows?.map((row) => (
-            <li
-              key={row.key}
-              className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
-            >
-              <span className="font-medium wrap-anywhere">{row.title}</span>
-              <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                <span className="wrap-anywhere">{row.connection}</span>
-                <span>{costs(row)}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
+        {rows && rows.length > 0 ? (
+          <ul
+            aria-label="Consoles that would lose work"
+            className="flex max-h-64 flex-col gap-2 overflow-y-auto"
+          >
+            {rows.map((row) => (
+              <li
+                key={row.key}
+                className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
+              >
+                <span className="font-medium wrap-anywhere">{row.title}</span>
+                <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                  <span className="wrap-anywhere">{row.connection}</span>
+                  <span>{costs(row)}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         <AlertDialogFooter className="flex-col sm:flex-row">
           <AlertDialogCancel ref={cancelRef}>Cancel</AlertDialogCancel>
           <Button variant="destructive" disabled={busy} onClick={onClose}>
             {busy ? <Spinner data-icon="inline-start" /> : null}
-            Discard and close window
+            {rows && rows.length > 0
+              ? "Discard and close window"
+              : "Close window"}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

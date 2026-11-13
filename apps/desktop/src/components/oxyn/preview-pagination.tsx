@@ -1,11 +1,20 @@
 import { HugeiconsIcon } from "@hugeicons/react"
+import * as React from "react"
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
 import { BackendErrorAlert } from "./backend-error-alert"
 import type { BackendFailure } from "./backend-error-alert"
 
 import { Button } from "@/components/ui/button"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Pagination,
   PaginationContent,
@@ -39,6 +48,7 @@ export function PreviewPagination({
   onPage: (forward: boolean) => void
   onPageSize: (size: PreviewPageSize) => void
 }) {
+  const pageSizeId = React.useId()
   if (pagination?.type === "notApplicable") return null
   const settled = status === "loaded" || status === "empty"
   const ready =
@@ -94,24 +104,40 @@ export function PreviewPagination({
       </span>
       {reason ? <span className="text-muted-foreground">{reason}</span> : null}
       <div className="ms-auto flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2">
-          {pageable ? "Rows per page" : "Preview rows"}
-          <NativeSelect
-            size="sm"
+        <div className="flex items-center gap-2">
+          <Label htmlFor={pageSizeId}>
+            {pageable ? "Rows per page" : "Preview rows"}
+          </Label>
+          <Select
+            items={PREVIEW_PAGE_SIZES.map((size) => ({
+              value: size,
+              label: String(size),
+            }))}
             value={applied.pageSize}
             disabled={busy}
-            onChange={(event) => {
-              const size = PreviewPageSize.safeParse(Number(event.target.value))
+            onValueChange={(value) => {
+              const size = PreviewPageSize.safeParse(value)
               if (size.success) onPageSize(size.data)
             }}
           >
-            {PREVIEW_PAGE_SIZES.map((size) => (
-              <NativeSelectOption key={size} value={size}>
-                {size}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
+            <SelectTrigger
+              id={pageSizeId}
+              size="sm"
+              aria-label={pageable ? "Rows per page" : "Preview rows"}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {PREVIEW_PAGE_SIZES.map((size) => (
+                  <SelectItem key={size} value={size}>
+                    {size}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
         {pageable ? (
           <Pagination aria-label="Preview pages" className="mx-0 w-auto">
             <PaginationContent>

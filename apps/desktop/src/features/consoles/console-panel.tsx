@@ -67,6 +67,8 @@ import type { ResultState } from "@/components/oxyn/result-panel"
 /** What the workspace may ask of a console it does not render itself. */
 export interface ConsoleHandle {
   closeReasons: () => CloseReasons
+  /** A live operation that must finish or be cancelled before closing. */
+  closeBlocked?: () => string | null
   /** The text as typed, to carry into the next connection's first console. */
   text: () => string
   /** Writes the pending draft now; `false` if the text is not in the store. */
@@ -392,6 +394,10 @@ export function ConsolePanel({
   }
   React.useEffect(() => {
     const handle: ConsoleHandle = {
+      closeBlocked: () =>
+        latest.current.exporting
+          ? "Finish or cancel the export before closing this console."
+          : null,
       closeReasons: () => ({
         title: latest.current.doc.title || "Untitled query",
         connection: latest.current.connection,

@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent } from "storybook/test"
 
 import { SessionContextPicker } from "./session-context-picker"
+import { chooseSelectOption } from "./select-story"
 
 const choices = [
   { catalog: null, namespace: null },
@@ -36,12 +37,12 @@ type Story = StoryObj<typeof meta>
 export const ServerDefault: Story = {
   play: async ({ canvas, args }) => {
     const select = canvas.getByLabelText("Session schema")
-    await userEvent.selectOptions(select, "analytics")
+    await chooseSelectOption(select, "analytics")
     await expect(args.onChoose).toHaveBeenCalledWith({
       catalog: "billing",
       namespace: "analytics",
     })
-    await expect(select).toHaveDisplayValue("Server default")
+    await expect(select).toHaveTextContent("Server default")
   },
 }
 
@@ -63,6 +64,25 @@ export const Declared: Story = {
       status: "declared",
       place: { catalog: "billing", namespace: "public" },
     },
+  },
+}
+
+export const DeclaredOutsideTheCache: Story = {
+  args: {
+    state: {
+      status: "declared",
+      place: { catalog: "billing", namespace: "private_schema" },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    const select = canvas.getByLabelText("Session schema")
+    await expect(select).toHaveTextContent("private_schema")
+    await chooseSelectOption(select, "analytics")
+    await expect(args.onChoose).toHaveBeenCalledWith({
+      catalog: "billing",
+      namespace: "analytics",
+    })
+    await expect(select).toHaveTextContent("private_schema")
   },
 }
 
@@ -91,7 +111,7 @@ export const DocumentDatabases: Story = {
     await expect(canvas.getByRole("status")).toHaveTextContent(
       "does not claim to know the database."
     )
-    await userEvent.selectOptions(select, "shop")
+    await chooseSelectOption(select, "shop")
     await expect(args.onChoose).toHaveBeenCalledWith({
       catalog: null,
       namespace: "shop",
@@ -115,11 +135,11 @@ export const DatabasesOfAKeyValueStore: Story = {
   },
   play: async ({ canvas, args }) => {
     const select = canvas.getByLabelText("Session schema")
-    await expect(select).toHaveDisplayValue("db0")
+    await expect(select).toHaveTextContent("db0")
     await expect(
       canvas.queryByRole("button", { name: "Load schemas" })
     ).not.toBeInTheDocument()
-    await userEvent.selectOptions(select, "db3")
+    await chooseSelectOption(select, "db3")
     await expect(args.onChoose).toHaveBeenCalledWith({
       catalog: "db3",
       namespace: null,

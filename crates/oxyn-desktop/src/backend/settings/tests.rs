@@ -23,6 +23,39 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("a test runtime starts")
 }
 
+#[test]
+fn light_and_dark_palettes_reach_the_workspace_store_in_system_mode() {
+    use crate::ipc::settings::PaletteChoice;
+    use oxyn_core::ColorPalette;
+
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    runtime
+        .block_on(backend.write_preferences(PreferencesChange {
+            theme: Some(ThemeChoice::System),
+            light_palette: Some(PaletteChoice::Ocean),
+            dark_palette: Some(PaletteChoice::Plum),
+            ..Default::default()
+        }))
+        .expect("palettes saved");
+    let outcome = runtime
+        .block_on(backend.inner.executor.dispatch(
+            Actor::Human,
+            Command::ReadWorkspacePreferences {
+                workspace: backend.inner.executor.workspace(),
+            },
+            &CancelToken::new(),
+        ))
+        .expect("stored preferences read");
+    let Outcome::WorkspacePreferences { snapshot } = outcome else {
+        panic!("a preference read returns the stored snapshot");
+    };
+    assert_eq!(snapshot.preferences.light_palette, ColorPalette::Ocean);
+    assert_eq!(snapshot.preferences.dark_palette, ColorPalette::Plum);
+    assert!(snapshot.preferences.follow_system_appearance);
+}
+
 /// A saved PostgreSQL connection nobody connects to: editing and deleting
 /// never reach a server.
 fn saved(

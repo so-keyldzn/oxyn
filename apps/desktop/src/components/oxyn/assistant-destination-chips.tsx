@@ -1,4 +1,5 @@
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   ArrowDown01Icon,
   CloudIcon,
@@ -317,14 +318,11 @@ export function AssistantModelListNote({
     )
   if (modelList?.status === "error")
     return (
-      <span
-        role="alert"
-        data-slot="model-list"
-        data-selectable
-        className="text-xs text-destructive"
-      >
-        Models could not be listed: {modelList.message}
-      </span>
+      <Alert variant="destructive" data-slot="model-list">
+        <AlertDescription data-selectable>
+          Models could not be listed: {modelList.message}
+        </AlertDescription>
+      </Alert>
     )
   return null
 }

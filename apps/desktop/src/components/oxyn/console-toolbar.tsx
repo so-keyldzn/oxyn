@@ -13,6 +13,8 @@ import { ReadOnlyBadge } from "@/components/oxyn/read-only-badge"
 import { TransactionBadge } from "@/components/oxyn/transaction-badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
+import { Label } from "@/components/ui/label"
+import { Toggle } from "@/components/ui/toggle"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -292,11 +294,10 @@ export function ConsoleToolbar({
               : `${actionShortcut("console.run")} executes: ${target === "selection" ? "selection" : "current statement"}`}
         </span>
         {parameterCount === null ? null : (
-          <Button
+          <Toggle
             size="sm"
-            variant={parametersOpen ? "secondary" : "ghost"}
-            aria-pressed={parametersOpen}
-            onClick={onToggleParameters}
+            pressed={parametersOpen}
+            onPressedChange={onToggleParameters}
           >
             <HugeiconsIcon
               icon={LeftToRightListBulletIcon}
@@ -305,7 +306,7 @@ export function ConsoleToolbar({
             />
             Parameters
             <span className="tabular-nums">· {parameterCount}</span>
-          </Button>
+          </Toggle>
         )}
         {readOnly ? <ReadOnlyBadge /> : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
@@ -314,9 +315,9 @@ export function ConsoleToolbar({
         </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <label htmlFor={titleId} className="text-xs text-muted-foreground">
+        <Label htmlFor={titleId} className="text-xs text-muted-foreground">
           Query name
-        </label>
+        </Label>
         <TextInput
           id={titleId}
           value={title}

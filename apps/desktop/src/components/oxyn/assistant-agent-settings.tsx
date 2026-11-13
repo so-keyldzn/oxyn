@@ -1,4 +1,6 @@
 import * as React from "react"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, MoreHorizontalIcon } from "@hugeicons/core-free-icons"
 
@@ -233,14 +235,14 @@ function OptionSwitch({
           if (next !== on) onToggle(next)
         }}
       />
-      <label
+      <Label
         htmlFor={id}
         dir="auto"
         title={name}
         className="max-w-32 truncate text-muted-foreground"
       >
         {name}
-      </label>
+      </Label>
       {pending ? <Spinner className="size-3.5" /> : null}
     </span>
   )
@@ -458,13 +460,9 @@ export function AssistantAgentSettings({
         </span>
       ) : null}
       {failure !== null ? (
-        <p
-          role="alert"
-          data-selectable
-          className="mt-1 text-xs wrap-break-word text-destructive"
-        >
-          {failure}
-        </p>
+        <Alert variant="destructive" className="mt-1">
+          <AlertDescription data-selectable>{failure}</AlertDescription>
+        </Alert>
       ) : null}
     </div>
   )

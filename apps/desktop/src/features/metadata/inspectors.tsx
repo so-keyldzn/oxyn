@@ -3,6 +3,8 @@ import { useSelector } from "@tanstack/react-store"
 
 import { ObjectInspector } from "@/components/oxyn/object-inspector"
 import { ValueInspector } from "@/components/oxyn/value-inspector"
+import type { InspectedRowState } from "@/components/oxyn/value-inspector"
+import { RESULT_PAGE_QUERY } from "@/components/oxyn/result-grid"
 import { copyToClipboard } from "@/features/metadata/clipboard"
 import {
   inspectValue,
@@ -11,6 +13,7 @@ import {
 } from "@/features/metadata/inspection"
 import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { metadata } from "@/lib/ipc/metadata"
+import { BackendError } from "@/lib/ipc/client"
 import { results } from "@/lib/ipc/results"
 import type { OpenConnection } from "@/lib/ipc/types"
 
@@ -59,7 +62,13 @@ export function ValueInspectorPanel({ open }: { open: OpenConnection }) {
     state.selectedRow?.connection === open.connection ? state.selectedRow : null
   )
   const row = useQuery({
-    queryKey: ["inspected-row", selected?.result, selected?.row] as const,
+    queryKey: [
+      RESULT_PAGE_QUERY,
+      "inspector",
+      open.connection,
+      selected?.result,
+      selected?.row,
+    ] as const,
     enabled: selected !== null,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 15_000,
@@ -73,17 +82,32 @@ export function ValueInspectorPanel({ open }: { open: OpenConnection }) {
           )
         : Promise.reject(new Error("No row is selected")),
   })
-  const cells = row.data?.type === "page" ? (row.data.rows[0] ?? null) : null
+  const cells = row.data?.type === "page" ? row.data.rows[0] : undefined
+  // An error wins over previously cached data: it must not look current.
+  const state: InspectedRowState = row.isError
+    ? {
+        status: "error",
+        error: {
+          message: row.error.message,
+          retryable: row.error instanceof BackendError && row.error.retryable,
+        },
+      }
+    : row.isPending
+      ? { status: "loading" }
+      : cells
+        ? { status: "loaded", cells }
+        : { status: "unavailable" }
 
   return (
     <ValueInspector
       target={
         selected
-          ? { row: selected.row, columns: selected.columns, cells }
+          ? { row: selected.row, columns: selected.columns, state }
           : null
       }
       column={selected?.column ?? null}
       onSelectColumn={selectInspectorColumn}
+      onRetry={() => void row.refetch()}
       onInspect={(column) => {
         if (!selected) return
         inspectValue({

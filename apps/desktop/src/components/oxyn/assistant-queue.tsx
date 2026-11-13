@@ -2,6 +2,8 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Cancel01Icon, Clock01Icon, SentIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { Item, ItemActions, ItemContent, ItemMedia } from "@/components/ui/item"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import type { QueuedMessage } from "@/features/assistant/thread"
 
 /**
@@ -34,54 +36,54 @@ export function AssistantQueue({
       aria-label={`${queue.length} queued message(s)`}
       className="flex flex-col gap-1.5"
     >
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <HugeiconsIcon
-          icon={Clock01Icon}
-          strokeWidth={2}
-          className="size-3.5"
-          aria-hidden
-        />
-        {held === "failed"
-          ? "Queued · the last answer failed, so these wait for you."
-          : held === "refused"
-            ? "Queued · the next one was not sent, so these wait for you."
-            : "Queued · sent when the current answer ends. They approve nothing."}
-      </p>
+      <Marker render={<p />}>
+        <MarkerIcon>
+          <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} />
+        </MarkerIcon>
+        <MarkerContent>
+          {held === "failed"
+            ? "Queued · the last answer failed, so these wait for you."
+            : held === "refused"
+              ? "Queued · the next one was not sent, so these wait for you."
+              : "Queued · sent when the current answer ends. They approve nothing."}
+        </MarkerContent>
+      </Marker>
       <ol className="flex flex-col gap-1">
         {queue.map((message, index) => (
-          <li
+          <Item
             key={message.key}
-            className="flex min-w-0 items-center gap-1 rounded-md border border-dashed py-1 pr-1 pl-2 text-sm"
+            render={<li />}
+            variant="outline"
+            size="xs"
+            className="min-w-0 flex-nowrap gap-1 border-dashed py-1 pr-1 pl-2"
           >
-            <span className="w-4 shrink-0 text-xs text-muted-foreground tabular-nums">
+            <ItemMedia className="w-4 text-xs text-muted-foreground tabular-nums">
               {index + 1}
-            </span>
-            <span
-              className="min-w-0 flex-1 truncate"
-              dir="auto"
-              title={message.text}
-            >
-              {message.text}
-            </span>
-            {held ? (
+            </ItemMedia>
+            <ItemContent className="min-w-0" dir="auto" title={message.text}>
+              <span className="truncate">{message.text}</span>
+            </ItemContent>
+            <ItemActions className="gap-1">
+              {held ? (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Send queued message ${index + 1} now`}
+                  onClick={() => onSendNow(message.key)}
+                >
+                  <HugeiconsIcon icon={SentIcon} strokeWidth={2} />
+                </Button>
+              ) : null}
               <Button
                 size="icon-xs"
                 variant="ghost"
-                aria-label={`Send queued message ${index + 1} now`}
-                onClick={() => onSendNow(message.key)}
+                aria-label={`Remove queued message ${index + 1}`}
+                onClick={() => onRemove(message.key)}
               >
-                <HugeiconsIcon icon={SentIcon} strokeWidth={2} />
+                <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
               </Button>
-            ) : null}
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label={`Remove queued message ${index + 1}`}
-              onClick={() => onRemove(message.key)}
-            >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-            </Button>
-          </li>
+            </ItemActions>
+          </Item>
         ))}
       </ol>
     </section>

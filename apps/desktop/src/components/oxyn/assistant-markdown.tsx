@@ -14,6 +14,14 @@ import type {
 } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import type { QueryLanguageName } from "@/lib/query-language"
 import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { cn } from "@/lib/utils"
@@ -206,33 +214,30 @@ function Blocks({
                 tabIndex={0}
                 role="region"
                 aria-label="Table"
-                className="overflow-x-auto rounded-lg border outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="overflow-x-auto rounded-lg border outline-none focus-visible:ring-2 focus-visible:ring-ring [&>[data-slot=table-container]]:overflow-visible"
               >
-                <table className="w-full text-xs">
-                  <thead className="bg-muted/50">
-                    <tr>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
                       {block.header.map((cell, cellIndex) => (
-                        <th
-                          key={cellIndex}
-                          className="px-2 py-1.5 text-left font-medium"
-                        >
+                        <TableHead key={cellIndex}>
                           <InlineContent nodes={cell} />
-                        </th>
+                        </TableHead>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {block.rows.map((row, rowIndex) => (
-                      <tr key={rowIndex} className="border-t">
+                      <TableRow key={rowIndex}>
                         {row.map((cell, cellIndex) => (
-                          <td key={cellIndex} className="px-2 py-1.5 align-top">
+                          <TableCell key={cellIndex} className="align-top">
                             <InlineContent nodes={cell} />
-                          </td>
+                          </TableCell>
                         ))}
-                      </tr>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             )
         }

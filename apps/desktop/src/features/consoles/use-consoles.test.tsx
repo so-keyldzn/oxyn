@@ -153,7 +153,72 @@ describe("closing a modified console", () => {
 })
 
 describe("closing every console of a closing window", () => {
-  it("cancels the console closing on Cancel and starts no other", async () => {
+  it("does not confirm the window close when a new console opened during the batch", async () => {
+    const { hook, key, handle } = await openConsoles()
+    let finish = (_closed: boolean) => {}
+    handle.close.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    let pending = Promise.resolve(false)
+    act(() => {
+      pending = hook.result.current.closeAll(new AbortController().signal)
+    })
+    await act(() => hook.result.current.openConsole())
+    let closed = true
+    await act(async () => {
+      finish(true)
+      closed = await pending
+    })
+    expect(closed).toBe(false)
+    expect(hook.result.current.entries).toHaveLength(1)
+    expect(hook.result.current.entries[0]?.key).not.toBe(key)
+  })
+
+  it("starts a confirmed batch together and removes its tabs in one update", async () => {
+    const { hook, key, handle } = await openConsoles()
+    await act(() => hook.result.current.openConsole())
+    const second = hook.result.current.entries.find(
+      (entry) => entry.key !== key
+    )
+    const other = modifiedConsole()
+    hook.result.current.register(second?.key ?? "", other.handle)
+    let firstAnswer = (_closed: boolean) => {}
+    let secondAnswer = (_closed: boolean) => {}
+    handle.close.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          firstAnswer = resolve
+        })
+    )
+    other.handle.close.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          secondAnswer = resolve
+        })
+    )
+    let pending = Promise.resolve<Array<string>>([])
+    act(() => {
+      pending = hook.result.current.finishCloseMany(
+        [key, second?.key ?? ""],
+        true
+      )
+    })
+    expect(handle.close).toHaveBeenCalledWith(true)
+    expect(other.handle.close).toHaveBeenCalledWith(true)
+    await act(async () => firstAnswer(true))
+    expect(hook.result.current.entries).toHaveLength(2)
+    await act(async () => {
+      secondAnswer(true)
+      await pending
+    })
+    expect(hook.result.current.entries).toHaveLength(0)
+    expect(hook.result.current.reopenable).toBe(true)
+  })
+
+  it("cancels every pending console close together", async () => {
     const { hook, key, handle } = await openConsoles()
     await act(() => hook.result.current.openConsole())
     expect(hook.result.current.entries).toHaveLength(2)
@@ -163,28 +228,37 @@ describe("closing every console of a closing window", () => {
     const other = modifiedConsole()
     hook.result.current.register(second?.key ?? "", other.handle)
     let finish = (_closed: boolean) => {}
+    let finishOther = (_closed: boolean) => {}
     handle.close.mockImplementation(
       () =>
         new Promise<boolean>((resolve) => {
           finish = resolve
         })
     )
+    other.handle.close.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishOther = resolve
+        })
+    )
 
     const request = new AbortController()
-    let pending = Promise.resolve()
+    let pending = Promise.resolve(false)
     act(() => {
       pending = hook.result.current.closeAll(request.signal)
     })
     expect(handle.close).toHaveBeenCalledWith(true)
     request.abort()
     expect(handle.cancelWrite).toHaveBeenCalledOnce()
+    expect(other.handle.cancelWrite).toHaveBeenCalledOnce()
     // The store answers that the cancellation came in time.
     await act(async () => {
       finish(false)
+      finishOther(false)
       await pending
     })
 
-    expect(other.handle.close).not.toHaveBeenCalled()
+    expect(other.handle.close).toHaveBeenCalledWith(true)
     expect(hook.result.current.entries).toHaveLength(2)
   })
 })

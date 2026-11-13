@@ -9,6 +9,10 @@ import {
 import { usePanelRef } from "react-resizable-panels"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
+import {
+  AssistantDock,
+  ASSISTANT_PANEL_ID,
+} from "@/components/oxyn/assistant-dock"
 import { ReadOnlyBadge } from "@/components/oxyn/read-only-badge"
 import { Button } from "@/components/ui/button"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
@@ -135,6 +139,9 @@ export function WorkspaceLayout({
   children,
   aiEntry = null,
   aside = null,
+  assistant = null,
+  assistantOpen = false,
+  onAssistantOpenChange,
   asideOpen = false,
   onAsideOpenChange,
   asideWidth = ASIDE_WIDTH.initial,
@@ -167,6 +174,10 @@ export function WorkspaceLayout({
   aiEntry?: React.ReactNode
   /** The right column, kept mounted while closed and across 1200 px. */
   aside?: React.ReactNode
+  /** Independent from Object / Value; kept mounted when collapsed. */
+  assistant?: React.ReactNode
+  assistantOpen?: boolean
+  onAssistantOpenChange?: (open: boolean) => void
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
   /** The saved wide-screen width of the right column, in pixels. */
@@ -245,22 +256,19 @@ export function WorkspaceLayout({
   // later: until then `expand`, `collapse` and `isCollapsed` throw « Panel
   // constraints not found ». The group's layout names it once it has them.
   const [asideRegistered, setAsideRegistered] = React.useState(false)
+  const [assistantRegistered, setAssistantRegistered] = React.useState(false)
 
   const asidePanel = usePanelRef()
-  React.useEffect(() => {
-    const panel = asidePanel.current
-    if (!asideRegistered || !panel) return
-    if (asideOpen) panel.expand()
-    else panel.collapse()
-  }, [asideOpen, asideRegistered, asidePanel])
-
-  // `defaultSize` only counts at mount: a width read or restored later
-  // reaches the open column here.
   const width = boundedAsideWidth(asideWidth)
   React.useEffect(() => {
     const panel = asidePanel.current
-    if (!asideRegistered || !asideOpen || !panel || panel.isCollapsed()) return
-    if (Math.round(panel.getSize().inPixels) !== width) panel.resize(width)
+    if (!asideRegistered || !panel) return
+    // A closed panel has a zero maximum, so another closing panel cannot
+    // redistribute space into it. Resize after the new bounds are registered.
+    const frame = requestAnimationFrame(() => {
+      if (asideOpen) panel.resize(width)
+    })
+    return () => cancelAnimationFrame(frame)
   }, [width, asideOpen, asideRegistered, asidePanel])
 
   // The layout settles once the pointer is released or a key has resized,
@@ -271,7 +279,7 @@ export function WorkspaceLayout({
     if (!meta.isUserInteraction) return
     requestAnimationFrame(() => {
       const panel = asidePanel.current
-      if (!panel || panel.isCollapsed()) return
+      if (!asideOpen || !panel || panel.getSize().inPixels === 0) return
       onAsideWidthCommit?.(boundedAsideWidth(panel.getSize().inPixels))
     })
   }
@@ -299,7 +307,7 @@ export function WorkspaceLayout({
   }
 
   const main = (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       {notice ? (
         <p
           role="status"
@@ -313,6 +321,16 @@ export function WorkspaceLayout({
         </p>
       ) : null}
       <div className="relative min-h-0 flex-1">{children}</div>
+      {aside !== null && compact ? (
+        <div
+          ref={placeAside}
+          data-slot="workspace-aside-overlay"
+          className={cn(
+            "absolute inset-y-0 right-0 z-30 w-80 border-l bg-background shadow-lg",
+            !asideOpen && "hidden"
+          )}
+        />
+      ) : null}
     </div>
   )
 
@@ -422,9 +440,10 @@ export function WorkspaceLayout({
             <ResizablePanelGroup
               orientation="horizontal"
               className="min-h-0 flex-1"
-              onLayoutChange={(layout) =>
+              onLayoutChange={(layout) => {
                 setAsideRegistered(ASIDE_PANEL_ID in layout)
-              }
+                setAssistantRegistered(ASSISTANT_PANEL_ID in layout)
+              }}
               onLayoutChanged={(_layout, meta) => commitAsideWidth(meta)}
             >
               {/* Unit-less sizes are percentages: the work area keeps at
@@ -443,22 +462,12 @@ export function WorkspaceLayout({
                   <ResizablePanel
                     id={ASIDE_PANEL_ID}
                     panelRef={asidePanel}
-                    collapsible
-                    collapsedSize="0px"
                     defaultSize={asideOpen ? `${width}px` : "0px"}
-                    minSize={`${ASIDE_WIDTH.min}px`}
-                    maxSize={`${ASIDE_WIDTH.max}px`}
+                    minSize={asideOpen ? `${ASIDE_WIDTH.min}px` : "0px"}
+                    maxSize={asideOpen ? `${ASIDE_WIDTH.max}px` : "0px"}
                     // The saved width is in pixels: a narrower group, or the
                     // sidebar still sliding open, takes room from the work area.
                     groupResizeBehavior="preserve-pixel-size"
-                    onResize={(_size, _id, previous) => {
-                      // Not on mount: the column is then drawn from the
-                      // preference, and reporting it would save a width
-                      // change as a choice (ADR-0013).
-                      if (previous === undefined) return
-                      if (asidePanel.current?.isCollapsed())
-                        onAsideOpenChange?.(false)
-                    }}
                   >
                     <div
                       ref={placeAside}
@@ -467,21 +476,16 @@ export function WorkspaceLayout({
                   </ResizablePanel>
                 </>
               ) : null}
+              {assistant !== null && onAssistantOpenChange ? (
+                <AssistantDock
+                  open={assistantOpen}
+                  registered={assistantRegistered}
+                  onOpenChange={onAssistantOpenChange}
+                >
+                  {assistant}
+                </AssistantDock>
+              ) : null}
             </ResizablePanelGroup>
-            {aside !== null && compact ? (
-              // Below 1200 px the column overlays the work area
-              // (docs/UX-SPEC.md). Escape is handled on the whole workspace,
-              // not here: it is opened from a button in the bar, and a key
-              // pressed there would never reach this subtree.
-              <div
-                ref={placeAside}
-                data-slot="workspace-aside-overlay"
-                className={cn(
-                  "absolute inset-y-0 right-0 z-30 w-80 border-l bg-background shadow-lg",
-                  !asideOpen && "hidden"
-                )}
-              />
-            ) : null}
             {/* Here in the React tree whatever its place in the document:
                 contexts and events reach the column from this point, in both
                 presentations. */}

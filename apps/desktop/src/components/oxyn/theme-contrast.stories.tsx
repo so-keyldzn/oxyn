@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { TextInput } from "./text-field"
+import { PaletteChoice } from "@/lib/ipc/settings"
 
 /**
  * The theme's control contrast, measured in the browser (WCAG 1.4.11, 3:1).
@@ -207,12 +208,56 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+async function measurePalettes(canvasElement: HTMLElement) {
+  const root = document.documentElement
+  const previous = root.dataset.palette
+  try {
+    for (const palette of PaletteChoice.options) {
+      root.dataset.palette = palette
+      await measureTheme(canvasElement)
+      for (const surface of SURFACES) {
+        const box = canvasElement.querySelector<HTMLElement>(
+          `[data-surface="${surface.name}"]`
+        )
+        if (!box) throw new Error("Missing contrast surface")
+        const ground = getComputedStyle(box).backgroundColor
+        const sample = document.createElement("span")
+        sample.textContent = "Readable text"
+        box.appendChild(sample)
+        try {
+          for (const token of [
+            "foreground",
+            "muted-foreground",
+            "null",
+            "primary-text",
+            "env-production",
+            "env-staging",
+            "env-development",
+            "env-local",
+          ]) {
+            sample.style.color = `var(--${token})`
+            await expect(
+              contrast(getComputedStyle(sample).color, ground),
+              `${palette}: ${token} on ${surface.name}`
+            ).toBeGreaterThanOrEqual(4.5)
+          }
+        } finally {
+          sample.remove()
+        }
+      }
+    }
+  } finally {
+    if (previous === undefined) delete root.dataset.palette
+    else root.dataset.palette = previous
+  }
+}
+
 export const Light: Story = {
   globals: { theme: "light" },
-  play: async ({ canvasElement }) => measureTheme(canvasElement),
+  play: async ({ canvasElement }) => measurePalettes(canvasElement),
 }
 
 export const Dark: Story = {
   globals: { theme: "dark" },
-  play: async ({ canvasElement }) => measureTheme(canvasElement),
+  play: async ({ canvasElement }) => measurePalettes(canvasElement),
 }

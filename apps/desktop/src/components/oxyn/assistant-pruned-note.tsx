@@ -1,3 +1,4 @@
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import type { PrunedHistory } from "@/lib/ipc/ai"
 
 function mebibytes(bytes: number) {
@@ -25,11 +26,8 @@ export function prunedSentence(pruned: PrunedHistory) {
  */
 export function AssistantPrunedNote({ pruned }: { pruned: PrunedHistory }) {
   return (
-    <p
-      data-slot="assistant-history-pruned"
-      className="rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground"
-    >
-      {prunedSentence(pruned)}
-    </p>
+    <Alert role="note" data-slot="assistant-history-pruned">
+      <AlertDescription>{prunedSentence(pruned)}</AlertDescription>
+    </Alert>
   )
 }

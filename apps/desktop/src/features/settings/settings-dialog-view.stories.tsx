@@ -7,6 +7,8 @@ import { SettingsDialogView } from "./settings-dialog-view"
 import { DEFAULT_PREFERENCES } from "./preferences"
 import { summaries } from "@/components/oxyn/connection-fixtures"
 import { ConnectionManager } from "@/components/oxyn/connection-manager"
+import { ConnectionForm } from "@/components/oxyn/connection-form"
+import { mysqlDriver } from "@/components/oxyn/fixtures"
 import {
   expectContainedInFrame,
   openFrame,
@@ -37,6 +39,60 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+export const EditingConnectionKeepsActionsVisible: Story = {
+  args: {
+    section: "connections",
+    connections: (
+      <ConnectionForm
+        driver={mysqlDriver}
+        existing={{
+          id: "connection",
+          name: "Local MySQL",
+          driver: mysqlDriver.id,
+          environment: "local",
+          privacyTier: "local",
+          readOnly: true,
+          values: { host: "localhost", port: "3306", user: "reader" },
+          hasStoredSecrets: true,
+        }}
+        onSubmit={fn()}
+        onCancel={fn()}
+      />
+    ),
+  },
+  play: async () => {
+    const dialog = await within(document.body).findByRole("dialog", {
+      name: "Settings",
+    })
+    const footer = dialog.querySelector<HTMLElement>(
+      '[data-slot="connection-form-actions"]'
+    )
+    const fields = dialog.querySelector<HTMLElement>(
+      '[data-slot="connection-form-fields"]'
+    )
+    const viewport = fields?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!footer || !fields || !viewport)
+      throw new Error("Missing connection form layout")
+    await waitFor(() => {
+      expect(footer.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        dialog.getBoundingClientRect().bottom
+      )
+      expect(viewport.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        footer.getBoundingClientRect().top + 1
+      )
+    })
+    const top = footer.getBoundingClientRect().top
+    viewport.scrollTop = viewport.scrollHeight
+    await waitFor(() =>
+      expect(Math.abs(footer.getBoundingClientRect().top - top)).toBeLessThan(1)
+    )
+    const password = within(dialog).getByLabelText("Password")
+    await expect(password).toHaveValue("")
+  },
+}
 
 export const Appearance: Story = {
   play: async ({ args }) => {

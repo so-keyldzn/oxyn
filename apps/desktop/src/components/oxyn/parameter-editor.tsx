@@ -5,7 +5,14 @@ import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { MAX_PARAMETERS, PARAMETER_KINDS } from "@/lib/ipc/consoles"
 import type { ParameterKind, ParameterRefusal } from "@/lib/ipc/consoles"
 import { TextInput } from "./text-field"
@@ -110,22 +117,32 @@ export function ParameterEditor({
                 <span className="w-6 text-right font-mono text-xs text-muted-foreground tabular-nums">
                   {position}
                 </span>
-                <NativeSelect
-                  aria-label={`Parameter ${position} type`}
+                <Select
+                  items={PARAMETER_KINDS.map((kind) => ({
+                    value: kind.kind,
+                    label: kind.label,
+                  }))}
                   value={row.type}
-                  onChange={(event) =>
-                    update(row.id, {
-                      type: event.target.value as ParameterKind,
-                    })
-                  }
-                  className="w-44 shrink-0"
+                  onValueChange={(type) => {
+                    if (type !== null) update(row.id, { type })
+                  }}
                 >
-                  {PARAMETER_KINDS.map((kind) => (
-                    <NativeSelectOption key={kind.kind} value={kind.kind}>
-                      {kind.label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
+                  <SelectTrigger
+                    aria-label={`Parameter ${position} type`}
+                    className="w-44 shrink-0"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {PARAMETER_KINDS.map((kind) => (
+                        <SelectItem key={kind.kind} value={kind.kind}>
+                          {kind.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
                 <TextInput
                   ref={faulty ? faultyRef : undefined}
                   aria-label={`Parameter ${position} value`}

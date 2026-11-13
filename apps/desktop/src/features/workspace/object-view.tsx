@@ -237,7 +237,7 @@ export function ObjectView({
 
   const { ensure } = facets
   React.useEffect(() => {
-    if (held) return
+    if (held || !active) return
     switch (tab) {
       // The rows are paged by the relation's key, which only its description
       // tells the backend (ADR-0068): described once, like the Structure tab.
@@ -263,7 +263,7 @@ export function ObjectView({
     // Asked once, like a tab: a window resized across 1200 px reads nothing.
     if (!compact && tab !== "data" && !unsupportedReason(open, "definition"))
       ensure("definition")
-  }, [held, tab, direction, compact, ensure])
+  }, [held, active, tab, direction, compact, ensure])
 
   const data = facets.facets
   const state = preview.state

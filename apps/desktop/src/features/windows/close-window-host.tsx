@@ -14,12 +14,14 @@ import {
  */
 export function CloseWindowHost() {
   const close = useSelector(windowClose)
-  const asking = close !== null && close.rows.length > 0
+  const asking =
+    close !== null && (close.rows.length > 0 || close.error !== null)
   return (
     <CloseWindowDialog
       rows={asking ? close.rows : null}
       connections={close?.connections ?? []}
       busy={close?.busy ?? false}
+      error={close?.error ?? null}
       onCancel={cancelWindowClose}
       onClose={() => void closeWindow()}
     />

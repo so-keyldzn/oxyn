@@ -387,16 +387,16 @@ export function RelationStructure({
                           : "none"
                     }
                   >
-                    <button
-                      type="button"
-                      className="rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={header.column.getToggleSortingHandler()}
                     >
                       {flexRender(
                         header.column.columnDef.header,
                         header.getContext()
                       )}
-                    </button>
+                    </Button>
                   </TableHead>
                 ))}
               </TableRow>

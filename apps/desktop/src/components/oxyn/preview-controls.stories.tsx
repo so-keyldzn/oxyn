@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { PreviewControls, SortToBrowsePages } from "./preview-controls"
+import { chooseSelectOption } from "./select-story"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
 
 const meta = {
@@ -252,9 +253,9 @@ export const ComposeASortOnTwoColumns: Story = {
       await popover.findByRole("button", { name: "Add column" })
     )
     await userEvent.click(popover.getByRole("button", { name: "Add column" }))
-    await userEvent.selectOptions(
+    await chooseSelectOption(
       popover.getByLabelText("Direction of sort column 2"),
-      "desc"
+      "Descending"
     )
     await userEvent.click(popover.getByRole("button", { name: "Apply sort" }))
     await waitFor(() =>

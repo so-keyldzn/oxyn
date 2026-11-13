@@ -119,7 +119,7 @@ describe("result pages after a format change", () => {
     grid.unsubscribe()
   })
 
-  it("stay as they are when the backend did not take the change", async () => {
+  it("reads the backend format again even when it refused the change", async () => {
     reset()
     const grid = await gridHoldingOnePage()
     renderHook(() => useResultFormatRefresh(grid.client))
@@ -131,9 +131,34 @@ describe("result pages after a format change", () => {
       await changePreferences({ groupThousands: true })
     })
 
-    // The backend still formats the old way: the held pages agree with it.
-    expect(grid.readPage).toHaveBeenCalledTimes(1)
+    // A rejection does not say whether formatting was applied before saving.
+    await vi.waitFor(() => expect(grid.readPage).toHaveBeenCalledTimes(2))
     expect(grid.observer.getCurrentResult().data).toBe("4823917")
+    grid.unsubscribe()
+  })
+
+  it("refreshes an applied format after a disk failure without retrying the write", async () => {
+    reset()
+    const grid = await gridHoldingOnePage()
+    renderHook(() => useResultFormatRefresh(grid.client))
+    writePreferences.mockImplementation(() => {
+      // save_preferences applies its snapshot before the store answers.
+      grid.groupOnTheBackend()
+      return Promise.reject(
+        new BackendError({ message: "disk full", retryable: false })
+      )
+    })
+    await act(async () => {
+      await changePreferences({ groupThousands: true })
+    })
+    await vi.waitFor(() =>
+      expect(grid.observer.getCurrentResult().data).toBe("4,823,917")
+    )
+    expect(preferencesStore.state.save).toEqual({
+      status: "failed",
+      message: "disk full",
+    })
+    expect(writePreferences).toHaveBeenCalledTimes(1)
     grid.unsubscribe()
   })
 })

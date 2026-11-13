@@ -340,6 +340,18 @@ It combines a side explorer, connection context, object and console tabs,
 object sub-tabs, work area and status bar. A side inspector can complete this
 area. An 88 px page header is not added to this structure.
 
+When AI is configured, the assistant has its **own right-hand column**, separate
+from the `Object` / `Value` inspector. `Ask AI` and `View → Assistant` open it;
+its close button affects only that column. Both panels can be shown together.
+The assistant starts at 440 px, resizes between 280 and 640 px within the
+work area's constraints, and keeps its conversation and unsent question when
+closed. A closed column reserves no width; closing both restores the whole work
+area. In compact layout the inspector overlays the work area, not the assistant.
+
+Workspace tabs and object sub-tabs scroll horizontally with an overlay scroll
+bar. They never scroll vertically, and the active underline remains inside the
+visible viewport. Keyboard navigation brings the focused tab into view.
+
 An object shows only the sub-tabs its session can fill: `Indexes` needs
 `INDEXES`, `Constraints` needs `CONSTRAINTS`, `Relations` needs
 `FOREIGN_KEYS` or `INCOMING_FOREIGN_KEYS`. `Data`, `Structure` and `DDL` are
@@ -455,6 +467,15 @@ preferences, according to [ADR-0013](adr/0013-preferences-workspace.md). A save
 error leaves the setting applied locally and shows an explicit retry action; it
 never announces a successful save.
 
+Appearance separates the **mode** (`Light`, `Dark`, `System`) from the **color
+family** (`Oxyn`, `Graphite`, `Ocean`, `Forest`, `Plum`). A light palette and a
+dark palette are saved independently in the workspace. `System` follows the
+operating system and applies the saved palette for its effective mode; switching
+modes never resets either choice. Old preference payloads use `Oxyn` for both.
+Palettes change display only: they run no query and alter no connection marking.
+Text, control edges and focus indicators meet the same contrast requirements in
+every light/dark palette combination.
+
 A missing value uses the `null` token and a marker, `∅ NULL` by default: the
 missing value marker of Settings → Formats, a preference saved according to
 [ADR-0013](adr/0013-preferences-workspace.md), replaces it in the grid cells
@@ -547,7 +568,7 @@ What these entries do is written elsewhere, and the menu adds nothing to it:
   checks the choice in effect;
 - `Settings…` is on Windows and Linux in `File`, just above `Exit` (decided on
   2026-09-25): these platforms have no application menu;
-- `Assistant` opens the assistant in the side panel; with no AI destination
+- `Assistant` opens its dedicated right-hand panel; with no AI destination
   declared, the entry does not exist;
 - `Export…` follows "What is exported is what is displayed", including for a
   truncated result.
@@ -580,9 +601,19 @@ What each surface guarantees:
   context of a console"). The three destructive entries are described below.
 - **Saved connection.** `Copy connection` never copies a secret
   ([I-03](../CLAUDE.md#i-03)): the clipboard is one of the six channels.
-- **Tab.** Closing several tabs applies to each one the closing rule of a
-  console: every console that asks for it is named, and `Cancel` stops the
-  series. The middle click closes the tab; `⌘⇧T` reopens the last closed one,
+- **Tab.** `Close all`, `Close others` and `Close to the right` take a snapshot
+  of their selected tabs and ask **once**
+  when any console would lose text, stop a statement or roll back a transaction.
+  The review names the affected consoles and connections. `Save all and close`
+  saves changed documents together (a new copy for a conflict), then closes
+  them only if every save succeeded; it never commits transactions. `Discard
+  all and close` closes the reviewed tabs without saving their edits. Confirmed
+  closes start together, and committed tabs leave the strip as one group.
+  Failed closes stay open with an explicit notice. `Cancel` before confirmation
+  changes nothing; during the operation it cancels pending writes, without
+  undoing closes already committed. New tabs opened after the snapshot remain.
+  A pending save or an active export must finish or be cancelled first.
+  The middle click closes the tab; `⌘⇧T` reopens the last closed one,
   without running anything. `Duplicate` opens an independent console, with its
   own session.
 - **Grid.** `Filter by this value`, `Exclude this value`, `Is NULL` and `Sort`
@@ -714,6 +745,11 @@ window closes its consoles, after the dialog that names those that ask for it:
 a single one for the window, with `Cancel`, which has the focus, and
 `Discard and close window`. A console to keep is saved beforehand. Closing the
 last one quits Oxyn, on every platform, like `Quit Oxyn` (ADR-0043).
+
+Once confirmed, the consoles of all workspaces in the window close together.
+Cancel reaches all pending closes. A failed close keeps its console and the
+window open with an explicit error; the host receives confirmation only after
+every console has closed successfully.
 
 **An open transaction holds back the exit.** Before quitting, and before
 closing a window, a dialog lists every console whose transaction is open, or

@@ -13,7 +13,11 @@ const written = vi.hoisted(() => ({
 vi.mock("@/lib/ipc/settings", () => ({
   settingsBackend: {
     readPreferences: () =>
-      Promise.resolve({ preferences: written.preferences, revision: 2 }),
+      Promise.resolve({
+        preferences: written.preferences,
+        revision: 2,
+        palettesAvailable: true,
+      }),
   },
 }))
 

@@ -15,6 +15,7 @@ import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { copyConnection } from "@/features/connections/copy-connection"
 import { useRefreshCatalogOf } from "@/features/connections/refresh-catalog"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
@@ -261,8 +262,8 @@ export function ConnectionsSettings({
     const driver = drivers.data?.find((choice) => choice.id === editing.driver)
     const failure = failureOf(details.error ?? drivers.error)
     return (
-      <div ref={formRef} className="flex flex-col gap-4">
-        <h3 className="truncate font-medium">
+      <div ref={formRef} className="flex min-h-0 flex-1 flex-col gap-4">
+        <h3 className="shrink-0 truncate font-medium">
           Edit <bdi title={editing.name}>{editing.name}</bdi>
         </h3>
         {failure ? (
@@ -321,57 +322,59 @@ export function ConnectionsSettings({
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {secretsError ? (
-        <Alert>
-          <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-          <AlertTitle>Saved, but the secrets were not written</AlertTitle>
-          <AlertDescription data-selectable>{secretsError}</AlertDescription>
-        </Alert>
-      ) : null}
-      <ConnectionManager
-        connections={connections.data}
-        error={failureOf(connections.error)}
-        openConnectionIds={openConnections.map((open) => open.connection)}
-        onEdit={(connection) => startEditing(connection)}
-        onDelete={startDeleting}
-        onRetry={() => void connections.refetch()}
-        menuActions={(connection) => {
-          const open = openConnections.find(
-            (held) => held.connection === connection.id
-          )
-          return {
-            // The start screen's `Disconnect`: drafts written, then the
-            // sessions closed (`WorkspaceHost`). The shown workspace gives
-            // way to the start screen, as its own `Disconnect` does.
-            disconnect: open
-              ? () => {
-                  const shown =
-                    session.state.open?.connection === open.connection
-                  closeConnection(open.connection)
-                  if (shown) void navigate({ to: "/" })
-                }
-              : undefined,
-            refreshCatalog: open
-              ? () => void refreshCatalogOf(open)
-              : undefined,
-            changeEnvironment: () => startEditing(connection, true),
-            copy: () => void copyConnection(connection),
-          }
-        }}
-      />
-      <DeleteConnectionDialog
-        connection={review ? null : deleting}
-        deleting={remove.isPending}
-        error={messageOf(remove.error ?? decide.error)}
-        onCancel={() => setDeleting(null)}
-        onConfirm={(connection) => remove.mutate(connection)}
-      />
-      <ConnectionChangeReview
-        change={review}
-        deciding={decide.isPending}
-        onDecide={(approved) => decide.mutate({ approved })}
-      />
-    </div>
+    <ScrollArea className="min-h-0 flex-1">
+      <div className="flex flex-col gap-3">
+        {secretsError ? (
+          <Alert>
+            <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
+            <AlertTitle>Saved, but the secrets were not written</AlertTitle>
+            <AlertDescription data-selectable>{secretsError}</AlertDescription>
+          </Alert>
+        ) : null}
+        <ConnectionManager
+          connections={connections.data}
+          error={failureOf(connections.error)}
+          openConnectionIds={openConnections.map((open) => open.connection)}
+          onEdit={(connection) => startEditing(connection)}
+          onDelete={startDeleting}
+          onRetry={() => void connections.refetch()}
+          menuActions={(connection) => {
+            const open = openConnections.find(
+              (held) => held.connection === connection.id
+            )
+            return {
+              // The start screen's `Disconnect`: drafts written, then the
+              // sessions closed (`WorkspaceHost`). The shown workspace gives
+              // way to the start screen, as its own `Disconnect` does.
+              disconnect: open
+                ? () => {
+                    const shown =
+                      session.state.open?.connection === open.connection
+                    closeConnection(open.connection)
+                    if (shown) void navigate({ to: "/" })
+                  }
+                : undefined,
+              refreshCatalog: open
+                ? () => void refreshCatalogOf(open)
+                : undefined,
+              changeEnvironment: () => startEditing(connection, true),
+              copy: () => void copyConnection(connection),
+            }
+          }}
+        />
+        <DeleteConnectionDialog
+          connection={review ? null : deleting}
+          deleting={remove.isPending}
+          error={messageOf(remove.error ?? decide.error)}
+          onCancel={() => setDeleting(null)}
+          onConfirm={(connection) => remove.mutate(connection)}
+        />
+        <ConnectionChangeReview
+          change={review}
+          deciding={decide.isPending}
+          onDecide={(approved) => decide.mutate({ approved })}
+        />
+      </div>
+    </ScrollArea>
   )
 }

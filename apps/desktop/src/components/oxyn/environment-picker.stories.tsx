@@ -62,6 +62,29 @@ export const Disabled: Story = { args: { initial: "staging", disabled: true } }
 
 export const Light: Story = { globals: { theme: "light" } }
 
+async function expectOptionsFit(canvasElement: HTMLElement, columns: number) {
+  await document.fonts.ready
+  const group = canvasElement.querySelector<HTMLElement>(
+    '[data-slot="radio-group"]'
+  )!
+  await expect(
+    getComputedStyle(group).gridTemplateColumns.split(" ")
+  ).toHaveLength(columns)
+  for (const option of group.querySelectorAll("label")) {
+    const bounds = option.getBoundingClientRect()
+    const badge = option
+      .querySelector('[data-slot="environment-badge"]')!
+      .getBoundingClientRect()
+    const radio = option
+      .querySelector('[role="radio"]')!
+      .getBoundingClientRect()
+    await expect(badge.left).toBeGreaterThan(bounds.left)
+    await expect(badge.right).toBeLessThan(radio.left)
+    await expect(radio.right).toBeLessThan(bounds.right)
+    await expect(option.scrollWidth).toBeLessThanOrEqual(option.clientWidth)
+  }
+}
+
 export const Narrow: Story = {
   decorators: [
     (Story) => (
@@ -70,4 +93,15 @@ export const Narrow: Story = {
       </div>
     ),
   ],
+  play: async ({ canvasElement }) => expectOptionsFit(canvasElement, 2),
+}
+
+/** Four complete badges and their radios fit at the container breakpoint. */
+export const FourColumnsAtTheBreakpoint: Story = {
+  render: (args) => (
+    <div className="w-[592px]">
+      <Controlled {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => expectOptionsFit(canvasElement, 4),
 }

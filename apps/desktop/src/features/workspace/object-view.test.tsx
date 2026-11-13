@@ -145,6 +145,31 @@ afterEach(() => {
   detailLoad.current = { status: "idle" }
 })
 
+it("defers metadata reads while hidden and loads them when shown", () => {
+  const props = {
+    open,
+    node,
+    active: false,
+    definitionWidth: 424,
+    onDefinitionWidthChange: () => undefined,
+  }
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const view = (active: boolean) => (
+    <QueryClientProvider client={client}>
+      <ObjectView {...props} active={active} />
+    </QueryClientProvider>
+  )
+  const { rerender } = render(view(false))
+  expect(ensure).not.toHaveBeenCalled()
+  rerender(view(true))
+  expect(ensure).toHaveBeenCalledWith("detail")
+  ensure.mockClear()
+  rerender(view(false))
+  expect(ensure).not.toHaveBeenCalled()
+})
+
 describe("a virtual table whose module is not loaded", () => {
   const vec: CatalogNode = {
     ...node,

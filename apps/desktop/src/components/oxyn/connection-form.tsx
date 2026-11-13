@@ -15,6 +15,8 @@ import {
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
 } from "@/components/ui/field"
 import {
   InputGroup,
@@ -22,7 +24,16 @@ import {
   InputGroupButton,
 } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import type { ConnectionDetails } from "@/lib/ipc/settings"
@@ -209,8 +220,7 @@ export function missingFields(
  *
  * The fields scroll and the actions do not: in a bounded parent (a flex
  * column with `min-h-0`), Back and Connect stay reachable however many fields
- * the driver declares. `stickyActions` keeps them at the bottom of a scrolling
- * page as well. `onDirtyChange` lets the parent confirm before a typed value
+ * the driver declares. `onDirtyChange` lets the parent confirm before a typed value
  * is abandoned.
  */
 export function ConnectionForm({
@@ -229,7 +239,6 @@ export function ConnectionForm({
   onAbort,
   onDirtyChange,
   onValuesChange,
-  stickyActions = false,
   dropped,
 }: {
   driver: DriverChoice
@@ -254,7 +263,6 @@ export function ConnectionForm({
   onAbort?: () => void
   onDirtyChange?: (dirty: boolean) => void
   onValuesChange?: (values: FormValues) => void
-  stickyActions?: boolean
   /**
    * Values a new connection starts with, by field key — a dropped database
    * file fills its path field. A secret field is never prefilled (I-03).
@@ -262,6 +270,7 @@ export function ConnectionForm({
   dropped?: Readonly<Record<string, string>>
 }) {
   const editing = existing !== undefined
+  const formId = React.useId()
   // What the secrets were stored for: a change of parameter forgets them.
   const stored = existing ?? saved ?? undefined
   const savedAs = editing ? null : (saved?.name ?? null)
@@ -340,147 +349,163 @@ export function ConnectionForm({
         if (!ready) return
         void form.handleSubmit()
       }}
-      className="flex min-h-0 flex-1 flex-col"
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
       {/* The padding keeps focus rings clear of the scroll edge. */}
-      <div
-        // While the fieldset is disabled nothing inside takes the focus: the
-        // region itself must, or the keyboard cannot scroll it.
-        tabIndex={busy ? 0 : undefined}
-        role={busy ? "group" : undefined}
-        aria-label={busy ? "Connection details" : undefined}
-        className="-m-1 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-md p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <fieldset disabled={busy} className="contents">
-          <FieldGroup>
-            <form.Field name="name">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor="connection-name">
-                    Name
-                    <span aria-hidden className="text-destructive">
-                      *
-                    </span>
-                  </FieldLabel>
-                  <TextInput
-                    id="connection-name"
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(event) => field.handleChange(event.target.value)}
-                    placeholder={`My ${driver.displayName} database`}
-                    aria-required
-                    autoComplete="off"
-                    maxLength={200}
-                    dir="auto"
-                    autoFocus
-                  />
-                </Field>
-              )}
-            </form.Field>
+      <ScrollArea className="-mx-1 min-h-0 flex-1">
+        <div
+          data-slot="connection-form-fields"
+          className="@container/connection-form flex min-w-0 flex-col gap-6 px-1 pt-1 pr-4 pb-5"
+        >
+          <FieldSet disabled={busy} className="contents">
+            <FieldGroup className="gap-6">
+              <FieldSet className="gap-4">
+                <FieldLegend>Connection identity</FieldLegend>
+                <form.Field name="name">
+                  {(field) => (
+                    <Field>
+                      <FieldLabel htmlFor={`${formId}-name`}>
+                        Name
+                        <span aria-hidden className="text-destructive">
+                          *
+                        </span>
+                      </FieldLabel>
+                      <TextInput
+                        id={`${formId}-name`}
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) =>
+                          field.handleChange(event.target.value)
+                        }
+                        placeholder={`My ${driver.displayName} database`}
+                        aria-required
+                        autoComplete="off"
+                        maxLength={200}
+                        dir="auto"
+                        autoFocus
+                      />
+                    </Field>
+                  )}
+                </form.Field>
 
-            <form.Field name="environment">
-              {(field) => (
-                <EnvironmentPicker
-                  value={field.state.value}
-                  onChange={(environment) => field.handleChange(environment)}
-                  disabled={busy}
-                />
-              )}
-            </form.Field>
+                <form.Field name="environment">
+                  {(field) => (
+                    <EnvironmentPicker
+                      value={field.state.value}
+                      onChange={(environment) =>
+                        field.handleChange(environment)
+                      }
+                      disabled={busy}
+                    />
+                  )}
+                </form.Field>
+              </FieldSet>
+              <Separator />
+              <FieldSet className="gap-4">
+                <FieldLegend>Connection details</FieldLegend>
+                <FieldGroup className="grid grid-cols-1 gap-x-4 gap-y-4 @min-[28rem]/connection-form:grid-cols-12">
+                  {driver.fields.map((spec) => (
+                    <form.Field key={spec.key} name={`values.${spec.key}`}>
+                      {(field) => (
+                        <DriverField
+                          spec={spec}
+                          value={field.state.value}
+                          onChange={(next) => field.handleChange(next)}
+                          onBlur={field.handleBlur}
+                          storedSecret={
+                            spec.secret &&
+                            stored?.hasStoredSecrets === true &&
+                            !moved
+                          }
+                          forgottenSecret={
+                            spec.secret &&
+                            stored?.hasStoredSecrets === true &&
+                            moved
+                          }
+                          editing={stored !== undefined}
+                          disabled={busy}
+                          onBrowse={onBrowse}
+                        />
+                      )}
+                    </form.Field>
+                  ))}
+                </FieldGroup>
+              </FieldSet>
+              <Separator />
+              <FieldSet className="gap-4">
+                <FieldLegend>Access and privacy</FieldLegend>
+                <form.Field name="readOnly">
+                  {(field) => (
+                    <Field orientation="horizontal">
+                      <FieldContent>
+                        <FieldLabel htmlFor={`${formId}-read-only`}>
+                          Read only
+                        </FieldLabel>
+                        <FieldDescription>
+                          Every write and DDL is refused on this connection,
+                          yours included.
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id={`${formId}-read-only`}
+                        checked={field.state.value}
+                        onCheckedChange={(checked: boolean) =>
+                          field.handleChange(checked)
+                        }
+                      />
+                    </Field>
+                  )}
+                </form.Field>
 
-            {driver.fields.map((spec) => (
-              <form.Field key={spec.key} name={`values.${spec.key}`}>
-                {(field) => (
-                  <DriverField
-                    spec={spec}
-                    value={field.state.value}
-                    onChange={(next) => field.handleChange(next)}
-                    onBlur={field.handleBlur}
-                    storedSecret={
-                      spec.secret && stored?.hasStoredSecrets === true && !moved
-                    }
-                    forgottenSecret={
-                      spec.secret && stored?.hasStoredSecrets === true && moved
-                    }
-                    editing={stored !== undefined}
-                    onBrowse={onBrowse}
-                  />
-                )}
-              </form.Field>
-            ))}
+                <form.Field name="privacyTier">
+                  {(field) => (
+                    <PrivacyTierField
+                      value={field.state.value}
+                      onChange={(tier) => field.handleChange(tier)}
+                      disabled={busy}
+                    />
+                  )}
+                </form.Field>
+              </FieldSet>
+            </FieldGroup>
+          </FieldSet>
 
-            <form.Field name="readOnly">
-              {(field) => (
-                <Field orientation="horizontal">
-                  <FieldContent>
-                    <FieldLabel htmlFor="connection-read-only">
-                      Read only
-                    </FieldLabel>
-                    <FieldDescription>
-                      Every write and DDL is refused on this connection, yours
-                      included.
-                    </FieldDescription>
-                  </FieldContent>
-                  <Switch
-                    id="connection-read-only"
-                    checked={field.state.value}
-                    onCheckedChange={(checked: boolean) =>
-                      field.handleChange(checked)
-                    }
-                  />
-                </Field>
-              )}
-            </form.Field>
-
-            <form.Field name="privacyTier">
-              {(field) => (
-                <PrivacyTierField
-                  value={field.state.value}
-                  onChange={(tier) => field.handleChange(tier)}
-                  disabled={busy}
-                />
-              )}
-            </form.Field>
-          </FieldGroup>
-        </fieldset>
-
-        {shownError ? (
-          <div ref={errorRef}>
-            <BackendErrorAlert
-              title={
-                editing
-                  ? "Connection not saved"
-                  : savedAs !== null
-                    ? "Saved, but not connected"
-                    : "Connection failed"
-              }
-              context={
-                savedAs !== null ? (
-                  <>
-                    <bdi>{savedAs}</bdi> is saved in this workspace. Connecting
-                    again updates it: no second connection is saved.
-                  </>
-                ) : undefined
-              }
-              error={shownError}
-              onRetry={() => void form.handleSubmit()}
-              retryLabel={`${verb} again`}
-              nextStep="Correct the connection details, then try again."
-            />
-          </div>
-        ) : null}
-      </div>
+          {shownError ? (
+            <div ref={errorRef}>
+              <BackendErrorAlert
+                title={
+                  editing
+                    ? "Connection not saved"
+                    : savedAs !== null
+                      ? "Saved, but not connected"
+                      : "Connection failed"
+                }
+                context={
+                  savedAs !== null ? (
+                    <>
+                      <bdi>{savedAs}</bdi> is saved in this workspace.
+                      Connecting again updates it: no second connection is
+                      saved.
+                    </>
+                  ) : undefined
+                }
+                error={shownError}
+                onRetry={() => void form.handleSubmit()}
+                retryLabel={`${verb} again`}
+                nextStep="Correct the connection details, then try again."
+              />
+            </div>
+          ) : null}
+        </div>
+      </ScrollArea>
 
       <div
         data-slot="connection-form-actions"
-        className={cn(
-          "mt-4 flex shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-4",
-          stickyActions && "sticky bottom-0 bg-card pb-1"
-        )}
+        className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-card pt-4"
       >
         {missing.length > 0 && !busy ? (
           <p
-            id="connection-form-missing"
+            id={`${formId}-missing`}
             className="mr-auto text-xs text-muted-foreground"
           >
             Required: {missing.join(", ")}
@@ -531,7 +556,7 @@ export function ConnectionForm({
             disabled={!ready}
             onClick={() => onTest(draftFrom(driver, values))}
             aria-describedby={
-              missing.length > 0 ? "connection-form-missing" : undefined
+              missing.length > 0 ? `${formId}-missing` : undefined
             }
           >
             {testing ? <Spinner data-icon="inline-start" /> : null}
@@ -542,7 +567,7 @@ export function ConnectionForm({
           type="submit"
           disabled={!ready}
           aria-describedby={
-            missing.length > 0 ? "connection-form-missing" : undefined
+            missing.length > 0 ? `${formId}-missing` : undefined
           }
         >
           {submitting ? <Spinner data-icon="inline-start" /> : null}
@@ -561,6 +586,7 @@ function DriverField({
   storedSecret,
   forgottenSecret,
   editing,
+  disabled,
   onBrowse,
 }: {
   spec: FormField
@@ -571,9 +597,10 @@ function DriverField({
   /** A secret is stored, and the changed parameters forget it on save. */
   forgottenSecret: boolean
   editing: boolean
+  disabled: boolean
   onBrowse?: (field: FormField) => Promise<string | null>
 }) {
-  const id = `field-${spec.key}`
+  const id = React.useId()
   const required = spec.required && !storedSecret
   const describedBy =
     spec.help || (editing && spec.secret) ? `${id}-help` : undefined
@@ -593,24 +620,44 @@ function DriverField({
         />
       )
       break
-    case "choice":
+    case "choice": {
+      const options = [
+        ...new Set(["", ...spec.kind.options, ...(value ? [value] : [])]),
+      ]
       control = (
-        <NativeSelect
-          id={id}
+        <Select
+          disabled={disabled}
+          items={options.map((option) => ({
+            value: option,
+            label: option || "Default",
+          }))}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          aria-required={required || undefined}
-          aria-describedby={describedBy}
+          onValueChange={(next) => {
+            if (next !== null) onChange(next)
+          }}
         >
-          <NativeSelectOption value="">Default</NativeSelectOption>
-          {spec.kind.options.map((option) => (
-            <NativeSelectOption key={option} value={option}>
-              {option}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          <SelectTrigger
+            id={id}
+            aria-label={spec.label}
+            aria-required={required || undefined}
+            aria-describedby={describedBy}
+            className="w-full"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectGroup>
+              {options.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option || "Default"}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
       )
       break
+    }
     case "path":
       control = (
         <InputGroup>
@@ -666,30 +713,61 @@ function DriverField({
         />
       )
   }
+  const label = (
+    <FieldLabel htmlFor={id}>
+      {spec.label}
+      {required ? (
+        <span aria-hidden className="text-destructive">
+          *
+        </span>
+      ) : null}
+    </FieldLabel>
+  )
+  const description =
+    editing && spec.secret ? (
+      // Polite: the text changes as the user types in another field.
+      <FieldDescription id={`${id}-help`} aria-live="polite">
+        {forgottenSecret
+          ? `Connection settings changed — enter the ${spec.label.toLowerCase()} again. The stored one is removed on save.`
+          : "Leave empty to keep the stored value. It is never shown again."}
+      </FieldDescription>
+    ) : spec.help ? (
+      <FieldDescription id={`${id}-help`}>{spec.help}</FieldDescription>
+    ) : null
   return (
     <Field
+      data-connection-field={spec.key}
       data-invalid={invalidPort || undefined}
       orientation={spec.kind.type === "bool" ? "horizontal" : "vertical"}
+      className={cn(
+        "min-w-0",
+        spec.key === "host"
+          ? "@min-[28rem]/connection-form:col-span-8"
+          : spec.key === "port"
+            ? "@min-[28rem]/connection-form:col-span-4"
+            : spec.kind.type === "path" ||
+                spec.kind.type === "bool" ||
+                spec.secret ||
+                spec.help
+              ? "@min-[28rem]/connection-form:col-span-12"
+              : "@min-[28rem]/connection-form:col-span-6"
+      )}
     >
-      <FieldLabel htmlFor={id}>
-        {spec.label}
-        {required ? (
-          <span aria-hidden className="text-destructive">
-            *
-          </span>
-        ) : null}
-      </FieldLabel>
-      {control}
-      {editing && spec.secret ? (
-        // Polite: the text changes as the user types in another field.
-        <FieldDescription id={`${id}-help`} aria-live="polite">
-          {forgottenSecret
-            ? `Connection settings changed — enter the ${spec.label.toLowerCase()} again. The stored one is removed on save.`
-            : "Leave empty to keep the stored value. It is never shown again."}
-        </FieldDescription>
-      ) : spec.help ? (
-        <FieldDescription id={`${id}-help`}>{spec.help}</FieldDescription>
-      ) : null}
+      {spec.kind.type === "bool" ? (
+        <>
+          <FieldContent className="min-w-0">
+            {label}
+            {description}
+          </FieldContent>
+          {control}
+        </>
+      ) : (
+        <>
+          {label}
+          {control}
+          {description}
+        </>
+      )}
       <FieldError
         errors={
           invalidPort ? [{ message: `${spec.label} is digits only.` }] : []

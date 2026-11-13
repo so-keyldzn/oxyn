@@ -123,9 +123,9 @@ function Row({
           </Button>
         </form>
         {error ? (
-          <p role="alert" className="text-xs text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
       </li>
     )
@@ -331,13 +331,9 @@ export function AssistantHistory({
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError ? (
-            <p
-              role="alert"
-              className="text-sm wrap-anywhere text-destructive"
-              data-selectable
-            >
-              {deleteError}
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription data-selectable>{deleteError}</AlertDescription>
+            </Alert>
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

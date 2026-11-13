@@ -38,6 +38,9 @@ pub enum ThemeChoice {
     System,
 }
 
+mod palette;
+pub use palette::PaletteChoice;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DensityChoice {
@@ -63,6 +66,8 @@ pub enum BinaryChoice {
 #[serde(rename_all = "camelCase")]
 pub struct DisplayPreferences {
     pub theme: ThemeChoice,
+    pub light_palette: PaletteChoice,
+    pub dark_palette: PaletteChoice,
     pub reading_density: DensityChoice,
     pub sidebar_collapsed: bool,
     pub inspector_open: bool,
@@ -90,6 +95,8 @@ impl DisplayPreferences {
             } else {
                 DensityChoice::Compact
             },
+            light_palette: preferences.light_palette.into(),
+            dark_palette: preferences.dark_palette.into(),
             sidebar_collapsed: preferences.sidebar_collapsed,
             inspector_open: preferences.inspector_open,
             inspector_width: preferences.inspector_width,
@@ -116,6 +123,8 @@ impl DisplayPreferences {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreferencesChange {
     pub theme: Option<ThemeChoice>,
+    pub light_palette: Option<PaletteChoice>,
+    pub dark_palette: Option<PaletteChoice>,
     pub reading_density: Option<DensityChoice>,
     pub sidebar_collapsed: Option<bool>,
     pub inspector_open: Option<bool>,
@@ -129,6 +138,12 @@ pub struct PreferencesChange {
 impl PreferencesChange {
     /// Applies the change. Validation is the domain's, on the result.
     pub fn apply(&self, preferences: &mut WorkspacePreferences) {
+        if let Some(value) = self.light_palette {
+            preferences.light_palette = value.into();
+        }
+        if let Some(value) = self.dark_palette {
+            preferences.dark_palette = value.into();
+        }
         if let Some(theme) = self.theme {
             preferences.follow_system_appearance = theme == ThemeChoice::System;
             // `System` keeps the last explicit palette: turning the system

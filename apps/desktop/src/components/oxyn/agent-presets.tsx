@@ -1,4 +1,5 @@
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Alert02Icon,
   CheckmarkCircle02Icon,
@@ -253,9 +254,11 @@ export function AgentPresets({
               ) : null}
 
               {state.status === "error" ? (
-                <p role="alert" data-selectable className="text-destructive">
-                  {state.message}
-                </p>
+                <Alert variant="destructive">
+                  <AlertDescription data-selectable>
+                    {state.message}
+                  </AlertDescription>
+                </Alert>
               ) : null}
 
               {state.status === "idle" ? (

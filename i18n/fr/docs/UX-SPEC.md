@@ -1,4 +1,5 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="bbb23c89a8ed" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="09e18f05236a" -->
+
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -366,6 +367,19 @@ consoles, sous-onglets de l'objet, zone de travail et barre d'état. Un inspecte
 latéral peut compléter cette zone. Un en-tête de page de 88 px ne se rajoute pas
 à cette structure.
 
+Lorsque l'IA est configurée, l'assistant dispose de sa **propre colonne à droite**,
+distincte de l'inspecteur `Object` / `Value`. `Ask AI` et `View → Assistant`
+l'ouvrent ; son bouton de fermeture n'affecte que cette colonne. Les deux
+panneaux peuvent rester visibles ensemble. L'assistant démarre à 440 px et se
+redimensionne entre 280 et 640 px selon les contraintes de la zone de travail.
+Sa fermeture conserve la conversation et la question non envoyée. Une colonne
+fermée ne réserve aucune largeur ; fermer les deux rend toute la zone de travail.
+En disposition compacte, l'inspecteur recouvre la zone de travail, pas l'assistant.
+
+Les onglets du workspace et les sous-onglets d'objet défilent horizontalement
+avec une barre superposée. Ils ne défilent jamais verticalement et le soulignement
+actif reste dans la zone visible. La navigation clavier révèle l'onglet ciblé.
+
 Un objet ne montre que les sous-onglets que sa session sait remplir : `Indexes`
 exige `INDEXES`, `Constraints` exige `CONSTRAINTS`, `Relations` exige
 `FOREIGN_KEYS` ou `INCOMING_FOREIGN_KEYS`. `Data`, `Structure` et `DDL` sont
@@ -490,6 +504,16 @@ selon [ADR-0013](adr/0013-preferences-workspace.md). Une erreur de sauvegarde
 laisse le réglage appliqué localement et affiche une action de reprise
 explicite ; elle n'annonce jamais une sauvegarde réussie.
 
+L'apparence sépare le **mode** (`Light`, `Dark`, `System`) de la **famille de
+couleurs** (`Oxyn`, `Graphite`, `Ocean`, `Forest`, `Plum`). Une palette claire et
+une palette sombre sont enregistrées indépendamment dans le workspace. `System`
+suit le système d'exploitation et applique la palette enregistrée pour son mode
+effectif ; changer de mode ne réinitialise aucun des deux choix. Les anciens
+réglages utilisent `Oxyn` pour les deux. Les palettes ne changent que l'affichage :
+aucune requête n'est exécutée et aucun marquage de connexion ne change. Texte,
+contours des contrôles et indicateurs de focus respectent les mêmes exigences de
+contraste dans chaque combinaison de palette et de mode.
+
 Une valeur absente utilise le jeton `null` et un repère, `∅ NULL` par
 défaut : le repère de valeur manquante de Paramètres → Formats, une
 préférence sauvegardée selon [ADR-0013](adr/0013-preferences-workspace.md),
@@ -585,7 +609,7 @@ Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
   et `System`, et la barre coche le choix en vigueur ;
 - `Settings…` est sous Windows et Linux dans `File`, juste au-dessus d'`Exit`
   (arbitré le 2026-09-25) : ces plateformes n'ont pas de menu d'application ;
-- `Assistant` ouvre l'assistant dans le panneau latéral ; sans destination IA
+- `Assistant` ouvre son panneau dédié à droite ; sans destination IA
   déclarée, l'entrée n'existe pas ;
 - `Export…` suit « Ce qui est exporté est ce qui est affiché », y compris pour
   un résultat tronqué.
@@ -619,9 +643,22 @@ Ce que chaque surface garantit :
   plus bas.
 - **Connexion enregistrée.** `Copy connection` ne copie jamais de secret
   ([I-03](../CLAUDE.md#i-03)) : le presse-papiers est l'un des six canaux.
-- **Onglet.** Fermer plusieurs onglets applique à chacun la règle de fermeture
-  d'une console : chaque console qui la demande est nommée, et `Cancel` arrête
-  la série. Le clic milieu ferme l'onglet ; `⌘⇧T` rouvre le dernier fermé, sans
+- **Onglet.** `Close all`, `Close others` et `Close to the right` prennent un
+  instantané de leurs onglets ciblés et demandent
+  **une seule confirmation** si une console risque de perdre du texte, d'arrêter
+  une requête ou d'annuler une transaction. La revue nomme les consoles et
+  connexions concernées. `Save all and close` sauvegarde ensemble les documents
+  modifiés (une nouvelle copie en cas de conflit), puis les ferme seulement si
+  toutes les sauvegardes ont réussi ; aucune transaction n'est validée.
+  `Discard all and close` ferme les onglets de la revue sans sauvegarder leurs
+  modifications. Les fermetures confirmées démarrent ensemble et les onglets
+  effectivement fermés quittent la barre en un groupe. Une fermeture échouée
+  laisse l'onglet ouvert avec un message explicite. `Cancel` avant confirmation
+  ne change rien ; pendant l'opération, il annule les écritures en attente sans
+  revenir sur les fermetures déjà validées. Les nouveaux onglets ouverts après
+  l'instantané restent ouverts. Une sauvegarde ou un export en cours doit se
+  terminer ou être annulé au préalable. Le clic milieu ferme l'onglet ; `⌘⇧T`
+  rouvre le dernier fermé, sans
   rien exécuter. `Duplicate` ouvre une console indépendante, avec sa propre
   session.
 - **Grille.** `Filter by this value`, `Exclude this value`, `Is NULL` et `Sort`
@@ -761,6 +798,12 @@ nomme celles qui le demandent : un seul pour la fenêtre, avec `Cancel`, qui a
 le focus, et `Discard and close window`. Une console à garder se sauvegarde
 avant. Fermer la dernière quitte Oxyn, sur toutes les plateformes, comme
 `Quit Oxyn` (ADR-0043).
+
+Une fois la fermeture confirmée, les consoles de tous les workspaces de la
+fenêtre se ferment ensemble. Cancel atteint toutes les fermetures en attente.
+Une fermeture échouée garde sa console et la fenêtre ouvertes avec une erreur
+explicite ; l'hôte ne reçoit la confirmation qu'après la fermeture réussie de
+toutes les consoles.
 
 **Une transaction ouverte retient la sortie.** Avant de quitter, et avant de
 fermer une fenêtre, un dialogue liste chaque console dont la transaction est
