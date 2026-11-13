@@ -206,10 +206,12 @@ impl Registry {
             let weak = Arc::downgrade(&state);
             let held = Arc::downgrade(&self.held);
             let expiry_token = token.clone();
+            // Scheduling the owner later must not extend the read's lifetime.
+            let expiry_at = tokio::time::Instant::now() + LIFETIME;
             let expiry = tokio::spawn(async move {
                 tokio::select! {
                     () = expiry_token.cancelled() => {}
-                    () = tokio::time::sleep(LIFETIME) => { expiry_token.cancel(); }
+                    () = tokio::time::sleep_until(expiry_at) => { expiry_token.cancel(); }
                 }
                 if let Some(state) = weak.upgrade() {
                     let mut state = state.lock().await;

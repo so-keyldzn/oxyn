@@ -185,7 +185,11 @@ async fn expiry_and_session_close_release_unread_native_cursors() {
         assert!(!probe.cursor_dropped.load(Ordering::SeqCst));
         if expiry {
             tokio::time::advance(Duration::from_secs(301)).await;
-            tokio::task::yield_now().await;
+            // A yield does not guarantee another task ran. Observe teardown,
+            // without making scheduler speed part of the expiry contract.
+            tokio::time::timeout(Duration::from_secs(1), probe.cursor_closed.notified())
+                .await
+                .expect("the expired cursor was actually released");
         } else {
             executor
                 .dispatch(

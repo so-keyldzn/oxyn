@@ -437,6 +437,7 @@ struct Probe {
     opening_token: Mutex<Option<CancelToken>>,
     rows: Option<usize>,
     cursor_dropped: Arc<AtomicBool>,
+    cursor_closed: Arc<tokio::sync::Notify>,
     /// Does the session declare it can sort and filter a preview?
     ///
     /// False by default: it is the state of an engine that cannot do it, and it
@@ -540,6 +541,7 @@ impl Session for PreviewSession {
             rows: self.0.rows.unwrap_or(3),
             batch_gate: self.0.batch_gate.clone(),
             dropped: self.0.cursor_dropped.clone(),
+            closed: Arc::clone(&self.0.cursor_closed),
         }))
     }
     async fn cancel(&self, _: StatementHandle) -> Result<()> {
@@ -565,11 +567,13 @@ struct PreviewCursor {
     rows: usize,
     batch_gate: Option<Arc<tokio::sync::Notify>>,
     dropped: Arc<AtomicBool>,
+    closed: Arc<tokio::sync::Notify>,
 }
 
 impl Drop for PreviewCursor {
     fn drop(&mut self) {
         self.dropped.store(true, Ordering::SeqCst);
+        self.closed.notify_one();
     }
 }
 
