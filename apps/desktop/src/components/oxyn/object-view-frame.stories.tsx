@@ -387,9 +387,10 @@ export const PreviewWithoutOrder: Story = {
       canvas.getByRole("button", { name: "Sort to browse pages" })
     )
     const popover = within(document.body)
-    await expect(
-      await popover.findByRole("button", { name: "Add column" })
-    ).toBeVisible()
+    // Mounting the portal precedes the popup's visible animation state.
+    await waitFor(() =>
+      expect(popover.getByRole("button", { name: "Add column" })).toBeVisible()
+    )
     await userEvent.keyboard("{Escape}")
     await waitFor(() =>
       expect(popover.queryByRole("button", { name: "Add column" })).toBeNull()
