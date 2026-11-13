@@ -85,7 +85,11 @@ impl SqliteSession {
         spec: OpenSpec,
     ) -> Self {
         Self {
-            catalog: SqliteCatalog::new(worker.clone(), capabilities),
+            catalog: SqliteCatalog::new(
+                worker.clone(),
+                capabilities,
+                crate::preview_uri::shares_memory(&spec),
+            ),
             spec,
             worker,
             thread: Some(thread),

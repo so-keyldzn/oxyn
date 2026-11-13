@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c80f5e0de587" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="42bb08827e0a" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -121,6 +121,14 @@ les réglages enregistrés modifiés, copier un état temporaire non reproductib
 ni substituer un objet homonyme. Par défaut, il refuse cette capacité.
 `single_page_preview` marque les valeurs et résumés structurels, pour lesquels
 une navigation par pages n’a pas de sens.
+
+Les lecteurs privés SQLite ramènent les URI `mode=rw`/`mode=rwc` à `mode=ro`,
+y compris les noms/valeurs encodés en pourcentage, sans canonicaliser le nom de
+fichier ni modifier les autres options VFS/cache. Les URI mémoire partagées
+nommées gardent leur identité et leur mode mémoire. Les bases mémoire privées
+et temporaires sans nom ne sont pas reproductibles sur une autre connexion ;
+leurs objets sans clé gardent une lecture bornée sur la session originale,
+sans ouvrir de lecteur sur une nouvelle base vide.
 
 **Panne concrète :** un driver qui se porte garant d'une table `vec0` de
 SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette

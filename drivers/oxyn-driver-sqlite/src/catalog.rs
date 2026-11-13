@@ -66,14 +66,20 @@ pub struct SqliteCatalog {
     worker: WorkerHandle,
     capabilities: Capabilities,
     version: &'static str,
+    shares_memory: bool,
 }
 
 impl SqliteCatalog {
     /// Builds a session's catalog.
-    pub(crate) fn new(worker: WorkerHandle, capabilities: Capabilities) -> Self {
+    pub(crate) fn new(
+        worker: WorkerHandle,
+        capabilities: Capabilities,
+        shares_memory: bool,
+    ) -> Self {
         Self {
             worker,
             capabilities,
+            shares_memory,
             // The version of the **linked** engine, not the file's: it decides what
             // the session can do.
             version: rusqlite::version(),
@@ -236,6 +242,7 @@ impl CatalogProvider for SqliteCatalog {
         let database = Self::database_of(relation).to_owned();
         let name = Self::relation_of(relation)?.to_owned();
         let visible = name.clone();
+        let shares_memory = self.shares_memory;
 
         let described: Option<RawRelation> = self
             .worker
@@ -255,7 +262,8 @@ impl CatalogProvider for SqliteCatalog {
                     kind,
                     is_virtual,
                     isolatable: database != "temp"
-                        && crate::preview_context::Context::read(connection)?.reproducible(),
+                        && crate::preview_context::Context::read(connection, shares_memory)?
+                            .reproducible(),
                     key,
                     columns: table_info(connection, &database, &name)?,
                 }))

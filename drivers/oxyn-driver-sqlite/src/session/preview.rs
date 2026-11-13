@@ -60,18 +60,20 @@ impl SqliteSession {
         path: &CatalogPath,
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>> {
+        let shares_memory = crate::preview_uri::shares_memory(&self.spec);
         let context = self
             .worker
-            .call(cancel, preview_context::Context::read)
+            .call(cancel, move |connection| {
+                preview_context::Context::read(connection, shares_memory)
+            })
             .await?;
         if preview::database_of(path)? == "temp" || !context.reproducible() {
             return Err(OxynError::NotSupported {
                 capability:
-                    "retained previews of session-local temporary or attached in-memory data".into(),
+                    "retained previews of session-local temporary or private in-memory data".into(),
             });
         }
-        let mut spec = self.spec.clone();
-        spec.read_only = true;
+        let spec = crate::preview_uri::read_only(self.spec.clone());
         let (worker, thread) = worker::spawn(spec.clone(), cancel).await?;
         let session = Box::new(Self::new(
             worker,

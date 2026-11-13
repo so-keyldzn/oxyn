@@ -114,6 +114,13 @@ saved settings, copy unreproducible temporary state, or substitute a same-named
 object. Its default refuses the capability. `single_page_preview` marks values
 and structural summaries: no page navigation is meaningful for them.
 
+SQLite private readers narrow URI `mode=rw`/`mode=rwc` to `mode=ro`, including
+percent-encoded option names/values, without canonicalizing the filename or
+changing other VFS/cache options. Named shared-memory URIs preserve their
+identity and memory mode. Private-memory and unnamed temporary databases are
+not reproducible on a sibling; keyless objects keep a bounded read on the
+original session; no sibling is opened against a fresh empty database.
+
 **Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
 it declares a primary key, makes a click on that table read every vector into a
 temporary b-tree before the first row appears.
