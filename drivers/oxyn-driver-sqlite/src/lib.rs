@@ -89,6 +89,7 @@ pub mod options;
 pub mod params;
 mod preview;
 mod preview_context;
+mod preview_uri;
 mod schema_sql;
 pub mod session;
 #[cfg(test)]

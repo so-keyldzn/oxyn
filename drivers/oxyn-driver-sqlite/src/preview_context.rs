@@ -13,10 +13,11 @@ use crate::worker::WorkerHandle;
 pub(crate) struct Context {
     attachments: Vec<(String, String)>,
     temporary: bool,
+    main_reopenable: bool,
 }
 
 impl Context {
-    pub fn read(connection: &Connection) -> Result<Self> {
+    pub fn read(connection: &Connection, shares_memory: bool) -> Result<Self> {
         let map = |error| error::engine(error, Effect::ReadOnly);
         let temporary = connection
             .query_row(
@@ -32,8 +33,12 @@ impl Context {
             })
             .map_err(map)?;
         let mut attachments = Vec::new();
+        let mut main_reopenable = shares_memory;
         for row in rows {
             let (name, file) = row.map_err(map)?;
+            if name == "main" && !file.is_empty() {
+                main_reopenable = true;
+            }
             if name != "main" && name != "temp" {
                 attachments.push((name, file));
             }
@@ -41,18 +46,21 @@ impl Context {
         Ok(Self {
             attachments,
             temporary,
+            main_reopenable,
         })
     }
 
     pub fn reproducible(&self) -> bool {
-        !self.temporary && self.attachments.iter().all(|(_, file)| !file.is_empty())
+        self.main_reopenable
+            && !self.temporary
+            && self.attachments.iter().all(|(_, file)| !file.is_empty())
     }
 
     pub async fn apply(self, worker: &WorkerHandle, cancel: &CancelToken) -> Result<()> {
         if !self.reproducible() {
             return Err(OxynError::NotSupported {
                 capability:
-                    "retained previews of session-local temporary or attached in-memory data".into(),
+                    "retained previews of session-local temporary or private in-memory data".into(),
             });
         }
         worker

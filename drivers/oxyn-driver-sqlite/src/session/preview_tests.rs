@@ -6,11 +6,15 @@ use oxyn_core::{
 use oxyn_driver::{Credentials, Driver, PreviewMode, Session};
 
 async fn open() -> Box<dyn Session> {
+    open_at(":memory:").await
+}
+
+async fn open_at(path: &str) -> Box<dyn Session> {
     crate::SqliteDriver::new()
         .connect(
             &ConnectionConfig::new("preview context", DriverId::sqlite())
                 .with_environment(Environment::Local)
-                .with_param("path", ":memory:"),
+                .with_param("path", path),
             &Credentials::new(),
             &CancelToken::new(),
         )
@@ -92,3 +96,6 @@ async fn temporary_or_attached_memory_state_never_substitutes_another_object() {
         session.close().await.expect("close");
     }
 }
+
+#[path = "preview_uri_tests.rs"]
+mod uri;

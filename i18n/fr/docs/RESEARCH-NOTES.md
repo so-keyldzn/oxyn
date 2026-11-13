@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="2612511102cd" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="48ba745f136d" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3527,3 +3527,14 @@ Aucune performance de rendu ni borne mémoire totale n’est annoncée ici.
 La [spécification Hrana 3](https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md) définit la négociation GET `/v3`, le NDJSON `/v3/cursor` et la fermeture par pipeline, avec une seule requête simultanée par flux. Les [types libSQL](https://github.com/tursodatabase/libsql/blob/main/libsql-hrana/src/proto.rs) ajoutent une entrée terminale `replication_index`, confirmée après `step_end` sur le serveur jetable. Le [protocole serverless Turso](https://github.com/tursodatabase/turso/blob/main/serverless/PROTOCOL.md) documente batons et affinité de routage. L’ADR-0078 adopte les aperçus par curseur sans promettre d’interruption serveur ni modifier le pipeline ordinaire borné. Aucune version de dépendance ne change.
 
 SQLite [ATTACH](https://www.sqlite.org/lang_attach.html) est local à la connexion ; le [cache partagé](https://www.sqlite.org/sharedcache.html) garde les verrous jusqu’à la fin de transaction. Les aperçus isolés ne copient que les fichiers attachés, gardent la cible initiale et ferment avant les écritures d’Oxyn ; ils n’activent ni WAL ni `read_uncommitted`. Le source DuckDB embarqué (`libduckdb-sys` dans Cargo.lock) situe les vues natives dans le vrai catalogue `system` et distingue objets temporaires utilisateur et vues internes. Les tests embarqués lisent `system.information_schema.tables`, `system.pg_catalog.pg_class` et `system.main.sqlite_master` à ces chemins.
+
+### Ouverture des aperçus par URI SQLite — vérifié le 2026-11-13
+
+La [spécification des URI SQLite](https://www.sqlite.org/uri.html) définit les
+options décodées en pourcentage, les modes lecture-écriture/lecture seule/mémoire,
+les caches partagés/privés et les fragments ignorés. Les tests sur le moteur
+embarqué reproduisent le conflit de mode pour `rw` et `rwc` ; restreindre cette
+seule option corrige l’ouverture en conservant les options VFS et la mémoire
+partagée nommée. Ils refusent aussi la mémoire non partagée et les sources
+temporaires sans nom, et prouvent qu’un fichier supprimé n’est pas recréé.
+Aucune dépendance ne change.
