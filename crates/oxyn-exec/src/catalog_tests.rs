@@ -170,13 +170,17 @@ fn bench(probe: Arc<Probe>) -> (Executor, ConnectionId) {
         .with_workspace(workspace)
         .build();
     executor.register_connection(&connection);
-    executor.sessions.insert(SessionSlot::new(
+    let slot = executor.sessions.insert(SessionSlot::new(
         connection.id,
         Box::new(FakeSession(probe)),
     ));
     executor.catalogs.write().insert(
         connection.id,
-        Arc::new(crate::catalog::ConnectionCatalog::new()),
+        Arc::new(crate::catalog::ConnectionCatalog {
+            cache: Arc::clone(&slot.catalog.cache),
+            session: RwLock::new(Some(slot.id())),
+            ..crate::catalog::ConnectionCatalog::new()
+        }),
     );
     (executor, connection.id)
 }

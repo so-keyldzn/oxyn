@@ -183,13 +183,12 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
     for actor in actors() {
         let id = CommandId::new();
         let mut events = executor.subscribe();
+        let mut sample = preview(connection.id, session, 2);
+        if let Command::PreviewRelation { shape, .. } = &mut sample {
+            shape.continuable = false;
+        }
         let outcome = executor
-            .dispatch_as(
-                id,
-                actor,
-                preview(connection.id, session, 2),
-                &CancelToken::new(),
-            )
+            .dispatch_as(id, actor, sample, &CancelToken::new())
             .await
             .expect("preview");
         let Outcome::Executed {
