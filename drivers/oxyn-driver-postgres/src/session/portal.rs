@@ -1,7 +1,6 @@
 //! Demand-driven FETCH windows let idle preview release preserve temporary data.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use async_trait::async_trait;
@@ -23,11 +22,10 @@ use super::{
 use crate::cancel::{Verdict, VerdictSender};
 use crate::decode::BatchAssembler;
 use crate::error::{Bound, map_exec_error, map_stream_error};
-use crate::lease::Lease;
+use crate::lease::{CLEANUP_TIMEOUT as CLEANUP, Lease};
 use crate::types::{PgDecoding, schema_for};
 
 const WINDOW: usize = 200;
-const CLEANUP: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub(super) struct Owners {
@@ -129,27 +127,11 @@ impl PostgresSession {
                         | sqlx::Error::Decode(_)
                 );
                 let restored = if restorable {
-                    tokio::time::timeout(CLEANUP, async {
-                        if began {
-                            sqlx::raw_sql(SQL_ROLLBACK)
-                                .execute(&mut *connection)
-                                .await?;
-                        }
-                        if context_changed {
-                            sqlx::raw_sql(SQL_RESET_SEARCH_PATH)
-                                .execute(&mut *connection)
-                                .await?;
-                        }
-                        Ok::<_, sqlx::Error>(())
-                    })
-                    .await
-                    .is_ok_and(|result| result.is_ok())
+                    connection.restore_setup(began, context_changed).await
                 } else {
                     false
                 };
-                if restored {
-                    connection.restored();
-                } else {
+                if !restored {
                     connection.discard();
                 }
                 return Err(map_exec_error(&self.driver, StatementIntent::Read, error));

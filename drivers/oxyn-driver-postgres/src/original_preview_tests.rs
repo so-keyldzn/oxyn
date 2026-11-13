@@ -262,6 +262,19 @@ async fn original_preview_sql_error_preserves_temporary_rows_and_backend_identit
     )
     .await;
     let pid = first_text(&*source, "SELECT pg_backend_pid()::text").await;
+    assert!(
+        source
+            .execute(
+                read_request("SELECT missing_column FROM oxyn_original_invalid_filter"),
+                &CancelToken::new(),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        first_text(&*source, "SELECT pg_backend_pid()::text").await,
+        pid
+    );
     let namespace = first_text(
         &*source,
         "SELECT nspname::text FROM pg_namespace WHERE oid=pg_my_temp_schema()",

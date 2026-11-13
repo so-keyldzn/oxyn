@@ -521,20 +521,18 @@ impl Session for PostgresSession {
                     .iter()
                     .any(|c| lacks_binary_output(c.type_info())) =>
             {
-                Source::Prepared {
+                Ok(Source::Prepared {
                     statement,
                     arguments,
-                }
+                })
             }
-            Ok(_) => simple_source(params.is_empty(), fallback_text, NO_BINARY_OUTPUT)?,
+            Ok(_) => simple_source(params.is_empty(), fallback_text, NO_BINARY_OUTPUT),
             Err(error) if is_unresolvable_type(&error) => {
-                simple_source(params.is_empty(), fallback_text, UNRESOLVABLE_TYPE)?
+                simple_source(params.is_empty(), fallback_text, UNRESOLVABLE_TYPE)
             }
-            // A failed preparation closes the connection if it is already
-            // dirty: the transaction opened above would keep locks and block
-            // the `VACUUM` of the whole database, and a console's `search_path`
-            // would leave with it. A typo in a table name in a writable console
-            // is enough.
+            // A normal SQL refusal is synchronized: restore our own read-only
+            // transaction/context so a typo does not destroy temporary data.
+            // Unproven cleanup still closes the dirty physical connection.
             //
             // `Bound::Internal`, whatever the request's values: `prepare` only
             // issues Parse and Describe, which carry the SQL text and the
@@ -544,6 +542,11 @@ impl Session for PostgresSession {
             // diagnostic of a parameterized query: the name of the object that
             // does not exist.
             Err(error) => {
+                if matches!(error, sqlx::Error::Database(_)) {
+                    connection
+                        .restore_setup(limits.read_only, restore_context)
+                        .await;
+                }
                 return Err(map_stream_error(
                     &self.driver,
                     intent,
@@ -551,6 +554,15 @@ impl Session for PostgresSession {
                     Bound::Internal,
                     error,
                 ));
+            }
+        };
+        let source = match source {
+            Ok(source) => source,
+            Err(error) => {
+                connection
+                    .restore_setup(limits.read_only, restore_context)
+                    .await;
+                return Err(error);
             }
         };
         // The user's statement is about to run, and it can itself change the

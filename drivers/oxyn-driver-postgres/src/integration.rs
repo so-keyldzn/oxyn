@@ -707,18 +707,12 @@ async fn cancellation_really_stops_the_query_server_side() {
     drop(cursor);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let mut remaining = session
-        .execute(
-            read_request(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE query LIKE '%pg_sleep%' AND state = 'active' AND pid <> pg_backend_pid()",
-            ),
-            &CancelToken::new(),
-        )
-        .await
-        .expect("execution");
-    let (rows, _) = drain(&mut remaining).await;
-    assert_eq!(rows, 1, "one count row");
+    assert_lost_session(&*session).await;
+    let observer = self::session().await.expect("configured observer");
+    assert_eq!(first_text(&*observer,
+        "SELECT count(*)::text FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND state = 'active' AND pid <> pg_backend_pid()"
+    ).await, "0", "no query remains active on the server");
+    observer.close().await.expect("observer close");
 
     session.close().await.expect("close");
 }
@@ -731,15 +725,22 @@ async fn closing_a_cursor_stops_the_query_without_being_asked() {
     let Some(session) = session().await else {
         return;
     };
+    session.close().await.expect("initial close");
     for _ in 0..10 {
+        let session = self::session().await.expect("new tab session");
         let cursor = session
             .execute(read_request("SELECT pg_sleep(30)"), &CancelToken::new())
             .await
             .expect("execution");
         drop(cursor);
+        assert_lost_session(&*session).await;
+        session.close().await.expect("tab close");
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
 
+    let session = self::session()
+        .await
+        .expect("new connection after closed tabs");
     let mut cursor = session
         .execute(read_request("SELECT 1"), &CancelToken::new())
         .await
@@ -978,10 +979,10 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
         count == "0" || count == WRITTEN.to_string(),
         "a write is atomic: {count} rows"
     );
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
+    apply(witness.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
-    apply(session.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     session.close().await.expect("close");
 }
 
@@ -1071,9 +1072,9 @@ async fn a_long_write_without_returning_stopped_mid_run_is_cancelled_and_changes
     )
     .await;
     assert_eq!(touched, "0", "a cancelled write changed the table");
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_stopped_write").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP TABLE oxyn_stopped_write").await;
     session.close().await.expect("close");
 }
 
@@ -1170,10 +1171,10 @@ async fn a_call_stopped_after_its_procedure_committed_is_not_cancelled() {
         "1",
         "the row the procedure committed before the stop is there"
     );
+    assert_lost_session(&*session).await;
+    apply(witness.as_ref(), "DROP PROCEDURE oxyn_commits_then_waits").await;
+    apply(witness.as_ref(), "DROP TABLE oxyn_call_log").await;
     witness.close().await.expect("close");
-
-    apply(session.as_ref(), "DROP PROCEDURE oxyn_commits_then_waits").await;
-    apply(session.as_ref(), "DROP TABLE oxyn_call_log").await;
     session.close().await.expect("close");
 }
 
@@ -1202,8 +1203,9 @@ async fn a_stop_racing_the_commit_never_reports_a_write_that_ran_as_cancelled() 
                 .await
                 .parse()
                 .expect("a counter");
+            let trial = self::session().await.expect("fresh stop-race session");
             let token = CancelToken::new();
-            let mut cursor = session
+            let mut cursor = trial
                 .execute(write_request("UPDATE oxyn_stop_race SET n = n + 1"), &token)
                 .await
                 .expect("execution");
@@ -1218,6 +1220,7 @@ async fn a_stop_racing_the_commit_never_reports_a_write_that_ran_as_cancelled() 
                 .parse()
                 .expect("a counter");
 
+            trial.close().await.expect("trial close");
             let context = format!("round {round}, stop after {delay_us} us");
             match issue {
                 Err(error) if error.is_cancelled() => {
@@ -2888,3 +2891,17 @@ async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement()
 
 #[path = "original_preview_tests.rs"]
 mod original_previews;
+
+/// Losing physical ownership is explicit; reconnecting must create a new logical session.
+async fn assert_lost_session(session: &dyn Session) {
+    let issue = tokio::time::timeout(
+        Duration::from_secs(10),
+        session.execute(read_request("SELECT 1"), &CancelToken::new()),
+    )
+    .await
+    .expect("lost session refuses promptly");
+    assert!(
+        matches!(issue, Err(OxynError::Config(_))),
+        "no silent replacement backend"
+    );
+}

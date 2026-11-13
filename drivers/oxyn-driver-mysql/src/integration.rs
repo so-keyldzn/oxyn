@@ -633,8 +633,9 @@ async fn a_call_killed_after_its_procedure_committed_an_insert_is_outcome_unknow
         thread_goes_idle(&*observer, id).await,
         "the server still runs the stopped CALL"
     );
-    apply(&*session, "DROP PROCEDURE oxyn_commits_then_waits").await;
-    apply(&*session, "DROP TABLE oxyn_call_log").await;
+    assert_lost_session(&*session).await;
+    apply(&*observer, "DROP PROCEDURE oxyn_commits_then_waits").await;
+    apply(&*observer, "DROP TABLE oxyn_call_log").await;
     observer.close().await.expect("close");
     session.close().await.expect("close");
 }
@@ -929,7 +930,8 @@ async fn errors_after_a_kill_mid_transaction(
         TransactionState::Unknown,
         "the transaction went with the connection"
     );
-    apply(session, "DROP TABLE oxyn_tx_lost").await;
+    assert_lost_session(session).await;
+    apply(observer, "DROP TABLE oxyn_tx_lost").await;
     errors
 }
 
@@ -954,7 +956,7 @@ async fn a_call_failing_before_its_schema_in_a_transaction_ends_on_one_error() {
         panic!("exactly one error expected: {errors:?}");
     };
     assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
-    apply(&*session, "DROP PROCEDURE oxyn_sleepy").await;
+    apply(&*observer, "DROP PROCEDURE oxyn_sleepy").await;
     observer.close().await.expect("close");
     session.close().await.expect("close");
 }
@@ -1150,10 +1152,12 @@ async fn a_local_infile_request_is_refused_without_reading_a_file() {
         matches!(error, OxynError::Connection(ref text) if text.contains("LOAD DATA LOCAL")),
         "{error:?}"
     );
-    // The session opens a new connection and the table is empty.
-    assert_eq!(first(&*session, "SELECT COUNT(*) FROM oxyn_li").await, "0");
-    apply(&*session, "DROP TABLE oxyn_li").await;
-    apply(&*session, "SET GLOBAL local_infile = 0").await;
+    assert_lost_session(&*session).await;
+    let observer = self::session().await.expect("configured observer");
+    assert_eq!(first(&*observer, "SELECT COUNT(*) FROM oxyn_li").await, "0");
+    apply(&*observer, "DROP TABLE oxyn_li").await;
+    apply(&*observer, "SET GLOBAL local_infile = 0").await;
+    observer.close().await.expect("observer close");
     session.close().await.expect("close");
 }
 
@@ -1839,23 +1843,17 @@ async fn a_typed_set_of_the_time_zone_or_names_is_refused_and_values_stay_utc() 
         .contains("14:00:00")
     );
 
-    // The same after a reconnect: the connection is killed from outside, the
-    // first statement that notices fails, the next one reopens it.
+    // Losing physical ownership requires an explicit new logical session.
     let before = first(&*session, "SELECT CONNECTION_ID()").await;
     apply(&*observer, &format!("KILL {before}")).await;
-    let mut after = None;
-    for _ in 0..3 {
-        if let Ok(batches) = run(&*session, read_request(read)).await
-            && let Some(batch) = batches.first()
-        {
-            after = Some(array_value_to_string(batch.column(0), 0).expect("printable"));
-            break;
-        }
-    }
+    assert!(run(&*session, read_request(read)).await.is_err());
+    assert_lost_session(&*session).await;
+    session.close().await.expect("lost session close");
+    let session = self::session().await.expect("explicit reconnect");
     assert_eq!(
-        after.as_deref(),
-        Some(utc.as_str()),
-        "same value after a reconnect"
+        first(&*session, read).await,
+        utc,
+        "same value after reconnect"
     );
     assert_ne!(
         first(&*session, "SELECT CONNECTION_ID()").await,
@@ -2172,3 +2170,16 @@ async fn a_kill_the_server_never_answers_ends_within_its_bound() {
 
 #[path = "original_preview_tests.rs"]
 mod original_previews;
+
+async fn assert_lost_session(session: &dyn Session) {
+    let issue = tokio::time::timeout(
+        Duration::from_secs(10),
+        session.execute(read_request("SELECT 1"), &CancelToken::new()),
+    )
+    .await
+    .expect("lost session refuses promptly");
+    assert!(
+        matches!(issue, Err(OxynError::Config(_))),
+        "no silent replacement connection"
+    );
+}
