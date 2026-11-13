@@ -42,8 +42,8 @@ export function previewStatus(state: ResultState): PreviewStatus {
  *
  * The preview lives in [`previews`], not in the view: coming back to an object
  * shows what was read, without reading it again, until something changes on
- * the connection. Leaving mid-read cancels the read, and so does hiding the
- * view while it reads by itself: the read starts again when it shows.
+ * the connection. SQL reads keep their owner across navigation, including
+ * while pending. Other automatic reads stop when hidden and restart on return.
  *
  * Reads again by itself only after a write or a DDL succeeded on this
  * connection, only while `visible`, never after its own error, and with the
@@ -76,6 +76,7 @@ export function usePreview({
   const entry = useSelector(previews.store, (all) => all[key])
   const addressRef = React.useRef(address)
   addressRef.current = address
+  const preserveOwner = open.capabilities.includes("SQL")
 
   React.useEffect(() => {
     if (!enabled) return
@@ -84,12 +85,13 @@ export function usePreview({
       session: open.session,
       address: addressRef.current,
       serverCancel: open.capabilities.includes("SERVER_SIDE_CANCEL"),
+      preserveOwner,
       shapeGroup: rememberShape
         ? previewKey(open.connection, addressKey(addressRef.current))
         : undefined,
     })
     return () => previews.detach(key)
-  }, [enabled, key, open.session, rememberShape])
+  }, [enabled, key, open.session, rememberShape, preserveOwner])
 
   const state: ResultState = entry?.state ?? { status: "initial" }
   const status = previewStatus(state)
@@ -107,8 +109,7 @@ export function usePreview({
       automatic
     )
 
-  // Out of sight, an automatic read stops holding the shared session; the
-  // effect below reads again when the view shows. Loaded results stay.
+  // Only reproducible, non-SQL reads may stop merely because they became hidden.
   React.useEffect(() => {
     if (!visible) previews.pause(key)
   }, [visible, key])

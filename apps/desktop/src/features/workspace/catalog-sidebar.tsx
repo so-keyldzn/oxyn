@@ -11,8 +11,9 @@ import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { hasCapability } from "@/features/session"
 import { useCatalogCopies } from "@/features/workspace/catalog-copies"
+import { metadataReads } from "@/features/metadata/read-requests"
 import { nameTransfer } from "@/features/workspace/name-transfer"
-import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
+import { BackendError } from "@/lib/ipc/client"
 import type { SessionPlace } from "@/lib/ipc/consoles"
 import { metadata } from "@/lib/ipc/metadata"
 import type {
@@ -61,8 +62,9 @@ function problemOf(caught: unknown): CatalogProblem {
  *
  * One path reads the catalog again after a DDL: the refresh signal
  * (ADR-0022), not the execution event stream as well. Every refresh carries
- * a command id, so the whole-catalog one can be cancelled, and all of them
- * are cancelled when the sidebar unmounts.
+ * a command id, so the whole-catalog one can be cancelled. Pending reads
+ * belong to the window/session, surviving sidebar navigation and StrictMode;
+ * the backend cancels them when their owner closes.
  */
 export function CatalogSidebar({
   open,
@@ -106,9 +108,15 @@ export function CatalogSidebar({
   const [problem, setProblem] = React.useState<CatalogProblem | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState("")
-  const [rootCommand, setRootCommand] = React.useState<string | null>(null)
   const [cancelling, setCancelling] = React.useState(false)
-  const running = React.useRef(new Set<string>())
+  const latest = React.useRef(new Map<string, string>())
+  const mounted = React.useRef(false)
+  React.useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   // A key-value store has no tree to draw, and must not pretend to have an
   // empty one.
   const supported = hasCatalog(open)
@@ -130,36 +138,32 @@ export function CatalogSidebar({
   })
 
   const refresh = React.useCallback(
-    async (address: CatalogAddress | null) => {
+    async (address: CatalogAddress | null, fresh = false) => {
       const key = address ? addressKey(address) : "root"
-      const id = newCommandId()
-      running.current.add(id)
+      const { id, outcome: pending } = metadataReads.catalog(
+        open.connection,
+        open.session,
+        address,
+        fresh
+      )
+      latest.current.set(key, id)
+      const isCurrent = () => latest.current.get(key) === id
       setLoading((current) => new Set(current).add(key))
-      if (!address) {
-        setRootCommand(id)
-        setCancelling(false)
-      }
+      setCancelling(false)
       setProblem(null)
       setNotice(null)
       try {
-        const outcome = await metadata.refreshCatalog(
-          id,
-          open.connection,
-          open.session,
-          address
-        )
+        const outcome = await pending
+        if (!isCurrent()) return false
         if (outcome.type === "denied")
           setProblem({ kind: "denied", reason: outcome.reason })
         else if (outcome.type === "cancelled")
           setNotice("Refresh cancelled. The tree shows the last read.")
+        return outcome.type !== "denied" && outcome.type !== "cancelled"
       } catch (caught) {
-        setProblem(problemOf(caught))
+        if (isCurrent()) setProblem(problemOf(caught))
+        return false
       } finally {
-        running.current.delete(id)
-        if (!address) {
-          setRootCommand((current) => (current === id ? null : current))
-          setCancelling(false)
-        }
         await queryClient.invalidateQueries({
           queryKey: ["catalog", open.connection, open.session],
         })
@@ -168,29 +172,22 @@ export function CatalogSidebar({
         })
         // Only once the tree read again is shown: released earlier, a level
         // just read would still say « Not loaded » for one round trip.
-        setLoading((current) => {
-          const next = new Set(current)
-          next.delete(key)
-          return next
-        })
+        if (isCurrent()) {
+          latest.current.delete(key)
+          setCancelling(false)
+          setLoading((current) => {
+            const next = new Set(current)
+            next.delete(key)
+            return next
+          })
+        }
       }
     },
     [open.connection, open.session, queryClient]
   )
 
-  React.useEffect(
-    () => () => {
-      for (const id of running.current)
-        void backend.cancel(id).catch(() => undefined)
-      running.current.clear()
-    },
-    []
-  )
-
-  const loadedOnce = React.useRef(false)
   React.useEffect(() => {
-    if (!supported || loadedOnce.current) return
-    loadedOnce.current = true
+    if (!supported) return
     void refresh(null)
   }, [supported, refresh])
 
@@ -199,29 +196,35 @@ export function CatalogSidebar({
   // while this runs is owed, and read once when it ends.
   const reloading = React.useRef(false)
   const owed = React.useRef(false)
+  const reloadGeneration = React.useRef(0)
   // Read through a function: a signal can set it during the awaits below.
   const isOwed = () => owed.current
+  const isMounted = () => mounted.current
   const expandedRef = React.useRef(expanded)
   expandedRef.current = expanded
-  const reloadStale = React.useCallback(async () => {
+  const reloadStale = React.useCallback(async (): Promise<void> => {
     if (reloading.current) {
       owed.current = true
       return
     }
     reloading.current = true
+    const generation = reloadGeneration.current
+    const active = () => isMounted() && reloadGeneration.current === generation
     try {
       do {
         owed.current = false
-        await refresh(null)
+        if (!(await refresh(null, true)) || !active()) return
         const nodes = await metadata.catalogTree(open.connection, open.session)
         for (const address of staleExpanded(nodes, expandedRef.current)) {
-          await refresh(address)
+          if (!active()) return
+          if (!(await refresh(address, true))) return
         }
-      } while (isOwed())
+      } while (active() && isOwed())
     } catch (caught) {
-      setProblem(problemOf(caught))
+      if (active()) setProblem(problemOf(caught))
     } finally {
       reloading.current = false
+      if (isMounted() && isOwed()) void reloadStale()
     }
   }, [open.connection, refresh])
 
@@ -237,9 +240,13 @@ export function CatalogSidebar({
   const copies = useCatalogCopies(open)
 
   const cancelRefresh = () => {
-    if (!rootCommand || cancelling) return
+    if (loading.size === 0 || cancelling) return
+    reloadGeneration.current++
+    owed.current = false
     setCancelling(true)
-    void backend.cancel(rootCommand).catch(() => setCancelling(false))
+    void metadataReads
+      .cancelCatalog(open.connection, open.session)
+      .catch(() => setCancelling(false))
   }
 
   return (
@@ -261,9 +268,9 @@ export function CatalogSidebar({
           searching: hits.isFetching,
           onQuery: setQuery,
         }}
-        refreshing={rootCommand !== null}
+        refreshing={loading.size > 0}
         cancelling={cancelling}
-        onRefresh={() => void refresh(null)}
+        onRefresh={() => void refresh(null, true)}
         onCancelRefresh={cancelRefresh}
         problem={
           problem ??
@@ -278,7 +285,7 @@ export function CatalogSidebar({
         nameTransfer={nameTransfer(open.connection, (caught) =>
           setProblem(problemOf(caught))
         )}
-        onRefreshLevel={(node) => void refresh(node.address)}
+        onRefreshLevel={(node) => void refresh(node.address, true)}
         pin={sessionScoped ? undefined : pin}
         operations={
           sessionScoped

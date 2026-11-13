@@ -186,7 +186,12 @@ beforeEach(() => {
   ipc.pending.clear()
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  previews.closeSessions(
+    Object.values(previews.store.state).map((entry) => entry.session)
+  )
+})
 
 describe("the size of a preview page", () => {
   it.each(["sqlite", "postgres", "mysql", "duckdb", "mongodb", "turso"])(
@@ -384,8 +389,23 @@ describe("after a DDL", () => {
 })
 
 describe("an automatic read on a tab that is no longer shown", () => {
+  it("keeps a pending SQL read on its owner instead of cancelling temporary state", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["private"])
+    await waitFor(() => expect(ipc.reads).toHaveLength(1))
+    const first = ipc.reads[0]?.id
+    await view.show([])
+    expect(ipc.cancelled).toEqual([])
+    await view.show(["private"])
+    expect(ipc.reads).toHaveLength(1)
+    expect(ipc.reads[0]?.id).toBe(first)
+    await answerAll(() => executed("preserved"))
+    expect(view.result.current[0]?.state).toMatchObject({ result: "preserved" })
+  })
+
   it("is cancelled, so the next object's read is not queued behind it", async () => {
     const open = opened()
+    open.capabilities = ["SERVER_SIDE_CANCEL"]
     const view = renderPreviews(open, ["slow", "small"])
     // Both tabs read on mount; only `slow` is meant to be on screen.
     await view.show(["slow"])
@@ -405,6 +425,7 @@ describe("an automatic read on a tab that is no longer shown", () => {
 
   it("reads again on return, and never shows the answer that came late", async () => {
     const open = opened()
+    open.capabilities = ["SERVER_SIDE_CANCEL"]
     const view = renderPreviews(open, ["slow", "small"])
     await view.show(["slow"])
     const first = ipc.reads.find((read) => read.relation === "slow")?.id ?? ""

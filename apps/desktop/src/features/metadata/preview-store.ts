@@ -6,7 +6,7 @@ import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
 import type { PreviewShape } from "@/lib/ipc/metadata"
 import type { CatalogAddress, CommandOutcome } from "@/lib/ipc/types"
 
-/** Previews kept once read: each holds at most 200 rows, and a result. */
+/** Cached preview identities; their row pages remain bounded by the backend. */
 export const KEPT_PREVIEWS = 8
 
 /** One relation's preview, alive across the object view's mounts. */
@@ -18,6 +18,8 @@ export interface PreviewEntry {
   serverCancel: boolean
   /** Shared UI shape only; never shares rows or a continuation between sessions. */
   shapeGroup?: string
+  /** A cancelled SQL read may destroy its owner's connection-local state. */
+  preserveOwner?: boolean
   /** The command reading now, or `null`. */
   running: string | null
   /**
@@ -79,8 +81,8 @@ function resultOf(entry: PreviewEntry | undefined) {
  *
  * A preview is **kept** once read, so that coming back to an object does not
  * read it again (docs/UX-SPEC.md, « Data of a selected table »), and
- * **cancelled** when the last view showing it goes away mid-read: work nobody
- * will see is not left running at the server. A late answer — from a read
+ * SQL reads also survive navigation while pending: their owner may carry
+ * temporary state. Other abandoned reads are cancelled. A late answer — from a read
  * that was replaced, cancelled or abandoned — is never shown, and its result
  * is released. Previews beyond [`KEPT_PREVIEWS`] release theirs, oldest
  * unseen first.
@@ -196,6 +198,7 @@ export function createPreviewStore(effects: PreviewEffects) {
         address: CatalogAddress
         serverCancel: boolean
         shapeGroup?: string
+        preserveOwner?: boolean
       }
     ) {
       const existing = store.state[key]
@@ -271,15 +274,18 @@ export function createPreviewStore(effects: PreviewEffects) {
     },
 
     /**
-     * One view fewer. The last one leaving cancels a read in flight — its
-     * answer will be released on arrival — and drops an entry that never
-     * held rows.
+     * One viewer fewer. SQL work belongs to its owning tab/session until an
+     * explicit close; a React remount must not kill its physical connection.
      */
     detach(key: string) {
       const entry = store.state[key]
       if (!entry) return
       const views = Math.max(0, entry.views - 1)
       if (views > 0) {
+        update(key, (current) => ({ ...current, views }))
+        return
+      }
+      if (entry.running && entry.preserveOwner) {
         update(key, (current) => ({ ...current, views }))
         return
       }
@@ -312,7 +318,7 @@ export function createPreviewStore(effects: PreviewEffects) {
     },
 
     /**
-     * The view went out of sight (another tab, a hidden workspace) while
+     * A reproducible view went out of sight (another tab, a hidden workspace) while
      * mounted. A read it started by itself is cancelled — hidden, it would
      * keep the shared catalog session busy for the next object — and the
      * entry goes back to `initial`, so showing it again reads once more.
@@ -321,7 +327,7 @@ export function createPreviewStore(effects: PreviewEffects) {
      */
     pause(key: string) {
       const entry = store.state[key]
-      if (!entry?.running || !entry.automatic) return
+      if (!entry?.running || !entry.automatic || entry.preserveOwner) return
       effects.cancel(entry.running)
       update(key, (current) => ({
         ...current,

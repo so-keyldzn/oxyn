@@ -428,6 +428,26 @@ it("releases an explicitly closed tab without confusing a React unmount with a c
   expect(previews.store.state.owned).toBeUndefined()
 })
 
+it("keeps a pending SQL owner through hiding and remounting until explicit close", async () => {
+  const { previews, effects, answer } = harness()
+  const own = { ...target, preserveOwner: true }
+  previews.attach("owned", own)
+  previews.read("owned", PLAIN_SHAPE, true)
+  previews.pause("owned")
+  previews.detach("owned")
+  expect(effects.cancel).not.toHaveBeenCalled()
+  expect(previews.store.state.owned).toMatchObject({
+    views: 0,
+    running: "cmd1",
+  })
+  previews.attach("owned", own)
+  expect(previews.store.state.owned?.running).toBe("cmd1")
+  await previews.close("owned")
+  expect(effects.cancel).toHaveBeenCalledExactlyOnceWith("cmd1")
+  await answer("cmd1", executed("late"))
+  expect(effects.forgetResult).toHaveBeenCalledWith("late")
+})
+
 it("waits for the old cursor's release before replacing its shape", async () => {
   const { previews, effects, answer, pending } = harness()
   let release: (() => void) | undefined

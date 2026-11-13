@@ -5,7 +5,8 @@ import { addressKey } from "@/components/oxyn/catalog-tree"
 import { IDLE } from "@/components/oxyn/facet-frame"
 import type { FacetLoad } from "@/components/oxyn/facet-frame"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
+import { metadataReads } from "@/features/metadata/read-requests"
+import { BackendError, backend } from "@/lib/ipc/client"
 import { metadata } from "@/lib/ipc/metadata"
 import type { RelationFacet, RelationFacets } from "@/lib/ipc/metadata"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
@@ -69,27 +70,27 @@ export function useRelationFacets(
   // Facets already asked for since the last invalidation: `ensure` asks once,
   // so a failed read is not repeated in a loop.
   const attempted = React.useRef(new Set<RelationFacet>())
+  const invalidated = React.useRef(new Set<RelationFacet>())
 
   const setLoad = (facet: RelationFacet, load: FacetLoad) =>
     setLoads((current) => ({ ...current, [facet]: load }))
 
   const refresh = React.useCallback(
-    async (facet: RelationFacet) => {
-      const previous = running.current[facet]
-      if (previous) void backend.cancel(previous)
-      const id = newCommandId()
+    async (facet: RelationFacet, fresh = true) => {
+      const { id, outcome: pending } = metadataReads.facet(
+        open.connection,
+        open.session,
+        address,
+        facet,
+        fresh
+      )
       running.current[facet] = id
       attempted.current.add(facet)
+      invalidated.current.delete(facet)
       setLoad(facet, { status: "loading" })
       let next: FacetLoad = IDLE
       try {
-        const outcome = await metadata.refreshRelationFacet(
-          id,
-          open.connection,
-          open.session,
-          address,
-          facet
-        )
+        const outcome = await pending
         switch (outcome.type) {
           case "cancelled":
             next = { status: "cancelled" }
@@ -127,18 +128,35 @@ export function useRelationFacets(
     [open.connection, open.session, key[3], queryClient]
   )
 
-  const cancel = React.useCallback((facet: RelationFacet) => {
-    const id = running.current[facet]
-    if (id) void backend.cancel(id)
-  }, [])
+  const cancel = React.useCallback(
+    (facet: RelationFacet) => {
+      void metadataReads.cancelFacet(
+        open.connection,
+        open.session,
+        address,
+        facet
+      )
+    },
+    [open.connection, open.session, key[3]]
+  )
 
   /** Loads a facet the first time a tab shows it, or after an invalidation. */
   const ensure = React.useCallback(
     (facet: RelationFacet) => {
       const data = facets.data
       if (!data || attempted.current.has(facet)) return
-      if (freshnessOf(data, facet).state === "fetched") return
-      void refresh(facet)
+      if (
+        !invalidated.current.has(facet) &&
+        freshnessOf(data, facet).state === "fetched" &&
+        !metadataReads.pendingFacet(
+          open.connection,
+          open.session,
+          address,
+          facet
+        )
+      )
+        return
+      void refresh(facet, invalidated.current.has(facet))
     },
     [facets.data, refresh]
   )
@@ -152,18 +170,9 @@ export function useRelationFacets(
     // The catalog was invalidated: every facet may be asked for again, and
     // the cache read tells which ones are now stale.
     attempted.current.clear()
+    invalidated.current = new Set(FACETS)
     void queryClient.invalidateQueries({ queryKey: key })
   })
-
-  React.useEffect(
-    () => () => {
-      for (const facet of FACETS) {
-        const id = running.current[facet]
-        if (id) void backend.cancel(id)
-      }
-    },
-    []
-  )
 
   return {
     facets: facets.data ?? null,
