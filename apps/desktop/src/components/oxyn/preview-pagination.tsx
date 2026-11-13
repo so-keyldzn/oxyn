@@ -1,6 +1,9 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
+import { BackendErrorAlert } from "./backend-error-alert"
+import type { BackendFailure } from "./backend-error-alert"
+
 import { Button } from "@/components/ui/button"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import {
@@ -19,6 +22,8 @@ import type { PreviewStatus } from "./preview-controls"
 export function PreviewPagination({
   applied,
   pagination,
+  error = null,
+  onRetry,
   rows,
   status,
   onPage,
@@ -26,18 +31,24 @@ export function PreviewPagination({
 }: {
   applied: PreviewShape
   pagination: PageAvailability | null
+  error?: BackendFailure | null
+  onRetry?: () => void
   /** Only settled rows have a range; a running read has not produced a page. */
   rows: number | null
   status: PreviewStatus
   onPage: (forward: boolean) => void
   onPageSize: (size: PreviewPageSize) => void
 }) {
+  if (pagination?.type === "notApplicable") return null
   const settled = status === "loaded" || status === "empty"
   const ready =
-    settled && (pagination?.type === "ready" || pagination?.type === "retained")
+    !error &&
+    settled &&
+    (pagination?.type === "ready" || pagination?.type === "retained")
       ? pagination
       : null
   const busy = status === "loading" || status === "initial"
+  const pageable = pagination?.type !== "noUniqueKey"
   const page = Math.floor(applied.offset / applied.pageSize) + 1
   const range =
     rows === null
@@ -47,11 +58,12 @@ export function PreviewPagination({
       : rows === 0
         ? "No rows"
         : `Rows ${(applied.offset + 1).toLocaleString("en-US")}–${(applied.offset + rows).toLocaleString("en-US")}`
-  const reason =
-    pagination?.type === "needsNativeOrder"
+  const reason = error
+    ? null
+    : pagination?.type === "needsNativeOrder"
       ? "Clear the sort to browse this server's native order."
       : pagination?.type === "noUniqueKey"
-        ? "No unique key is known for this relation."
+        ? "Only a bounded preview is available: this source has no supported continuation or proven key."
         : pagination?.type === "needsOrder"
           ? "Sort the preview to browse pages."
           : pagination?.type === "unknown" || !pagination
@@ -65,13 +77,25 @@ export function PreviewPagination({
       className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-t bg-card px-3 py-2 text-xs"
       data-slot="preview-pagination"
     >
+      {error ? (
+        <div className="w-full">
+          <BackendErrorAlert
+            title="Page navigation unavailable"
+            error={error}
+            onRetry={onRetry}
+            retryLabel="Retry page navigation"
+            nextStep="Resolve this error, then refresh the preview."
+          />
+        </div>
+      ) : null}
       <span role="status" className="text-muted-foreground tabular-nums">
-        {range} · Page {page.toLocaleString("en-US")}
+        {range}
+        {pageable ? ` · Page ${page.toLocaleString("en-US")}` : ""}
       </span>
       {reason ? <span className="text-muted-foreground">{reason}</span> : null}
       <div className="ms-auto flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2">
-          Rows per page
+          {pageable ? "Rows per page" : "Preview rows"}
           <NativeSelect
             size="sm"
             value={applied.pageSize}
@@ -88,40 +112,42 @@ export function PreviewPagination({
             ))}
           </NativeSelect>
         </label>
-        <Pagination aria-label="Preview pages" className="mx-0 w-auto">
-          <PaginationContent>
-            <PaginationItem>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!ready?.previous}
-                onClick={() => onPage(false)}
-              >
-                <HugeiconsIcon
-                  icon={ArrowLeft01Icon}
-                  strokeWidth={2}
-                  data-icon="inline-start"
-                />
-                Previous page
-              </Button>
-            </PaginationItem>
-            <PaginationItem>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!ready?.next}
-                onClick={() => onPage(true)}
-              >
-                Next page
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  strokeWidth={2}
-                  data-icon="inline-end"
-                />
-              </Button>
-            </PaginationItem>
-          </PaginationContent>
-        </Pagination>
+        {pageable ? (
+          <Pagination aria-label="Preview pages" className="mx-0 w-auto">
+            <PaginationContent>
+              <PaginationItem>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!ready?.previous}
+                  onClick={() => onPage(false)}
+                >
+                  <HugeiconsIcon
+                    icon={ArrowLeft01Icon}
+                    strokeWidth={2}
+                    data-icon="inline-start"
+                  />
+                  Previous page
+                </Button>
+              </PaginationItem>
+              <PaginationItem>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!ready?.next}
+                  onClick={() => onPage(true)}
+                >
+                  Next page
+                  <HugeiconsIcon
+                    icon={ArrowRight01Icon}
+                    strokeWidth={2}
+                    data-icon="inline-end"
+                  />
+                </Button>
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+        ) : null}
       </div>
     </div>
   )

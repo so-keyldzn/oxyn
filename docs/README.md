@@ -104,6 +104,7 @@ To locate the boards and their states before implementation, see
 | [0075](adr/0075-a-preview-has-one-time-budget-and-reports-its-latency.md) | A preview draws its preparation and its execution on one 30 s budget, and reports the total latency the user waited next to the SQL duration (`ExecTimings`) | accepted |
 | [0076](adr/0076-unify-sqlite-with-postgres-features.md) | Enable PostgreSQL type features directly while keeping one bundled SQLite (refines 0010) | accepted |
 | [0077](adr/0077-retain-preview-streams-for-native-pagination.md) | Native preview pages retain one bounded cursor and its history, without invented keys or total counts | accepted |
+| [0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md) | Keyless relation pages use bounded retained reads, isolated from catalog sessions | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

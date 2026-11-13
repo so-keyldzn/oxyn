@@ -64,6 +64,10 @@ impl PreviewSort {
 /// and separating them would invite the next caller to forget one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PreviewShape {
+    /// The caller intends to browse pages and permits a retained read.
+    /// Samples keep the default false: their one page must release the server.
+    #[serde(default)]
+    pub continuable: bool,
     /// The requested order, empty when the user chose nothing.
     ///
     /// The driver **completes** it with a unique key to break ties: without a

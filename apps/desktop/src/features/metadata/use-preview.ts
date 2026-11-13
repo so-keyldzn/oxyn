@@ -11,7 +11,7 @@ import {
   previewKey,
 } from "@/features/metadata/preview-store"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { backend, newCommandId } from "@/lib/ipc/client"
+import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { executionProgress, forget, watch } from "@/lib/ipc/events"
 import { PLAIN_SHAPE, metadata } from "@/lib/ipc/metadata"
 import type {
@@ -175,6 +175,8 @@ export function usePreview({
     queryKey: [
       "preview-pagination",
       open.connection,
+      open.session,
+      state.status === "populated" ? state.result : null,
       key,
       applied,
       rows,
@@ -194,7 +196,16 @@ export function usePreview({
     cancelling: entry?.cancelling ?? false,
     startedAt: entry?.startedAt ?? null,
     approvalRefused: entry?.approvalRefused ?? false,
-    pagination: pagination.data ?? null,
+    pagination: pagination.isError ? null : (pagination.data ?? null),
+    paginationError: pagination.error
+      ? {
+          message: pagination.error.message,
+          retryable:
+            pagination.error instanceof BackendError &&
+            pagination.error.retryable,
+        }
+      : null,
+    retryPagination: () => void pagination.refetch(),
     refresh: () =>
       read({
         ...applied,

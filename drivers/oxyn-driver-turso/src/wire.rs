@@ -41,7 +41,7 @@ pub(crate) enum Arg {
 }
 
 impl Arg {
-    fn to_json(&self) -> Result<Value> {
+    pub(crate) fn to_json(&self) -> Result<Value> {
         Ok(match self {
             Self::Null => json!({ "type": "null" }),
             // A 64-bit integer travels as text: JSON numbers are doubles.

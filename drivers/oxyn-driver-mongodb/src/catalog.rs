@@ -484,7 +484,9 @@ impl CatalogProvider for MongoCatalog {
                 }
             })
             .collect();
-        let mut described = Relation::new(name, listed.kind).with_fields(fields);
+        let mut described = Relation::new(name, listed.kind)
+            .with_fields(fields)
+            .with_retained_preview(true);
         if let Some(comment) = listed.comment {
             described = described.with_comment(format!(
                 "{comment}; fields inferred from {} documents",
@@ -497,11 +499,9 @@ impl CatalogProvider for MongoCatalog {
             ));
         }
         if keyed {
-            // `sort: {_id: 1}` with a `limit` walks the `_id` index and stops:
-            // a preview in key order is a bounded read. The interface offers
-            // pages from this flag; the plain preview reads the same condition
-            // from the listing ([`Self::previews_in_id_order`]).
-            described = described.with_key_order_preview();
+            // `_id` is useful metadata and a bounded sample order, but its
+            // uniqueness is not global for every sharded collection. Browsing
+            // uses one retained cursor rather than promising independent pages.
             // Metadata, not a scan: `count` without a filter. Only on a plain
             // collection: a time-series collection is a view over its
             // buckets, where the count would unpack them. A failure costs the

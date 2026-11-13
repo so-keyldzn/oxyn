@@ -57,6 +57,7 @@ mod open;
 pub mod options;
 mod params;
 mod preview;
+mod preview_context;
 mod query;
 pub mod session;
 #[cfg(test)]

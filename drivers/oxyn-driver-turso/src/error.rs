@@ -29,8 +29,7 @@ pub(crate) const MAX_MESSAGE_BYTES: usize = 4096;
 
 /// Why a result is refused when it is larger than the response budget.
 pub(crate) const RESULT_TOO_LARGE: &str = "the result is larger than Oxyn reads from Turso in \
-    one answer: Hrana over HTTP sends the whole result in a single response, so it cannot be \
-    read row by row. Add a `LIMIT`, or select fewer columns";
+    one pipeline answer. Add a `LIMIT`, select fewer columns, or browse the relation in Data";
 
 /// The source of an [`OxynError::Driver`]: a message, already scrubbed.
 #[derive(Debug, thiserror::Error)]

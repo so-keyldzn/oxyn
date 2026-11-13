@@ -105,7 +105,7 @@ fn a_composite_key_orders_in_index_order_and_a_relation_not_vouched_for_stays_un
     let completed = request(&path(), 200, &sorted, &RelationFacts::of(&unvouched)).expect("sorted");
     assert_eq!(
         completed.text,
-        "SELECT * FROM `shop`.`t` ORDER BY `a` ASC, `b` ASC LIMIT 200"
+        "SELECT * FROM `shop`.`t` ORDER BY `a` ASC LIMIT 200"
     );
 }
 

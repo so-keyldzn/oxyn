@@ -457,16 +457,19 @@ async fn a_vec0_table_is_not_ordered_by_default_but_can_be_sorted() {
         ordinary.text
     );
 
-    // The user may still ask for it, and for pages over it.
+    // Requested sorts use one retained execution, without trusting module keys.
     let page = PreviewShape {
         sort: vec![oxyn_core::PreviewSort::ascending("chunk_id")],
-        offset: 200,
+        continuable: true,
         ..PreviewShape::default()
     };
-    let request = session
-        .preview_request(&path("vectors"), 200, &page, &cancel)
+    let prepared = session
+        .prepare_preview(&path("vectors"), 200, &page, &cancel)
         .await
-        .expect("a sorted page over a vec0 table");
+        .expect("a sorted read over a vec0 table");
+    assert_eq!(prepared.mode, oxyn_driver::PreviewMode::Dedicated);
+    let request = prepared.request;
+    assert!(!request.text.contains("LIMIT"));
     assert!(
         request.text.contains("ORDER BY \"chunk_id\" ASC"),
         "{}",

@@ -52,7 +52,7 @@ type Running = Arc<Mutex<HashMap<StatementHandle, CancelToken>>>;
 
 /// Removes an execution from the running set when its request ends, whichever
 /// way: the answer, an error, or the caller dropping the future.
-struct Registered {
+pub(crate) struct Registered {
     running: Running,
     handle: StatementHandle,
 }
@@ -73,6 +73,7 @@ pub struct TursoSession {
     driver: DriverId,
     catalog: TursoCatalog,
     running: Running,
+    cursor_tasks: Arc<crate::streaming::Tasks>,
 }
 
 impl TursoSession {
@@ -83,7 +84,22 @@ impl TursoSession {
             driver,
             catalog,
             running: Arc::new(Mutex::new(HashMap::new())),
+            cursor_tasks: Arc::default(),
         }
+    }
+
+    fn register(&self, cancel: &CancelToken) -> (StatementHandle, CancelToken, Registered) {
+        let handle = StatementHandle::new();
+        let token = cancel.child();
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(handle, token.clone());
+        let registered = Registered {
+            running: Arc::clone(&self.running),
+            handle,
+        };
+        (handle, token, registered)
     }
 
     /// Executions still waiting for an answer. Diagnostics and tests.
@@ -128,16 +144,7 @@ impl Session for TursoSession {
         let body = wire::request_body(&request.text, &args)?;
 
         let started = Instant::now();
-        let handle = StatementHandle::new();
-        let token = cancel.child();
-        self.running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(handle, token.clone());
-        let _registered = Registered {
-            running: Arc::clone(&self.running),
-            handle,
-        };
+        let (handle, token, _registered) = self.register(cancel);
 
         let result = self
             .http
@@ -199,6 +206,64 @@ impl Session for TursoSession {
     ///
     /// Turso cannot be asked to interrupt a statement, so this never reaches
     /// the server — which is why `SERVER_SIDE_CANCEL` is not declared.
+    async fn prepare_preview(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        let relation = self.catalog.describe_relation(path, cancel).await?;
+        let retained = relation.retained_preview;
+        let facts = crate::preview::RelationFacts::of(&relation);
+        Ok(oxyn_driver::PreparedPreview {
+            request: if retained {
+                crate::preview::stream_request(path, limit, shape, &facts)?
+            } else {
+                crate::preview::request(path, limit, shape, &facts)?
+            },
+            mode: if retained {
+                oxyn_driver::PreviewMode::Retained
+            } else {
+                oxyn_driver::PreviewMode::Bounded
+            },
+        })
+    }
+
+    async fn execute_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.capabilities().require_language(request.language)?;
+        refuse_session_state(&request)?;
+        if !request.limits.read_only || !request.intent.is_read_only() {
+            return Err(OxynError::PolicyDenied {
+                reason: "retained Turso previews only accept read-only requests".into(),
+            });
+        }
+        if !self.http.supports_cursor(&self.driver, cancel).await? {
+            return Err(OxynError::NotSupported {
+                capability: "Hrana 3 cursor streaming".into(),
+            });
+        }
+        let (handle, token, registered) = self.register(cancel);
+        Ok(Box::new(
+            crate::streaming::StreamingCursor::start(
+                crate::streaming::Open {
+                    http: Arc::clone(&self.http),
+                    driver: self.driver.clone(),
+                    request,
+                    handle,
+                    token,
+                    registered,
+                },
+                &self.cursor_tasks,
+            )
+            .await?,
+        ))
+    }
+
     async fn cancel(&self, statement: StatementHandle) -> Result<()> {
         let token = self
             .running
@@ -240,7 +305,8 @@ impl Session for TursoSession {
     /// Stops what still waits for an answer.
     ///
     /// # Errors
-    /// None today: the HTTP client has no goodbye to say.
+    /// Stream cleanup failures are logged without server identities; live owners
+    /// are cancelled and joined before this session is released.
     async fn close(self: Box<Self>) -> Result<()> {
         let tokens: Vec<CancelToken> = self
             .running
@@ -252,6 +318,7 @@ impl Session for TursoSession {
         for token in tokens {
             token.cancel();
         }
+        self.cursor_tasks.join().await;
         Ok(())
     }
 }

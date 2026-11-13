@@ -402,7 +402,14 @@ impl Session for RedisSession {
                 | "TS.RANGE"
                 | "TOPK.LIST"
         );
-        Ok(oxyn_driver::PreparedPreview { request, retained })
+        Ok(oxyn_driver::PreparedPreview {
+            request,
+            mode: if retained {
+                oxyn_driver::PreviewMode::Retained
+            } else {
+                oxyn_driver::PreviewMode::Bounded
+            },
+        })
     }
 
     async fn execute_preview(

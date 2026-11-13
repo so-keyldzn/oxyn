@@ -72,7 +72,7 @@ describe("previewNotice", () => {
     expect(previewNotice({ ...base, filtered: true })?.text).toMatch(
       /No row matches this filter/
     )
-    expect(previewNotice(base)?.text).toBe("This table holds no rows.")
+    expect(previewNotice(base)?.text).toBe("This source returned no rows.")
   })
 
   it("says why there is no page without a total order", () => {
@@ -88,9 +88,8 @@ describe("previewNotice", () => {
       ...loaded,
       pagination: { type: "noUniqueKey" },
     })
-    expect(keyless?.text).toMatch(/no unique key/)
-    // Sorting would not give it pages: nothing offers to.
-    expect(keyless?.offersSort).toBeFalsy()
+    // The bounded-preview footer owns this explanation and hides navigation.
+    expect(keyless).toBeNull()
   })
 
   it("does not call the table empty after a full last page", () => {

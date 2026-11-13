@@ -117,32 +117,40 @@ impl Driver for MysqlDriver {
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>> {
         let spec = ConnectSpec::from_config(&self.metadata, config, credentials)?;
-        let driver = self.id();
-        let (mut conn, id) = race_cancel(cancel, open(&spec, &driver)).await?;
-        let banner = race_cancel(cancel, async {
-            first_value(&mut conn, SQL_VERSION)
-                .await
-                .map_err(|error| map_exec_error(&driver, oxyn_core::StatementIntent::Read, &error))
-        })
-        .await?
-        .as_ref()
-        .and_then(value_text)
-        .ok_or_else(|| OxynError::Connection("the server did not say its version".to_owned()))?;
-
-        let killer = Arc::new(Killer::new(spec.clone(), driver.clone()));
-        let can_kill = race_cancel(cancel, async { Ok(killer.probe().await) }).await?;
-        let variant = MysqlVariant::detect(&banner, can_kill);
-        tracing::debug!(
-            target: "oxyn::driver::mysql",
-            product = variant.product(),
-            version = %variant.server_version,
-            server_side_cancel = can_kill,
-            "session opened"
-        );
-
-        let shared = Arc::new(Shared::new(driver, spec, Link::new(conn, id), killer));
-        Ok(Box::new(MysqlSession::new(shared, variant)))
+        connect_spec(self.id(), spec, cancel).await
     }
+}
+
+/// Opens from the live session's original parameters, without consulting saved edits.
+pub(crate) async fn connect_spec(
+    driver: DriverId,
+    spec: ConnectSpec,
+    cancel: &CancelToken,
+) -> Result<Box<dyn Session>> {
+    let (mut conn, id) = race_cancel(cancel, open(&spec, &driver)).await?;
+    let banner = race_cancel(cancel, async {
+        first_value(&mut conn, SQL_VERSION)
+            .await
+            .map_err(|error| map_exec_error(&driver, oxyn_core::StatementIntent::Read, &error))
+    })
+    .await?
+    .as_ref()
+    .and_then(value_text)
+    .ok_or_else(|| OxynError::Connection("the server did not say its version".to_owned()))?;
+
+    let killer = Arc::new(Killer::new(spec.clone(), driver.clone()));
+    let can_kill = race_cancel(cancel, async { Ok(killer.probe().await) }).await?;
+    let variant = MysqlVariant::detect(&banner, can_kill);
+    tracing::debug!(
+        target: "oxyn::driver::mysql",
+        product = variant.product(),
+        version = %variant.server_version,
+        server_side_cancel = can_kill,
+        "session opened"
+    );
+
+    let shared = Arc::new(Shared::new(driver, spec, Link::new(conn, id), killer));
+    Ok(Box::new(MysqlSession::new(shared, variant)))
 }
 
 #[cfg(test)]

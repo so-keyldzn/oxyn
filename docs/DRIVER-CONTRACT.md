@@ -96,11 +96,23 @@ the whole relation. With no sort requested, it composes `ORDER BY <key> ASC`
 otherwise. The key columns come in the **index's** order, not the table's: the
 driver fills `Field::primary_key_rank` with the engine's rank, which
 `Relation::primary_key()` orders by — a composite key ordered in table order
-can sort the whole relation. The interface offers pages from that same flag,
-so an order without the flag, or the flag without the order, shows a page that
-repeats or skips rows. A driver that cannot tell leaves the flag at its default, `false`.
+can sort the whole relation. `Relation::preview_key` separately proves that
+this key is unique for the actual queried relation, including NULL semantics
+and inheritance. Metadata alone is not proof. `with_key_order_preview` sets
+both promises; `with_preview_key` sets only uniqueness. Both default to false.
+Independent pages require a proven key and a total order; other record sources
+use retained reads where supported ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)).
 
 **Native continuation is a separate promise** ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). `Relation::retained_preview` declares traversal of one cursor, not a unique key; `retained_preview_sort` separately vouches for requested sorts. A server without the latter keeps sorted first-page reads, with continuation refused until the sort is cleared. `Session::prepare_preview` marks such a request retained; the executor still reclassifies it and enforces read-only before `execute_preview`. It keeps unread batch remainders and bounded Arrow history, never re-executes a previous page, and binds each continuation to its connection, session, relation and shape. The default methods preserve independent bounded previews. Closing, expiring or abandoning a native read releases its cursor; a dropped cursor future is never resumed. The driver owns protocol cleanup, including remote IDs received after cancellation. Redis scan duplicates are suppressed within a 16 MiB identity budget, failing explicitly on overflow; a clipped continuation identity is refused.
+
+`PreviewShape::continuable` defaults to false: samples call `preview_request`
+and release their bounded cursor. Data browsing opts in to `prepare_preview`,
+whose `PreviewMode` distinguishes `Bounded`, `Retained` and `Dedicated`.
+`Session::open_preview_session` opens a private reader from the live opening
+specification and reproducible namespace context. It must not read updated
+saved settings, copy unreproducible temporary state, or substitute a same-named
+object. Its default refuses the capability. `single_page_preview` marks values
+and structural summaries: no page navigation is meaningful for them.
 
 **Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
 it declares a primary key, makes a click on that table read every vector into a

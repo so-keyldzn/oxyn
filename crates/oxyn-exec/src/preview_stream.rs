@@ -4,20 +4,21 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use oxyn_catalog::CatalogPath;
 use oxyn_core::{
-    CancelToken, ConnectionId, ExecRequest, ExecStats, OxynError, PreviewShape, Result, ResultId,
-    SessionId, StatementHandle,
+    CancelToken, ConnectionId, ExecRequest, OxynError, PreviewShape, Result, ResultId, SessionId,
+    StatementHandle,
 };
 use oxyn_data::{BufferLimits, ResultBuffer};
 use oxyn_driver::Cursor;
 use parking_lot::Mutex;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
-use crate::sessions::SessionSlot;
+use crate::sessions::{SessionRegistry, SessionSlot};
+
+mod page;
+mod sessions;
+use page::Page;
 
 const LIFETIME: Duration = Duration::from_secs(300);
 const MEMORY: usize = 8 * 1024 * 1024;
@@ -30,6 +31,7 @@ pub(crate) struct Read {
     pub path: CatalogPath,
     pub shape: PreviewShape,
     pub size: usize,
+    pub dedicated: bool,
 }
 
 impl Read {
@@ -44,15 +46,12 @@ impl Read {
 pub(crate) struct Registry {
     held: Arc<Mutex<Held>>,
     limits: BufferLimits,
+    capacity: Arc<Semaphore>,
+    owners: sessions::Owners,
 }
 impl Default for Registry {
     fn default() -> Self {
-        Self {
-            held: Arc::default(),
-            limits: BufferLimits::default()
-                .with_memory_budget(MEMORY)
-                .with_max_spill_bytes(SPILL),
-        }
+        Self::new(Arc::new(SessionRegistry::new()))
     }
 }
 
@@ -63,6 +62,25 @@ struct Held {
 }
 
 impl Registry {
+    pub fn new(sessions: Arc<SessionRegistry>) -> Self {
+        Self {
+            held: Arc::default(),
+            limits: BufferLimits::default()
+                .with_memory_budget(MEMORY)
+                .with_max_spill_bytes(SPILL),
+            capacity: Arc::new(Semaphore::new(IDENTITIES)),
+            owners: sessions::Owners::new(sessions),
+        }
+    }
+
+    pub async fn join_sessions(
+        &self,
+        connection: Option<ConnectionId>,
+        session: Option<SessionId>,
+    ) {
+        self.owners.join(connection, session).await;
+    }
+
     #[cfg(test)]
     pub fn with_history_limits(limits: BufferLimits) -> Self {
         Self {
@@ -109,7 +127,7 @@ impl Registry {
 
     pub async fn page(
         &self,
-        slot: &SessionSlot,
+        slot: &Arc<SessionSlot>,
         read: Read,
         mut request: ExecRequest,
         cancel: &CancelToken,
@@ -125,45 +143,81 @@ impl Registry {
             }
             let token = slot.closing_token().child();
             let mut opening = Opening(Some(token.clone()));
+            let permit = Arc::clone(&self.capacity).try_acquire_owned().map_err(|_| {
+                OxynError::Config("too many retained previews are open; close another preview before starting this read".into())
+            })?;
             request.limits.max_rows = None;
             request.limits.timeout = Some(LIFETIME);
-            let open = slot.execute_preview(request.clone(), &token);
-            tokio::pin!(open);
-            let expiry = async {
-                match deadline {
-                    Some(at) => tokio::time::sleep_until(at).await,
-                    None => std::future::pending().await,
-                }
-            };
-            let cursor = tokio::select! {
-                biased;
-                result = &mut open => result?,
-                () = cancel.cancelled() => {
-                    token.cancel();
-                    drop(open.await);
-                    return Err(OxynError::Cancelled);
-                }
-                () = expiry => {
-                    token.cancel();
-                    drop(open.await);
-                    return Err(OxynError::Timeout { after: oxyn_core::ExecLimits::DEFAULT_TIMEOUT });
+            let state = Arc::new(AsyncMutex::new(State {
+                cursor: None,
+                lease: None,
+                permit: None,
+            }));
+            let mut state_guard = Arc::clone(&state).lock_owned().await;
+            let (cursor, execution_session) = {
+                let open = async {
+                    let execution = if read.dedicated {
+                        let lease = self
+                            .owners
+                            .open(
+                                Arc::clone(slot),
+                                read.path.clone(),
+                                Arc::downgrade(&state),
+                                token.clone(),
+                                permit,
+                            )
+                            .await?;
+                        let execution = Arc::clone(&lease.slot);
+                        state_guard.lease = Some(lease);
+                        execution
+                    } else {
+                        state_guard.permit = Some(permit);
+                        Arc::clone(slot)
+                    };
+                    let cursor = execution.execute_preview(request.clone(), &token).await?;
+                    Ok::<_, OxynError>((cursor, execution.id()))
+                };
+                tokio::pin!(open);
+                let expiry = async {
+                    match deadline {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    result = &mut open => result?,
+                    () = cancel.cancelled() => {
+                        token.cancel();
+                        drop(open.await);
+                        return Err(OxynError::Cancelled);
+                    }
+                    () = expiry => {
+                        token.cancel();
+                        drop(open.await);
+                        return Err(OxynError::Timeout { after: oxyn_core::ExecLimits::DEFAULT_TIMEOUT });
+                    }
                 }
             };
             let handle = cursor.handle();
             let history = Arc::new(ResultBuffer::with_limits(cursor.schema(), self.limits));
-            let state = Arc::new(AsyncMutex::new(State {
-                cursor: Some(cursor),
-            }));
+            state_guard.cursor = Some(cursor);
+            drop(state_guard);
             let weak = Arc::downgrade(&state);
             let held = Arc::downgrade(&self.held);
             let expiry_token = token.clone();
+            // Scheduling the owner later must not extend the read's lifetime.
+            let expiry_at = tokio::time::Instant::now() + LIFETIME;
             let expiry = tokio::spawn(async move {
                 tokio::select! {
                     () = expiry_token.cancelled() => {}
-                    () = tokio::time::sleep(LIFETIME) => { expiry_token.cancel(); }
+                    () = tokio::time::sleep_until(expiry_at) => { expiry_token.cancel(); }
                 }
                 if let Some(state) = weak.upgrade() {
-                    state.lock().await.cursor.take();
+                    let mut state = state.lock().await;
+                    state.cursor.take();
+                    state.lease.take();
+                    state.permit.take();
                 }
                 if let Some(held) = held.upgrade() {
                     let gone = {
@@ -184,6 +238,7 @@ impl Registry {
             let stream = Arc::new(Stream {
                 connection: slot.connection(),
                 session: slot.id(),
+                execution_session,
                 path: read.path.clone(),
                 shape: read.identity(),
                 size: read.size,
@@ -207,15 +262,7 @@ impl Registry {
         let state = Arc::clone(&stream.state)
             .try_lock_owned()
             .map_err(|_| OxynError::Config("this preview already has a page being read".into()))?;
-        let page = Page {
-            stream: Arc::clone(&stream),
-            state,
-            position: offset,
-            remaining: read.size,
-            finished: false,
-            stats: ExecStats::default(),
-            started: std::time::Instant::now(),
-        };
+        let page = Page::new(Arc::clone(&stream), state, offset, read.size);
         Ok((Box::new(page), stream))
     }
 
@@ -259,6 +306,7 @@ impl Registry {
     }
 
     pub fn close(&self, connection: ConnectionId, session: Option<SessionId>) {
+        self.owners.cancel(Some(connection), session);
         let gone = {
             let mut held = self.held.lock();
             let ids: Vec<_> = held
@@ -281,6 +329,8 @@ impl Registry {
     }
 
     pub fn clear(&self) {
+        self.capacity.close();
+        self.owners.stop_opening();
         let gone = std::mem::take(&mut *self.held.lock());
         for stream in gone.pages.values() {
             stream.cancel.cancel();
@@ -292,6 +342,7 @@ impl Registry {
 pub(crate) struct Stream {
     connection: ConnectionId,
     session: SessionId,
+    pub execution_session: SessionId,
     path: CatalogPath,
     shape: PreviewShape,
     size: usize,
@@ -312,97 +363,8 @@ impl Drop for Stream {
 
 struct State {
     cursor: Option<Box<dyn Cursor>>,
-}
-
-struct Page {
-    stream: Arc<Stream>,
-    state: OwnedMutexGuard<State>,
-    position: usize,
-    remaining: usize,
-    finished: bool,
-    stats: ExecStats,
-    started: std::time::Instant,
-}
-
-impl Drop for Page {
-    fn drop(&mut self) {
-        // A dropped next_batch future may have consumed protocol bytes. Its
-        // cursor is never reused, even when a previous page remains retained.
-        if !self.finished {
-            self.stream.cancel.cancel();
-            self.state.cursor.take();
-        }
-    }
-}
-
-#[async_trait]
-impl Cursor for Page {
-    fn handle(&self) -> StatementHandle {
-        self.stream.handle
-    }
-    fn schema(&self) -> SchemaRef {
-        self.stream.history.schema().clone()
-    }
-    fn stats(&self) -> ExecStats {
-        self.stats
-    }
-
-    async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if self.stream.cancel.is_cancelled() {
-            return Err(expired());
-        }
-        if self.remaining == 0 {
-            self.finished = true;
-            self.stats.total_time = self.started.elapsed();
-            return Ok(None);
-        }
-        loop {
-            if let Some((index, local)) = self.stream.history.locate(self.position) {
-                let history = Arc::clone(&self.stream.history);
-                let batch = tokio::task::spawn_blocking(move || history.batch(index))
-                    .await
-                    .map_err(|_| OxynError::Internal("preview history reader stopped".into()))??
-                    .ok_or_else(|| OxynError::Internal("preview history batch is absent".into()))?;
-                let count = self.remaining.min(batch.num_rows().saturating_sub(local));
-                let page = batch.slice(local, count);
-                self.position = self.position.saturating_add(count);
-                self.remaining -= count;
-                self.stats.record_batch(
-                    u64::try_from(count).unwrap_or(u64::MAX),
-                    u64::try_from(page.get_array_memory_size()).unwrap_or(u64::MAX),
-                );
-                return Ok(Some(page));
-            }
-            let Some(cursor) = &mut self.state.cursor else {
-                self.finished = true;
-                self.stats.total_time = self.started.elapsed();
-                return Ok(None);
-            };
-            match cursor.next_batch().await? {
-                Some(batch) if batch.num_rows() == 0 => continue,
-                Some(batch) => {
-                    if self.stream.history.batch_count() >= BATCHES {
-                        return Err(quota());
-                    }
-                    let history = Arc::clone(&self.stream.history);
-                    let count = batch.num_rows();
-                    let accepted = tokio::task::spawn_blocking(move || {
-                        let before = history.row_count();
-                        history.push(batch)?;
-                        Ok::<_, OxynError>(history.row_count().saturating_sub(before))
-                    })
-                    .await
-                    .map_err(|_| OxynError::Internal("preview history writer stopped".into()))??;
-                    if accepted != count {
-                        return Err(quota());
-                    }
-                }
-                None => {
-                    self.state.cursor.take();
-                }
-            }
-        }
-    }
+    lease: Option<sessions::Lease>,
+    permit: Option<OwnedSemaphorePermit>,
 }
 
 fn expired() -> OxynError {

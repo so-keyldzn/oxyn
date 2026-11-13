@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="793982b801de" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="cc677073054f" -->
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -979,8 +979,7 @@ attend cette description. Ensuite, la ligne sous la barre de filtre dit quel cas
   pages sont offertes d'emblée : « Rows come in the order of the primary key
   (a, b). Sort the preview to choose another order. », qui nomme les colonnes
   de la clé ;
-* **une clé, mais pas d'ordre par défaut** — une table virtuelle, Amazon
-  Redshift, où mettre en ordre peut vouloir dire lire toute la relation :
+* **une clé, mais pas d'ordre par défaut** — une clé unique prouvée dont l’ordre par défaut est coûteux, où mettre en ordre peut vouloir dire lire toute la relation :
   « Rows come in no guaranteed order, and putting this relation in order may
   mean reading all of it first. Sort the preview to browse it page by page. »,
   suivi d'une action `Sort…`. Un lien `Sort to browse pages`, parmi les
@@ -991,7 +990,7 @@ attend cette description. Ensuite, la ligne sous la barre de filtre dit quel cas
   pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
   ligne et en omettrait une autre, sans rien signaler.
 
-La barre de pagination reste sous le panneau de résultat, hors du défilement
+Pour une source de lignes parcourable, la barre de pagination reste sous le panneau de résultat, hors du défilement
 de la grille, même sur une seule page, un résultat vide, un chargement ou une
 erreur. Elle porte `Rows per page`, `Page N`, la plage réellement reçue
 (`Rows 1–2` pour deux lignes), et `Previous page` / `Next page`. Zéro ligne
@@ -1003,7 +1002,7 @@ compter le total. Si la suivante est vide, Previous ramène à la précédente.
 Aucun nombre total de pages ni action Last : ils exigeraient de compter la
 table. La barre se replie sur une fenêtre étroite et reste accessible au clavier.
 
-Pour ClickHouse, Elasticsearch/OpenSearch et les collections Redis parcourables, les pages suivent une lecture conservée ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). La barre indique « Pages follow one read. Refresh starts a new read. » Previous retrouve les mêmes lignes ; actualisation, filtre, tri, taille et reconnexion abandonnent la continuation et repartent à la première page. L’expiration ou le budget d’historique produit une erreur explicite, avec possibilité d’actualiser. Les chaînes et documents JSON Redis ont une seule valeur ; les résumés de structures probabilistes ne sont pas des collections de membres. L’ancien OpenSearch sans `_shard_doc` visite successivement les partitions index/shard ; le tri conserve l’aperçu borné de première page et la barre demande de l’effacer pour parcourir les pages natives. Les futures partitions peuvent refléter des modifications concurrentes. OpenSearch 2.0–2.3 conserve son aperçu initial sur la première page, PIT étant apparu en 2.4. Aucun aperçu ne demande un comptage global de lignes ou de résultats.
+Pour les vues et autres relations SQL sans clé de pagination prouvée, les collections/vues/séries temporelles MongoDB, les relations Turso Hrana 3, ClickHouse, Elasticsearch/OpenSearch et les collections Redis parcourables, les pages suivent une lecture conservée ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). La barre indique que la lecture reste ouverte entre les pages et que fermer l’aperçu la libère. Previous retrouve les mêmes lignes ; actualisation, filtre, tri, taille et reconnexion abandonnent la continuation et repartent à la première page. L’expiration ou le budget d’historique produit une erreur explicite, avec possibilité d’actualiser. Les chaînes et documents JSON Redis ont une seule valeur ; les résumés de structures probabilistes ne sont pas des collections de membres. L’ancien OpenSearch sans `_shard_doc` visite successivement les partitions index/shard ; le tri conserve l’aperçu borné de première page et la barre demande de l’effacer pour parcourir les pages natives. Les futures partitions peuvent refléter des modifications concurrentes. OpenSearch 2.0–2.3 conserve son aperçu initial sur la première page, PIT étant apparu en 2.4. Aucun aperçu ne demande un comptage global de lignes ou de résultats. Les valeurs uniques et résumés structurels n’ont pas de barre de pagination. Une source de lignes sans continuation disponible ne présente qu’un sélecteur de limite `Preview rows` et une explication, sans `Page N` ni Previous/Next. Les routines et objets de métadonnées ne deviennent pas exécutés automatiquement. Les erreurs de disponibilité sont visibles, avec reprise uniquement si elles sont classées transitoires ; la clé de requête comprend la session et le résultat affiché pour qu’une ancienne disponibilité ne s’applique jamais à de nouvelles lignes.
 
 Pour les aperçus SQL/par clé indépendants, sur une page suivante, la ligne sous le filtre indique « Page 7 of this order.
 Each page is a new read: the server may have changed between two of them. »,

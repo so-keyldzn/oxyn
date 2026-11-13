@@ -272,7 +272,8 @@ impl std::fmt::Display for MutationRisk {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecLimits {
     /// Number of rows beyond which the result is truncated. `None` = no bound,
-    /// which is only reasonable for an export.
+    /// which is reserved for exports or executor-owned retained previews with
+    /// independent lifetime, history and page bounds.
     pub max_rows: Option<usize>,
     /// Delay after which the execution is abandoned **and cancelled on the
     /// server side**. A delay that only drops the future leaves the query

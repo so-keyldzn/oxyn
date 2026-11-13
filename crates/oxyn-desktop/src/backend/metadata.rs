@@ -95,6 +95,7 @@ impl Backend {
         // sort and the page. Validation belongs to the read, not to the
         // question « may I offer a page ».
         let shape = oxyn_core::PreviewShape {
+            continuable: false,
             sort: applied
                 .sort
                 .iter()
@@ -772,3 +773,6 @@ mod tests;
 
 #[cfg(test)]
 mod real_preview_tests;
+
+#[cfg(test)]
+mod retained_objects_tests;

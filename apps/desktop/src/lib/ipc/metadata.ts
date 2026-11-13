@@ -64,6 +64,7 @@ export const PLAIN_SHAPE: PreviewShape = {
  * is null under the user's sort.
  */
 export const Pagination = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("notApplicable") }),
   z.object({ type: z.literal("unknown") }),
   z.object({ type: z.literal("needsOrder") }),
   z.object({ type: z.literal("noUniqueKey") }),

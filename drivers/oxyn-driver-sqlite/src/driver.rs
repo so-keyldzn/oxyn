@@ -142,7 +142,7 @@ impl SqliteDriver {
     /// Reads both file flags and the engine's query-only state after opening.
     /// Every request retains this restriction even if the caller asks for writable limits.
     #[must_use]
-    fn session_capabilities(read_only: bool) -> Capabilities {
+    pub(crate) fn session_capabilities(read_only: bool) -> Capabilities {
         let mut capabilities = Self::ceiling().difference(Capabilities::READ_ONLY_SESSION);
         if read_only {
             capabilities.remove(Capabilities::DDL | Capabilities::DML);
@@ -269,7 +269,7 @@ impl Driver for SqliteDriver {
             vector_extension: vector_extension(config)?,
         };
 
-        let (worker, thread) = worker::spawn(spec, cancel).await?;
+        let (worker, thread) = worker::spawn(spec.clone(), cancel).await?;
 
         // What the database really allows, asked of the engine rather than
         // inferred from the configuration (ADR-0003).
@@ -290,6 +290,7 @@ impl Driver for SqliteDriver {
             thread,
             Self::session_capabilities(read_only),
             self.limits,
+            spec,
         )))
     }
 }

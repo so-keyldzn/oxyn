@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="00a27a711b49" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="73f53d1ff8f1" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -204,7 +204,7 @@ oxyn/
 │   ├── oxyn-driver-mongodb/      # commandes de base en Extended JSON, documents vers Arrow
 │   │                             #   (ADR-0063) ; dépend d'oxyn-query pour lire une commande
 │   ├── oxyn-driver-elasticsearch/ # REST/JSON, couvre aussi OpenSearch (ADR-0062)
-│   └── oxyn-driver-turso/        # Turso Cloud : Hrana sur HTTP (`/v2/pipeline`), dialecte
+│   └── oxyn-driver-turso/        # Turso Cloud : Hrana sur HTTP (pipeline et curseur), dialecte
 │                                 #   de SQLite, sans libsql, un flux par instruction (ADR-0069)
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
@@ -280,6 +280,8 @@ attachées. La grille de l'aperçu et son annulation sont distinctes de celles d
 l'éditeur SQL.
 
 Les aperçus de collections natives utilisent aussi `Session::prepare_preview` et `execute_preview` ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). Leurs valeurs par défaut conservent l’exécution bornée existante. Une requête conservée utilise la même politique, reclassification, lecture seule, les mêmes événements et le même collecteur de page bornée. `preview_stream::Registry` détient un curseur et un historique Arrow derrière les identités de résultats ; chaque continuation est vérifiée contre connexion, session, relation, taille, filtre, tri et projection. La page est lue à la demande, Previous lit l’historique. Celui-ci est borné à 8 Mio en mémoire, 128 Mio de débordement et 8192 lots par flux ; au plus 16 identités de pages sont détenues, pendant au plus cinq minutes. Dépassement et expiration sont explicites. Fermer une session, oublier sa dernière page ou abandonner une lecture annule et libère le flux. Un garde détient l’annulation dès avant le premier schéma. Les ressources natives restent en Rust ; leurs tâches de nettoyage sont détenues et bornées en temps. Actualiser ou changer la forme depuis l’interface démarre un nouveau flux à la première page.
+
+Les lectures SQL conservées peuvent demander `PreviewMode::Dedicated` ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)). Le registre réserve une des 16 places actives/en ouverture avant d’appeler `open_preview_session` sur le driver vivant. Les sessions privées sont exclues du repli du catalogue. L’annulation cible la session d’exécution réelle, la continuation restant liée à la source logique. Aucun sondage d’état transactionnel n’attend derrière un aperçu suspendu. Les tâches détenues détruisent le curseur avant la fermeture, gardent la capacité jusqu’à la fin du nettoyage, et sont rejointes à la fermeture de la source, la déconnexion et l’arrêt. Les écritures autorisées libèrent les lectures conservées de leur connexion avant exécution. Les échantillons laissent `continuable` à false et n’entrent jamais dans ce cycle.
 
 Pour les aperçus indépendants, la borne de réception de l'aperçu réserve une ligne supplémentaire pour
 confirmer l'épuisement du curseur de la requête déjà limitée. Le `ResultBuffer`
@@ -492,6 +494,8 @@ pub trait Session: Send + Sync {
         shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
     async fn prepare_preview(&self, path: &CatalogPath, limit: u32,
         shape: &PreviewShape, cancel: &CancelToken) -> Result<PreparedPreview>;
+    async fn open_preview_session(&self, path: &CatalogPath,
+        cancel: &CancelToken) -> Result<Box<dyn Session>>;
     async fn execute_preview(&self, request: ExecRequest, cancel: &CancelToken)
         -> Result<Box<dyn Cursor>>;
     async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)

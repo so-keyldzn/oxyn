@@ -39,9 +39,8 @@ pub(crate) struct RelationFacts {
     /// ROWID` tables have none, and paging on a key that only sometimes exists
     /// is the silent failure this whole path avoids.
     key: Vec<String>,
-    /// Whether the key orders the preview when no sort is asked for. A virtual
-    /// table keeps its key for the sorts the user asks for, and is not
-    /// ordered otherwise: see [`Relation::previews_in_key_order`].
+    /// Whether a proven key also offers an inexpensive default order:
+    /// see [`Relation::previews_in_key_order`].
     ordered_by_default: bool,
     /// The key columns whose index collation is not the column's own, with
     /// that collation: the key's `ORDER BY` names it, or SQLite sorts the
@@ -59,11 +58,15 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
-            key: relation
-                .primary_key()
-                .iter()
-                .map(|field| field.name.clone())
-                .collect(),
+            key: if relation.has_preview_key() {
+                relation
+                    .primary_key()
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             ordered_by_default: relation.previews_in_key_order(),
             key_collations: Vec::new(),
         }
@@ -102,6 +105,30 @@ pub(crate) fn request(
     limit: u32,
     shape: &PreviewShape,
     facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    compose(path, limit, shape, facts, false)
+}
+
+pub(crate) fn stream_request(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    if shape.offset != 0 {
+        return Err(OxynError::Config(
+            "a retained preview starts on page one".into(),
+        ));
+    }
+    compose(path, limit, shape, facts, true)
+}
+
+fn compose(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+    retained: bool,
 ) -> Result<ExecRequest> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
@@ -143,9 +170,11 @@ pub(crate) fn request(
         text.push_str(&order);
         text.push(' ');
     }
-    text.push_str(&format!("LIMIT {limit}"));
-    if shape.offset > 0 {
-        text.push_str(&format!(" OFFSET {}", shape.offset));
+    if !retained {
+        text.push_str(&format!("LIMIT {limit}"));
+        if shape.offset > 0 {
+            text.push_str(&format!(" OFFSET {}", shape.offset));
+        }
     }
 
     Ok(
@@ -221,16 +250,16 @@ fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String
         });
     }
     for key in &facts.key {
-        // A column already sorted on makes the order total on its own; adding it
-        // twice would only lengthen the clause.
-        if shape.sort.iter().any(|sort| sort.column == *key) {
-            continue;
-        }
+        // A requested column sort may use a different comparison from its
+        // unique index. Retain the index collation as a tie-breaker then.
         let collation = facts
             .key_collations
             .iter()
             .find(|(column, _)| column == key)
             .map(|(_, collation)| format!(" COLLATE {}", quote_identifier(collation, STYLE)));
+        if collation.is_none() && shape.sort.iter().any(|sort| sort.column == *key) {
+            continue;
+        }
         terms.push(format!(
             "{}{} ASC",
             quote_identifier(key, STYLE),

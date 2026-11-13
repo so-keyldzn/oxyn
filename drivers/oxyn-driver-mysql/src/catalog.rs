@@ -528,13 +528,31 @@ impl CatalogProvider for MysqlCatalog {
             fields.push(field);
         }
         let described = described.with_fields(fields);
+        let keys = described.primary_key();
+        let proven = kind == RelationKind::Table
+            && !keys.is_empty()
+            && keys
+                .iter()
+                .all(|key| !key.nullable && key.primary_key_rank.is_some());
+        let described = if proven {
+            described.with_preview_key()
+        } else {
+            described
+        };
         // Only a base table: a view has no key, whatever `COLUMN_KEY` says of
         // the table underneath.
-        Ok(if kind == RelationKind::Table && key_is_ordered {
+        let described = if kind == RelationKind::Table && key_is_ordered {
             described.with_key_order_preview()
         } else {
             described
-        })
+        };
+        Ok(
+            if described.kind.holds_records() && !described.previews_in_key_order() {
+                described.with_retained_preview(true)
+            } else {
+                described
+            },
+        )
     }
 
     async fn list_indexes(

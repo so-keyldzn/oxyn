@@ -6,13 +6,9 @@
 //! and projected fields are keys of documents the serializer escapes
 //! ([I-10](../../../CLAUDE.md#i-10)).
 //!
-//! The order policy is [ADR-0068](../../../docs/adr/0068-a-preview-comes-in-key-order.md)'s:
-//! a plain preview of a collection comes in `_id` order — unique and indexed,
-//! so `sort: {_id: 1}` with a `limit` walks the index and stops — and a
-//! requested sort is completed by `_id`, so pages never repeat nor skip a
-//! document. A view or a time-series collection has no such key: it is read in
-//! the server's natural order, and a sort or a page past the first is refused
-//! there, like a table without a primary key.
+//! Bounded samples retain their historical ordering policy. Browsing uses a
+//! single native cursor (ADR-0078), including views and time-series without a
+//! unique `_id`. Requested sorts may tie without skipping records between pages.
 //!
 //! What a `find` cannot say is refused, never approximated:
 //!
@@ -52,6 +48,32 @@ pub(crate) fn request(
     relation: Option<&Relation>,
     ordered_by_id: bool,
 ) -> Result<ExecRequest> {
+    compose(path, limit, shape, relation, ordered_by_id, false)
+}
+
+pub(crate) fn stream_request(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    relation: Option<&Relation>,
+    ordered_by_id: bool,
+) -> Result<ExecRequest> {
+    if shape.offset != 0 {
+        return Err(OxynError::Config(
+            "a retained preview starts on page one".into(),
+        ));
+    }
+    compose(path, limit, shape, relation, ordered_by_id, true)
+}
+
+fn compose(
+    path: &CatalogPath,
+    limit: u32,
+    shape: &PreviewShape,
+    relation: Option<&Relation>,
+    ordered_by_id: bool,
+    retained: bool,
+) -> Result<ExecRequest> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
             "preview limit must be in 1..=1000".into(),
@@ -75,18 +97,27 @@ pub(crate) fn request(
         .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))?;
 
     let mut command = doc! { "find": collection, "$db": database };
-    if let Some(sort) = sort(shape, relation, ordered_by_id)? {
+    if let Some(sort) = sort(shape, relation, ordered_by_id, retained)? {
         command.insert("sort", sort);
     }
     if let Some(projection) = projection(shape, relation)? {
         command.insert("projection", projection);
     }
     if shape.offset > 0 {
+        if !relation.is_some_and(Relation::has_preview_key) {
+            return Err(OxynError::NotSupported {
+                capability: "independent MongoDB preview pages without a proven global key; use a retained read".into(),
+            });
+        }
         let skip = i64::try_from(shape.offset)
             .map_err(|_| OxynError::Config("preview offset exceeds a 64-bit integer".into()))?;
         command.insert("skip", skip);
     }
-    command.insert("limit", i64::from(limit));
+    if retained {
+        command.insert("batchSize", i64::from(limit));
+    } else {
+        command.insert("limit", i64::from(limit));
+    }
 
     let raw = RawDocumentBuf::try_from(&command).map_err(|error| {
         OxynError::Internal(format!("a preview command cannot be encoded: {error}"))
@@ -127,6 +158,7 @@ fn sort(
     shape: &PreviewShape,
     relation: Option<&Relation>,
     ordered_by_id: bool,
+    retained: bool,
 ) -> Result<Option<Document>> {
     if !shape.needs_total_order() {
         return Ok(ordered_by_id.then(|| doc! { "_id": 1 }));
@@ -137,7 +169,7 @@ fn sort(
             .iter()
             .any(|field| field.name == "_id")
     });
-    if !keyed {
+    if !keyed && !retained {
         return Err(OxynError::NotSupported {
             capability:
                 "preview order: this relation has no unique `_id` (a view or a time-series \
@@ -151,7 +183,7 @@ fn sort(
         let name = checked(&term.column, relation, "sort on")?;
         sort.insert(name, Bson::Int32(if term.descending { -1 } else { 1 }));
     }
-    if !sort.contains_key("_id") {
+    if keyed && !sort.contains_key("_id") {
         sort.insert("_id", 1);
     }
     Ok(Some(sort))

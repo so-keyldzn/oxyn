@@ -134,10 +134,10 @@ const SQL_NAMESPACE_EXISTS: &str = "SELECT 1 FROM pg_catalog.pg_namespace WHERE 
      AND pg_catalog.has_schema_privilege(oid, 'USAGE')";
 
 /// An open PostgreSQL session.
-#[derive(Debug)]
 pub struct PostgresSession {
     driver: DriverId,
     pool: PgPool,
+    spec: ConnectSpec,
     canceller: Arc<BackendCanceller>,
     statements: Arc<StatementRegistry>,
     variant: PostgresVariant,
@@ -151,6 +151,15 @@ pub struct PostgresSession {
     /// Under a synchronous lock: it is never held across an `await`, only read
     /// the time it takes to compose a statement.
     context: Mutex<Option<SessionContext>>,
+}
+
+impl std::fmt::Debug for PostgresSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresSession")
+            .field("driver", &self.driver)
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresSession {
@@ -172,7 +181,7 @@ impl PostgresSession {
         let capabilities = variant.capabilities();
         // The canceller is shared with the catalog: a long introspection must
         // be cuttable on the server just like a query.
-        let canceller = Arc::new(BackendCanceller::new(spec, driver.clone()));
+        let canceller = Arc::new(BackendCanceller::new(spec.clone(), driver.clone()));
         let catalog = PostgresCatalog::new(
             driver.clone(),
             pool.clone(),
@@ -182,6 +191,7 @@ impl PostgresSession {
             Arc::clone(&canceller),
         );
         Self {
+            spec,
             canceller,
             statements: Arc::new(StatementRegistry::default()),
             driver,
@@ -592,6 +602,43 @@ impl Session for PostgresSession {
         self.catalog
             .preview_request(path, limit, shape, cancel)
             .await
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        self.catalog
+            .prepare_preview(path, limit, shape, cancel)
+            .await
+    }
+
+    async fn open_preview_session(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        if path
+            .namespace()
+            .is_some_and(|name| name == "pg_temp" || name.starts_with("pg_temp_"))
+        {
+            return Err(OxynError::NotSupported {
+                capability: "isolated previews of a connection-local temporary schema".into(),
+            });
+        }
+        let context = self.context();
+        let session =
+            crate::driver::connect_spec(self.driver.clone(), self.spec.clone(), 1, cancel).await?;
+        if let Some(context) = context
+            && let Err(error) = session.set_context(&context, cancel).await
+        {
+            let _ = session.close().await;
+            return Err(error);
+        }
+        Ok(session)
     }
 
     fn catalog(&self) -> &dyn CatalogProvider {

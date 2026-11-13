@@ -3465,3 +3465,9 @@ The result grid uses Query for bounded pages and Virtual for rows and columns;
 Table is used by `RelationStructure`. This is a source inspection, not a memory
 measurement: the page cache's `gcTime` expires inactive entries and is not a
 byte budget. No renderer performance or total memory bound is claimed here.
+
+## Retained SQL and Hrana previews — checked 2026-11-13
+
+The [Hrana 3 specification](https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md) defines GET `/v3` negotiation, `/v3/cursor` NDJSON and pipeline stream closure, with one in-flight request per stream. [libSQL wire types](https://github.com/tursodatabase/libsql/blob/main/libsql-hrana/src/proto.rs) additionally define a terminal `replication_index` cursor entry, confirmed after `step_end` against the disposable server. The [Turso serverless protocol](https://github.com/tursodatabase/turso/blob/main/serverless/PROTOCOL.md) documents batons and routing affinity. ADR-0078 adopts cursor previews without claiming server-side interruption or changing the bounded ordinary pipeline. No dependency versions change.
+
+SQLite [ATTACH](https://www.sqlite.org/lang_attach.html) is connection-local; [shared-cache locking](https://www.sqlite.org/sharedcache.html) retains read locks until transaction end. Isolated previews copy only file-backed attachments, preserve the original target and close before Oxyn writes; they do not enable WAL or `read_uncommitted`. The bundled DuckDB source (`libduckdb-sys` in Cargo.lock) locates built-in views in the real `system` catalog, distinguishing temporary user objects from internal views. Embedded tests read `system.information_schema.tables`, `system.pg_catalog.pg_class` and `system.main.sqlite_master` at those paths.

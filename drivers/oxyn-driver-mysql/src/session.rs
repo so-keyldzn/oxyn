@@ -477,6 +477,59 @@ impl Session for MysqlSession {
             .await
     }
 
+    async fn prepare_preview(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        let relation = self.catalog.describe_relation(path, cancel).await?;
+        let facts = crate::preview::RelationFacts::of(&relation);
+        let retained = relation.retained_preview;
+        Ok(oxyn_driver::PreparedPreview {
+            request: if retained {
+                crate::preview::stream_request(path, limit, shape, &facts)?
+            } else {
+                crate::preview::request(path, limit, shape, &facts)?
+            },
+            mode: if retained {
+                oxyn_driver::PreviewMode::Dedicated
+            } else {
+                oxyn_driver::PreviewMode::Bounded
+            },
+        })
+    }
+
+    async fn open_preview_session(
+        &self,
+        _path: &oxyn_catalog::CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        let context = self
+            .catalog
+            .resolution_path(cancel)
+            .await?
+            .first()
+            .map(|name| oxyn_catalog::CatalogPath::for_namespace(None, name))
+            .transpose()?
+            .as_ref()
+            .map(SessionContext::from_path);
+        let session = crate::driver::connect_spec(
+            self.shared.driver.clone(),
+            self.shared.spec.clone(),
+            cancel,
+        )
+        .await?;
+        if let Some(context) = context
+            && let Err(error) = session.set_context(&context, cancel).await
+        {
+            let _ = session.close().await;
+            return Err(error);
+        }
+        Ok(session)
+    }
+
     fn catalog(&self) -> &dyn CatalogProvider {
         &self.catalog
     }

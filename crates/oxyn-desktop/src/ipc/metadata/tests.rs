@@ -22,7 +22,9 @@ fn relation(columns: &[(&str, bool)]) -> Relation {
             field
         })
         .collect();
-    Relation::new("t", RelationKind::Table).with_fields(fields)
+    Relation::new("t", RelationKind::Table)
+        .with_fields(fields)
+        .with_preview_key()
 }
 
 fn draft(sort: &[&str], offset: u64) -> PreviewShapeDraft {
@@ -153,6 +155,26 @@ fn no_page_is_offered_without_a_total_order() {
         Pagination::Unknown,
         "nothing is said before the description arrives"
     );
+}
+
+#[test]
+fn scalar_summaries_and_metadata_objects_have_no_page_navigation() {
+    let scalar = relation(&[("value", false)]).with_single_page_preview();
+    let routine = Relation::new("routine", RelationKind::Function);
+    for relation in [scalar, routine] {
+        assert_eq!(
+            pagination(&PreviewShape::default(), Some(&relation), 1, PREVIEW_ROWS),
+            Pagination::NotApplicable
+        );
+        assert!(
+            PreviewShapeDraft {
+                offset: 200,
+                ..Default::default()
+            }
+            .into_shape(Some(&relation))
+            .is_err()
+        );
+    }
 }
 
 #[test]

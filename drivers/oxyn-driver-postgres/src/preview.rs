@@ -50,7 +50,7 @@ WITH RECURSIVE target AS ( \
     SELECT k.attnum, k.rank \
     FROM pg_catalog.pg_index i JOIN target ON target.oid = i.indrelid \
     CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, rank) \
-    WHERE i.indisprimary AND k.rank <= i.indnkeyatts \
+    WHERE i.indisprimary AND i.indisvalid AND i.indisready AND k.rank <= i.indnkeyatts \
 ) \
 SELECT c.attname::text, \
        bool_or(t.typsend = 0 OR t.typcategory = 'Z' OR \
@@ -96,13 +96,21 @@ impl RelationFacts {
                 .iter()
                 .map(|field| field.name.clone())
                 .collect(),
-            key: relation
-                .primary_key()
-                .iter()
-                .map(|field| field.name.clone())
-                .collect(),
+            key: if relation.has_preview_key() {
+                relation
+                    .primary_key()
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             ordered_by_default: relation.previews_in_key_order(),
         }
+    }
+
+    pub(crate) fn independent_pages(&self) -> bool {
+        self.ordered_by_default && !self.key.is_empty()
     }
 
     /// The facts read with the typed column list.
@@ -112,6 +120,7 @@ impl RelationFacts {
     /// exactly as [`Relation::previews_in_key_order`] decides.
     pub(crate) fn typed(columns: Vec<String>, key: Vec<String>, key_order: bool) -> Self {
         let ordered_by_default = key_order && !key.is_empty();
+        let key = if key_order { key } else { Vec::new() };
         Self {
             columns,
             key,
@@ -140,11 +149,47 @@ pub(crate) fn request_with_columns(
     shape: &PreviewShape,
     facts: &RelationFacts,
 ) -> Result<ExecRequest> {
+    compose(database, dialect, path, Some(limit), columns, shape, facts)
+}
+
+pub(crate) fn stream_request(
+    database: &str,
+    dialect: SqlDialect,
+    path: &CatalogPath,
+    limit: u32,
+    columns: &[(String, bool)],
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    checked_limit(limit)?;
+    if shape.offset != 0 {
+        return Err(OxynError::Config(
+            "a retained preview starts on page one".into(),
+        ));
+    }
+    compose(database, dialect, path, None, columns, shape, facts)
+}
+
+fn checked_limit(limit: u32) -> Result<usize> {
     if !(1..=1000).contains(&limit) {
         return Err(OxynError::Config(
             "preview limit must be in 1..=1000".into(),
         ));
     }
+    usize::try_from(limit)
+        .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))
+}
+
+fn compose(
+    database: &str,
+    dialect: SqlDialect,
+    path: &CatalogPath,
+    limit: Option<u32>,
+    columns: &[(String, bool)],
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+) -> Result<ExecRequest> {
+    let max_rows = limit.map(checked_limit).transpose()?;
     if path.catalog().is_some_and(|catalog| catalog != database) {
         return Err(OxynError::CatalogUnavailable(
             "preview catalog differs from the connected database".into(),
@@ -159,8 +204,6 @@ pub(crate) fn request_with_columns(
     // PostgreSQL resolves only schema + relation within the connected database.
     let qualified =
         CatalogPath::for_relation(None, Some(namespace), relation)?.qualify_sql(dialect);
-    let max_rows = usize::try_from(limit)
-        .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))?;
     let style = QuoteStyle::for_dialect(dialect);
     let projection = select_list(columns, shape, facts, style)?;
     let order = order_by(shape, facts, style)?;
@@ -190,9 +233,11 @@ pub(crate) fn request_with_columns(
         text.push_str(&order);
         text.push(' ');
     }
-    text.push_str(&format!("LIMIT {limit}"));
-    if shape.offset > 0 {
-        text.push_str(&format!(" OFFSET {}", shape.offset));
+    if let Some(limit) = limit {
+        text.push_str(&format!("LIMIT {limit}"));
+        if shape.offset > 0 {
+            text.push_str(&format!(" OFFSET {}", shape.offset));
+        }
     }
 
     Ok(ExecRequest::new(QueryLanguage::Sql(dialect), text)

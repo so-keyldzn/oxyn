@@ -144,7 +144,7 @@ fn a_relation_without_key_or_without_the_flag_stays_unordered() {
         keyless.text,
         "SELECT * FROM \"sales\".\"main\".\"v\" LIMIT 200"
     );
-    // A key the driver did not vouch for completes a sort, nothing more.
+    // Unproven key metadata cannot become a pagination tie-breaker.
     let fields = vec![
         Field::new("id", 0, LogicalType::INT64, "BIGINT").primary_key(),
         Field::new("name", 1, LogicalType::Text, "VARCHAR"),
@@ -163,7 +163,7 @@ fn a_relation_without_key_or_without_the_flag_stays_unordered() {
     let sorted = request(&path("t"), 200, &sorted, &unvouched).expect("sorted");
     assert_eq!(
         sorted.text,
-        "SELECT * FROM \"sales\".\"main\".\"t\" ORDER BY \"name\" ASC, \"id\" ASC LIMIT 200"
+        "SELECT * FROM \"sales\".\"main\".\"t\" ORDER BY \"name\" ASC LIMIT 200"
     );
 }
 

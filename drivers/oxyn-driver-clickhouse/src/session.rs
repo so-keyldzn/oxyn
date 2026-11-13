@@ -376,7 +376,7 @@ impl Session for ClickhouseSession {
                 .catalog
                 .stream_preview_request(path, limit, shape, cancel)
                 .await?,
-            retained: true,
+            mode: oxyn_driver::PreviewMode::Retained,
         })
     }
 

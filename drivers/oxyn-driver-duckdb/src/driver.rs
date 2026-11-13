@@ -29,7 +29,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use duckdb::Connection;
 use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, OxynError, Result};
 use oxyn_driver::{
     ConnectionField, Credentials, Driver, DriverFamily, DriverMetadata, FieldKind, Session,
@@ -37,8 +36,7 @@ use oxyn_driver::{
 
 use crate::open::{OpenSpec, OpenTarget};
 use crate::options::BatchLimits;
-use crate::session::{self, DuckDbSession};
-use crate::worker;
+use crate::session::DuckDbSession;
 
 /// The embedded DuckDB driver.
 #[derive(Debug)]
@@ -242,26 +240,15 @@ impl Driver for DuckDbDriver {
             read_only: config.read_only,
             file_access: file_access(config),
         };
-        let (worker, thread) = worker::spawn(spec, cancel).await?;
-        let (origin, version) = worker
-            .call(cancel, |connection: &Connection| {
-                let origin = session::current_context(connection)?;
-                let version = crate::query::read(connection, "SELECT version()", &[])?
-                    .rows()
-                    .next()
-                    .and_then(|row| row.text(0))
-                    .unwrap_or_default();
-                Ok((origin, version))
-            })
-            .await?;
-        Ok(Box::new(DuckDbSession::new(
-            worker,
-            thread,
-            Self::session_capabilities(config.read_only),
-            self.limits,
-            origin,
-            version,
-        )))
+        Ok(Box::new(
+            DuckDbSession::open(
+                spec,
+                Self::session_capabilities(config.read_only),
+                self.limits,
+                cancel,
+            )
+            .await?,
+        ))
     }
 }
 

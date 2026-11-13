@@ -682,7 +682,7 @@ async fn the_catalog_lists_databases_schemas_relations_and_constraints() {
         .find(|d| d.name() == "shop")
         .expect("the file's database");
     assert!(shop.is_default);
-    assert!(databases.iter().all(|d| d.name() != "system"));
+    assert!(databases.iter().any(|d| d.name() == "system"));
     let schemas = catalog
         .list_namespaces(Some("shop"), &cancel)
         .await

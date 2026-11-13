@@ -739,6 +739,10 @@ pub struct Relation {
     /// ordered behind its back. Read through [`Self::previews_in_key_order`].
     #[serde(default)]
     pub key_order_preview: bool,
+    /// The driver proved that the key and its comparison semantics form a total
+    /// order. Declared, nullable, inherited or informational keys are not proof.
+    #[serde(default)]
+    pub preview_key: bool,
     /// Pages traverse one retained driver cursor, rather than independent
     /// queries requiring a unique key (ADR-0077).
     #[serde(default)]
@@ -747,6 +751,9 @@ pub struct Relation {
     /// sorted first page remains available, but cannot be continued.
     #[serde(default)]
     pub retained_preview_sort: bool,
+    /// A scalar value or fixed structural summary, not a pageable collection.
+    #[serde(default)]
+    pub single_page_preview: bool,
 }
 
 impl Relation {
@@ -761,8 +768,10 @@ impl Relation {
             size_bytes: None,
             fields: Vec::new(),
             key_order_preview: false,
+            preview_key: false,
             retained_preview: false,
             retained_preview_sort: false,
+            single_page_preview: false,
         }
     }
 
@@ -771,7 +780,21 @@ impl Relation {
     #[must_use]
     pub fn with_key_order_preview(mut self) -> Self {
         self.key_order_preview = true;
+        self.preview_key = true;
         self
+    }
+
+    /// Declares a proven total key order, without promising a cheap default sort.
+    #[must_use]
+    pub fn with_preview_key(mut self) -> Self {
+        self.preview_key = true;
+        self
+    }
+
+    /// Whether a declared key is also usable for independent preview pages.
+    #[must_use]
+    pub fn has_preview_key(&self) -> bool {
+        self.preview_key && self.fields.iter().any(|field| field.is_primary_key)
     }
 
     /// Declares native traversal through a retained cursor.
@@ -779,6 +802,13 @@ impl Relation {
     pub fn with_retained_preview(mut self, supports_sort: bool) -> Self {
         self.retained_preview = true;
         self.retained_preview_sort = supports_sort;
+        self
+    }
+
+    /// Declares a value/summary for which a page-size control has no meaning.
+    #[must_use]
+    pub fn with_single_page_preview(mut self) -> Self {
+        self.single_page_preview = true;
         self
     }
 
@@ -833,11 +863,11 @@ impl Relation {
     /// True when the driver vouches for it ([`Self::key_order_preview`]) and a
     /// primary key is declared. Shared by the drivers, which compose the order,
     /// and by the interface, which decides from it whether a page is offered:
-    /// the two must not disagree. A relation left out keeps its key for the
-    /// sorts the user asks for, and pays for those knowingly.
+    /// the two must not disagree. A key without the cost flag can complete a
+    /// requested sort only when `preview_key` proves its uniqueness.
     #[must_use]
     pub fn previews_in_key_order(&self) -> bool {
-        self.key_order_preview && self.fields.iter().any(|col| col.is_primary_key)
+        self.key_order_preview && self.has_preview_key()
     }
 
     /// Is the schema of this relation, in whole or in part, **deduced**?

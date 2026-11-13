@@ -103,6 +103,7 @@ pub struct SessionSlot {
     opened_at: Instant,
     session: AsyncRwLock<Option<Box<dyn Session>>>,
     closing: CancelToken,
+    preview: bool,
 }
 
 impl SessionSlot {
@@ -121,7 +122,19 @@ impl SessionSlot {
             opened_at: Instant::now(),
             session: AsyncRwLock::new(Some(session)),
             closing: CancelToken::new(),
+            preview: false,
         }
+    }
+
+    /// A private execution slot, never eligible to become the catalog session.
+    pub(crate) fn preview(connection: ConnectionId, session: Box<dyn Session>) -> Self {
+        let mut slot = Self::new(connection, session);
+        slot.preview = true;
+        slot
+    }
+
+    pub(crate) const fn is_preview(&self) -> bool {
+        self.preview
     }
 
     /// The session's identifier.
@@ -235,11 +248,42 @@ impl SessionSlot {
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        let operation = session.prepare_preview(path, limit, shape, &token);
+        let operation = async {
+            if shape.continuable {
+                session.prepare_preview(path, limit, shape, &token).await
+            } else {
+                Ok(oxyn_driver::PreparedPreview {
+                    request: session.preview_request(path, limit, shape, &token).await?,
+                    mode: oxyn_driver::PreviewMode::Bounded,
+                })
+            }
+        };
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,
             _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
+    }
+
+    /// Fork through the live driver's opening identity, not mutable settings.
+    pub(crate) async fn open_preview_session(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        let token = cancel.child();
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        let opening = session.open_preview_session(path, &token);
+        tokio::pin!(opening);
+        tokio::select! {
+            result = &mut opening => result,
+            _ = self.closing.cancelled() => { token.cancel(); opening.await }
         }
     }
 

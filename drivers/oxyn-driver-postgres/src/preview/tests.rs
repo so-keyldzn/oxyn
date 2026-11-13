@@ -15,7 +15,9 @@ fn relation(columns: &[(&str, bool)]) -> Relation {
             field
         })
         .collect::<Vec<_>>();
-    Relation::new("t", RelationKind::Table).with_fields(fields)
+    Relation::new("t", RelationKind::Table)
+        .with_fields(fields)
+        .with_preview_key()
 }
 
 /// The facts of an ordinary PostgreSQL table, whose previews the driver
@@ -98,21 +100,24 @@ fn a_composite_key_orders_in_index_order_not_table_order() {
 fn a_relation_not_vouched_for_is_ordered_only_when_asked() {
     // An inheritance parent: its key exists, but no child carries its index.
     let unvouched = [
-        RelationFacts::of(&relation(&[("id", true), ("name", false)])),
+        RelationFacts::of(&Relation::new("t", RelationKind::Table).with_fields(vec![
+            Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
+            Field::new("name", 1, LogicalType::Text, "text"),
+        ])),
         RelationFacts::typed(vec!["id".into(), "name".into()], vec!["id".into()], false),
     ];
     for facts in &unvouched {
         let plain = compose(&PreviewShape::unordered(), facts).expect("plain preview");
         assert_eq!(plain.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
-        // Its key still completes a page, so the page stays honest.
+        // An inheritance key cannot establish a total order across children.
         let page = PreviewShape {
             offset: 200,
             ..PreviewShape::default()
         };
-        assert_eq!(
-            compose(&page, facts).expect("page").text,
-            "SELECT * FROM \"public\".\"t\" ORDER BY \"id\" ASC LIMIT 200 OFFSET 200"
-        );
+        assert!(matches!(
+            compose(&page, facts),
+            Err(OxynError::NotSupported { .. })
+        ));
     }
 }
 

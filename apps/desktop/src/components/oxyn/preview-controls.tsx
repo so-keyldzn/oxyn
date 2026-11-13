@@ -107,7 +107,7 @@ export function previewNotice({
             text: "No row matches this filter. The read succeeded; the table may still hold rows.",
             warning: false,
           }
-        : { text: "This table holds no rows.", warning: false }
+        : { text: "This source returned no rows.", warning: false }
     case "loading":
       return pending
         ? {
@@ -126,6 +126,8 @@ export function previewNotice({
   }
   if (status !== "loaded" || !pagination) return null
   switch (pagination.type) {
+    case "notApplicable":
+      return null
     case "needsNativeOrder":
       return {
         text: "Clear the sort to browse this server's native order.",
@@ -133,7 +135,7 @@ export function previewNotice({
       }
     case "retained":
       return {
-        text: "Pages follow the same read. Concurrent changes may affect rows not yet read.",
+        text: "Pages follow the same read, which stays open between pages. Close the preview to release it. Concurrent changes may affect rows not yet read.",
         warning: false,
       }
     case "unknown":
@@ -147,10 +149,8 @@ export function previewNotice({
         offersSort: true,
       }
     case "noUniqueKey":
-      return {
-        text: "This preview stays on its first page: no unique key is known for this relation, so no order can be made total.",
-        warning: false,
-      }
+      // The bounded-preview footer explains why navigation is unavailable.
+      return null
     case "ready":
       if (pagination.previous)
         return {
@@ -175,6 +175,7 @@ const NOT_COUNTED = "total row count not requested"
  * past the first page. Pure, so it is tested without a DOM.
  */
 export function previewFooterNote(pagination: Pagination | null, rows: number) {
+  if (pagination?.type === "notApplicable") return "Value or structural summary"
   if (
     (pagination?.type === "ready" || pagination?.type === "retained") &&
     pagination.firstRow > 1 &&

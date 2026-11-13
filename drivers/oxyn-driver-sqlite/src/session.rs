@@ -55,12 +55,15 @@ use crate::cursor::SqliteCursor;
 use crate::error::{self, Effect};
 use crate::options::BatchLimits;
 use crate::stream::StreamJob;
-use crate::worker::WorkerHandle;
+use crate::worker::{OpenSpec, WorkerHandle};
+
+mod preview;
 
 /// An open SQLite connection.
 #[derive(Debug)]
 pub struct SqliteSession {
     worker: WorkerHandle,
+    spec: OpenSpec,
     /// The worker thread's handle, kept so that it is never orphaned.
     ///
     /// It is not joined on close: the thread closes the connection **before**
@@ -79,9 +82,11 @@ impl SqliteSession {
         thread: JoinHandle<()>,
         capabilities: Capabilities,
         limits: BatchLimits,
+        spec: OpenSpec,
     ) -> Self {
         Self {
             catalog: SqliteCatalog::new(worker.clone(), capabilities),
+            spec,
             worker,
             thread: Some(thread),
             capabilities,
@@ -212,45 +217,29 @@ impl Session for SqliteSession {
         shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        if cancel.is_cancelled() {
-            return Err(OxynError::Cancelled);
-        }
-        // A projection is checked against the same description: a name the
-        // relation does not declare is refused here, not by the engine.
-        // Described where the preview reads: the catalog looks at the namespace
-        // alone, and a preview path may carry the database as a catalog.
-        let described = oxyn_catalog::CatalogPath::for_relation(
-            None,
-            Some(crate::preview::database_of(path)?),
-            path.relation().ok_or_else(|| {
-                OxynError::CatalogUnavailable("preview path must name a relation".into())
-            })?,
-        )?;
-        let facts = match self.catalog.describe_relation(&described, cancel).await {
-            Ok(relation) => {
-                let facts = crate::preview::RelationFacts::of(&relation);
-                // Only a relation previewed in key order reads its key's index:
-                // the others compose no order the index could serve.
-                if relation.previews_in_key_order() {
-                    facts.with_key_index(&self.catalog.key_index(&described, cancel).await?)
-                } else {
-                    facts
-                }
-            }
-            // A table whose module this connection does not load cannot be
-            // described, and nothing here needs it: the read that follows fails
-            // with the same module as data, which is what the Data tab explains.
-            // Only a shape that depends on the description fails here.
-            Err(error)
-                if error.missing_module().is_some()
-                    && !shape.needs_total_order()
-                    && shape.columns.is_none() =>
-            {
-                crate::preview::RelationFacts::default()
-            }
-            Err(error) => return Err(error),
-        };
-        crate::preview::request(path, limit, shape, &facts)
+        Ok(self
+            .prepare_data_preview(path, limit, shape, cancel, false)
+            .await?
+            .request)
+    }
+
+    async fn prepare_preview(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        shape: &oxyn_core::PreviewShape,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        self.prepare_data_preview(path, limit, shape, cancel, true)
+            .await
+    }
+
+    async fn open_preview_session(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>> {
+        self.fork_preview(path, cancel).await
     }
 
     fn catalog(&self) -> &dyn CatalogProvider {

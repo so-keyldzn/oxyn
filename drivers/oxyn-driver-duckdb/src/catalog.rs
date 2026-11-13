@@ -34,21 +34,21 @@ use crate::query::{self, Table};
 use crate::types::logical_type;
 use crate::worker::WorkerHandle;
 
-/// The databases, `system` excepted.
+/// Every database, including the real owner of built-in catalog views.
 const SQL_DATABASES: &str = "SELECT database_name, comment FROM duckdb_databases() \
-     WHERE database_name <> 'system' ORDER BY database_name";
+     ORDER BY database_name";
 /// The schemas of a database.
 ///
 /// Not `internal`: DuckDB sets it on `main` too, which is the user's schema.
 /// The two schemas DuckDB fills with its own catalog views are named.
 const SQL_SCHEMAS: &str = "SELECT schema_name, comment, \
-     schema_name IN ('information_schema', 'pg_catalog') FROM duckdb_schemas() \
+     (database_name = 'system' OR schema_name IN ('information_schema', 'pg_catalog')) FROM duckdb_schemas() \
      WHERE database_name = $1 ORDER BY schema_name";
 /// The tables and views of a schema.
 const SQL_RELATIONS: &str = "SELECT table_name, 'table', comment FROM duckdb_tables() \
      WHERE database_name = $1 AND schema_name = $2 \
      UNION ALL SELECT view_name, 'view', comment FROM duckdb_views() \
-     WHERE database_name = $1 AND schema_name = $2 AND NOT internal \
+     WHERE database_name = $1 AND schema_name = $2 \
      ORDER BY 1";
 /// One relation's kind, comment, row estimate and stored definition.
 const SQL_RELATION: &str = "SELECT 'table', comment, estimated_size, sql FROM duckdb_tables() \
@@ -472,11 +472,24 @@ impl CatalogProvider for DuckDbCatalog {
         // rows (M1 Max): 2 ms in insertion order, 25 ms shuffled, 0.13–0.5 s at
         // OFFSET 5M — bounded enough for a preview. A view declares no key, so
         // the flag would order nothing there.
-        Ok(if described.kind == RelationKind::Table {
+        let described = if described.kind == RelationKind::Table {
             described.with_key_order_preview()
         } else {
             described
-        })
+        };
+        Ok(
+            if !described.previews_in_key_order()
+                && described.kind.holds_records()
+                && self
+                    .worker
+                    .call(cancel, crate::preview_context::reproducible)
+                    .await?
+            {
+                described.with_retained_preview(true)
+            } else {
+                described
+            },
+        )
     }
 
     async fn list_indexes(

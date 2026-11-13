@@ -187,7 +187,11 @@ pub(crate) fn prepare_request(
         } else {
             request(path, relation, limit, shape)?
         },
-        retained,
+        mode: if retained {
+            oxyn_driver::PreviewMode::Retained
+        } else {
+            oxyn_driver::PreviewMode::Bounded
+        },
     })
 }
 
@@ -310,14 +314,14 @@ mod tests {
                 &product,
             )
             .expect("first page");
-            assert_eq!(plain.retained, pit);
+            assert_eq!(plain.mode.retains_cursor(), pit);
             let sorted = PreviewShape {
                 sort: vec![PreviewSort::ascending("message.keyword")],
                 ..PreviewShape::default()
             };
             let prepared = prepare_request(&path("alias"), &relation(), 50, &sorted, &product)
                 .expect("sorting remains available");
-            assert_eq!(prepared.retained, shard);
+            assert_eq!(prepared.mode.retains_cursor(), shard);
         }
     }
 

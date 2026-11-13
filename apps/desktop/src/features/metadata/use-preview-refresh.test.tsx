@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { PreviewShape, RefreshSignal } from "@/lib/ipc/metadata"
+import type {
+  Pagination,
+  PreviewShape,
+  RefreshSignal,
+} from "@/lib/ipc/metadata"
 import type { CommandOutcome, OpenConnection } from "@/lib/ipc/types"
 
 // The backend a preview reads through, answered by hand: the test counts the
@@ -12,6 +16,11 @@ const ipc = vi.hoisted(() => {
   const state = {
     pending,
     retained: false,
+    holdPagination: false,
+    paginationReplies: [] as Array<{
+      resolve: (value: Pagination) => void
+      reject: (error: Error) => void
+    }>,
     next: 0,
     emit: (_signal: RefreshSignal): void => undefined,
     cancelled: [] as Array<string>,
@@ -41,14 +50,18 @@ vi.mock("@/lib/ipc/metadata", async (importOriginal) => {
         return new Promise((resolve) => ipc.pending.set(id, resolve))
       },
       previewPagination: () =>
-        ipc.retained
-          ? Promise.resolve({
-              type: "retained",
-              previous: true,
-              next: true,
-              firstRow: 1,
-            })
-          : new Promise(() => undefined),
+        ipc.holdPagination
+          ? new Promise<Pagination>((resolve, reject) =>
+              ipc.paginationReplies.push({ resolve, reject })
+            )
+          : ipc.retained
+            ? Promise.resolve({
+                type: "retained",
+                previous: true,
+                next: true,
+                firstRow: 1,
+              })
+            : new Promise(() => undefined),
       subscribeRefreshSignals: (onSignal: (signal: RefreshSignal) => void) => {
         ipc.emit = onSignal
         return Promise.resolve()
@@ -57,6 +70,9 @@ vi.mock("@/lib/ipc/metadata", async (importOriginal) => {
   }
 })
 vi.mock("@/lib/ipc/client", () => ({
+  BackendError: class BackendError extends Error {
+    retryable = true
+  },
   backend: {
     cancel: (id: string) => {
       ipc.cancelled.push(id)
@@ -157,6 +173,8 @@ const readsSince = (mark: number) => ipc.reads.slice(mark)
 
 beforeEach(() => {
   ipc.retained = false
+  ipc.holdPagination = false
+  ipc.paginationReplies = []
   ipc.reads = []
   ipc.cancelled = []
   ipc.pending.clear()
@@ -439,45 +457,108 @@ describe("an automatic read on a tab that is no longer shown", () => {
   })
 })
 
-it.each(["clickhouse", "elasticsearch", "redis"])(
-  "keeps only %s navigation on its retained read",
-  async (driver) => {
-    ipc.retained = true
-    const open = { ...opened(), driver }
-    const view = renderPreviews(open, ["native"])
-    const preview = () => {
-      const value = view.result.current.at(0)
-      if (!value) throw new Error("one preview is mounted")
-      return value
-    }
-    await answerAll(() => ({ ...executed("first"), rows: 200 }))
-    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-    act(() => preview().page(true))
-    expect(ipc.reads.at(-1)?.shape).toMatchObject({
-      offset: 200,
-      continuation: "first",
-    })
-    await answerAll(() => ({ ...executed("second"), rows: 200 }))
-    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-    act(() => preview().page(false))
-    expect(ipc.reads.at(-1)?.shape).toMatchObject({
-      offset: 0,
-      continuation: "second",
-    })
-    await answerAll(() => ({ ...executed("back"), rows: 200 }))
-    await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
-    act(() => preview().refresh())
-    expect(ipc.reads.at(-1)?.shape).toMatchObject({
-      offset: 0,
-      continuation: null,
-    })
-    await answerAll(executed)
-    act(() => preview().resizePage(50))
-    expect(ipc.reads.at(-1)?.shape).toMatchObject({
-      offset: 0,
-      pageSize: 50,
-      continuation: null,
-    })
-    await answerAll(executed)
+it.each([
+  "clickhouse",
+  "elasticsearch",
+  "redis",
+  "postgres",
+  "mysql",
+  "sqlite",
+  "duckdb",
+  "mongodb",
+  "turso",
+])("keeps only %s navigation on its retained read", async (driver) => {
+  ipc.retained = true
+  const open = { ...opened(), driver }
+  const view = renderPreviews(open, ["native"])
+  const preview = () => {
+    const value = view.result.current.at(0)
+    if (!value) throw new Error("one preview is mounted")
+    return value
   }
-)
+  await answerAll(() => ({ ...executed("first"), rows: 200 }))
+  await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+  act(() => preview().page(true))
+  expect(ipc.reads.at(-1)?.shape).toMatchObject({
+    offset: 200,
+    continuation: "first",
+  })
+  await answerAll(() => ({ ...executed("second"), rows: 200 }))
+  await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+  act(() => preview().page(false))
+  expect(ipc.reads.at(-1)?.shape).toMatchObject({
+    offset: 0,
+    continuation: "second",
+  })
+  await answerAll(() => ({ ...executed("back"), rows: 200 }))
+  await waitFor(() => expect(preview().pagination?.type).toBe("retained"))
+  act(() => preview().refresh())
+  expect(ipc.reads.at(-1)?.shape).toMatchObject({
+    offset: 0,
+    continuation: null,
+  })
+  await answerAll(executed)
+  act(() => preview().resizePage(50))
+  expect(ipc.reads.at(-1)?.shape).toMatchObject({
+    offset: 0,
+    pageSize: 50,
+    continuation: null,
+  })
+  await answerAll(executed)
+})
+
+it("does not attach stale page availability to a same-size refreshed result", async () => {
+  ipc.holdPagination = true
+  const view = renderPreviews(opened(), ["a_view"])
+  await answerAll(() => ({ ...executed("old"), rows: 200 }))
+  await waitFor(() => expect(ipc.paginationReplies).toHaveLength(1))
+  act(() => view.result.current.at(0)?.refresh())
+  await answerAll(() => ({ ...executed("new"), rows: 200 }))
+  await waitFor(() => expect(ipc.paginationReplies).toHaveLength(2))
+  await act(async () =>
+    ipc.paginationReplies[0]?.resolve({ type: "noUniqueKey" })
+  )
+  expect(view.result.current.at(0)?.pagination).toBeNull()
+  await act(async () =>
+    ipc.paginationReplies[1]?.resolve({
+      type: "retained",
+      previous: false,
+      next: true,
+      firstRow: 1,
+    })
+  )
+  await waitFor(() =>
+    expect(view.result.current.at(0)?.pagination?.type).toBe("retained")
+  )
+})
+
+it("exposes availability failures and retries without rerunning the preview", async () => {
+  ipc.holdPagination = true
+  const view = renderPreviews(opened(), ["a_view"])
+  await answerAll(executed)
+  await waitFor(() => expect(ipc.paginationReplies).toHaveLength(1))
+  await act(async () =>
+    ipc.paginationReplies[0]?.reject(new Error("metadata unavailable"))
+  )
+  await waitFor(() =>
+    expect(view.result.current.at(0)?.paginationError?.message).toBe(
+      "metadata unavailable"
+    )
+  )
+  expect(view.result.current.at(0)?.pagination).toBeNull()
+  const reads = ipc.reads.length
+  act(() => view.result.current.at(0)?.retryPagination())
+  await waitFor(() => expect(ipc.paginationReplies).toHaveLength(2))
+  expect(ipc.reads).toHaveLength(reads)
+  await act(async () =>
+    ipc.paginationReplies[1]?.resolve({
+      type: "retained",
+      previous: false,
+      next: false,
+      firstRow: 1,
+    })
+  )
+  await waitFor(() =>
+    expect(view.result.current.at(0)?.paginationError).toBeNull()
+  )
+})

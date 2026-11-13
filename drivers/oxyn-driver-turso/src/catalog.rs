@@ -244,10 +244,28 @@ impl CatalogProvider for TursoCatalog {
         // A b-tree table answers `ORDER BY key LIMIT n` from its index; a view
         // has no key, and a virtual table's module decides what reading it in
         // key order costs, so its preview stays unordered (ADR-0068).
-        Ok(if is_virtual {
-            described
+        if self.http.supports_cursor(&self.driver, cancel).await? {
+            return Ok(described.with_retained_preview(true));
+        }
+        let key = described.primary_key();
+        let rowid_candidate = !is_virtual
+            && key.len() == 1
+            && key
+                .first()
+                .is_some_and(|field| field.raw_type.eq_ignore_ascii_case("INTEGER"));
+        let rowid = if rowid_candidate {
+            let check = self.rows("SELECT NOT EXISTS(SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk') AS rowid_key", &args, cancel).await?;
+            check
+                .first()
+                .and_then(|row| row.first())
+                .is_some_and(|value| matches!(value, Cell::Integer(1)))
         } else {
+            false
+        };
+        Ok(if rowid {
             described.with_key_order_preview()
+        } else {
+            described
         })
     }
 

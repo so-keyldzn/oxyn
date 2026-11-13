@@ -21,8 +21,10 @@ async fn abandoning_execute_during_the_first_batch_frees_the_engine() {
         read_only: false,
         vector_extension: false,
     };
-    let (handle, thread) = worker::spawn(spec, &cancel_token).await.expect("open");
-    let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new());
+    let (handle, thread) = worker::spawn(spec.clone(), &cancel_token)
+        .await
+        .expect("open");
+    let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new(), spec);
 
     {
         let exec_request = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), ENDLESS);

@@ -105,12 +105,15 @@ fn a_virtual_table_is_ordered_only_when_the_user_sorts_it() {
         request.text,
         "SELECT * FROM \"main\".\"t\" ORDER BY \"chunk_id\" ASC LIMIT 200"
     );
-    // Its key still completes a sort, so a page over it stays honest.
+    // A virtual module's metadata does not prove unique independent pages.
     let page = PreviewShape {
         offset: 200,
         ..sorted
     };
-    assert!(compose(&page, &facts).is_ok());
+    assert!(matches!(
+        compose(&page, &facts),
+        Err(OxynError::NotSupported { .. })
+    ));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="3622adb95eec" -->
+<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="37edb55ff865" -->
 
 > Traduction française de [docs/PERFORMANCE.md](../../../docs/PERFORMANCE.md). **La version anglaise fait foi.**
 
@@ -370,3 +370,9 @@ le gain est supposé.
 Le corollaire vaut aussi dans l'autre sens : un `.clone()` sur un chemin appelé
 une fois par ouverture de fenêtre n'est pas un problème de performance, et le
 transformer en emprunt qui contamine cinq signatures est une perte nette.
+
+## Bornes des ressources des aperçus conservés
+
+[ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md) : par ordonnanceur, 16 lectures actives/en ouverture, réservées avant création et gardées jusqu’au nettoyage asynchrone. Par lecture : cinq minutes, 8 Mio d’historique Arrow, 128 Mio de débordement, 8192 lots ; le registre garde au plus 16 identités de résultats. Les limites échouent explicitement. Les lots du driver peuvent anticiper la page affichée.
+
+Cadrage Turso : 32 Mio par trame, en-têtes de 1 Mio, 4096 colonnes. Échantillons/lots s’arrêtent à 200 lignes ou 1 Mio de cellules estimé plus une ligne bornée. Les canaux contiennent chacun un élément. Acquisition d’en-tête et fermeture sont chacune bornées à 10 secondes. Le pipeline ordinaire garde son plafond global de 32 Mio. Ces limites sont imposées ; ce n’est pas une nouvelle mesure RSS.
