@@ -55,6 +55,10 @@ pub async fn preview_relation(
 }
 
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the named IPC payload plus the backend and calling webview injected by Tauri"
+)]
 pub async fn preview_pagination(
     webview: Webview,
     backend: State<'_, Backend>,
@@ -233,6 +237,10 @@ pub async fn search_catalog(
 
 /// A query to review in a new console; this command never runs it.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the named IPC payload plus the backend and calling webview injected by Tauri"
+)]
 pub async fn related_rows_template(
     webview: Webview,
     backend: State<'_, Backend>,

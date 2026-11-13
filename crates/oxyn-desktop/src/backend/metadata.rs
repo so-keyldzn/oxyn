@@ -97,19 +97,18 @@ impl Backend {
         let page_size = applied.checked_page_size()?;
         let path = address.to_path()?;
         let cache = self.catalog_for(connection, owner)?;
-        if let (Some(owner), Some(result)) = (owner, result) {
-            if self
+        if let (Some(owner), Some(result)) = (owner, result)
+            && self
                 .inner
                 .executor
                 .retains_preview_result(connection, owner, result, &path)
                 .map_err(IpcError::from)?
-            {
-                return Ok(Pagination::Retained {
-                    previous: applied.offset > 0,
-                    next: rows >= u64::from(page_size),
-                    first_row: applied.offset.saturating_add(1),
-                });
-            }
+        {
+            return Ok(Pagination::Retained {
+                previous: applied.offset > 0,
+                next: rows >= u64::from(page_size),
+                first_row: applied.offset.saturating_add(1),
+            });
         }
         let relation = cache.read().relation(&path).cloned();
         // Only what decides the order is carried over: the columns of the

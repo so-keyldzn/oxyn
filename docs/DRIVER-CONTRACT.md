@@ -129,7 +129,9 @@ It never closes the owning session or rolls back a user transaction. SQLite
 and DuckDB acknowledge their worker queue; MySQL acknowledges its connection
 lease; PostgreSQL joins its portal cleanup. The caller retains capacity and
 occupancy until this acknowledgement. A driver cannot claim original-session
-continuation while replacing its physical context silently.
+continuation while replacing its physical context silently. Existing read-only
+bounds still apply: a MySQL source with an open user transaction must finish
+that transaction before browsing; preview cleanup must never roll it back.
 
 **Concrete failure:** a driver that vouches for a SQLite `vec0` table, because
 it declares a primary key, makes a click on that table read every vector into a

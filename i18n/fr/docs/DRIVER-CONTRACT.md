@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="dc105d71ff44" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="2906ee2a38b2" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -139,7 +139,10 @@ transaction utilisateur. SQLite et DuckDB acquittent la file de leur worker ;
 MySQL son bail de connexion ; PostgreSQL rejoint le nettoyage du portail.
 L’appelant garde capacité et occupation jusqu’à cet acquittement. Un driver
 ne peut annoncer une continuation originale en remplaçant silencieusement son
-contexte physique.
+contexte physique. Les limites de lecture seule existantes restent applicables :
+une source MySQL ayant une transaction utilisateur ouverte doit la terminer
+avant de parcourir les données ; le nettoyage de l’aperçu ne doit jamais
+l’annuler.
 
 **Panne concrète :** un driver qui se porte garant d'une table `vec0` de
 SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette

@@ -2370,25 +2370,13 @@ async fn introspection_does_not_depend_on_a_console_context() {
          it then proves nothing about what the pool keeps"
     );
 
-    // Introspection must borrow a recycled backend. The bound is currently
-    // one; holding any other configured slots keeps this assertion deterministic.
-    let mut held = Vec::new();
-    for _ in 1..MAX_CONNECTIONS {
-        held.push(
-            session
-                .execute(read_request(DEFINED_QUERY), &CancelToken::new())
-                .await
-                .expect("execution"),
-        );
-    }
+    // One physical backend makes reuse deterministic without occupying siblings.
     assert_eq!(
         definition_fingerprint(&*session, &path).await,
         reference,
         "introspection followed the console context"
     );
-    drop(held);
-
-    // Then alternating, to cover the connections as the pool rotates them.
+    // Alternate execution and introspection to catch a leaking context reset.
     for round in 0..4 {
         let _ = on_whole_pool(&*session, DEFINED_QUERY).await;
         assert_eq!(

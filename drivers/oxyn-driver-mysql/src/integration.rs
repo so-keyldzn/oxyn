@@ -931,7 +931,10 @@ async fn errors_after_a_kill_mid_transaction(
         "the transaction went with the connection"
     );
     assert_lost_session(session).await;
-    apply(observer, "DROP TABLE oxyn_tx_lost").await;
+    // The observer can still own LOCK TABLES on the statement's other table.
+    let cleanup = self::session().await.expect("independent cleanup session");
+    apply(&*cleanup, "DROP TABLE oxyn_tx_lost").await;
+    cleanup.close().await.expect("cleanup close");
     errors
 }
 
