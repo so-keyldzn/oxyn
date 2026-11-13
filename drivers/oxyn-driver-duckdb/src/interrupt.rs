@@ -115,8 +115,8 @@ impl Interrupter {
         true
     }
 
-    /// The carrier thread finished the current task, its statements and
-    /// results released.
+    /// Retires the current task's cancellation target. The carrier remains
+    /// serial while its uninterruptible cleanup finishes before the next task.
     pub(crate) fn end(&self) {
         self.turn.lock().running = None;
     }
