@@ -36,6 +36,19 @@ pub(super) struct Owners {
 pub(super) struct Lease {
     pub slot: Arc<SessionSlot>,
     release: CancelToken,
+    completed: Option<oneshot::Receiver<Result<()>>>,
+}
+
+impl Lease {
+    pub async fn finish(mut self) -> Result<()> {
+        self.release.cancel();
+        match self.completed.take() {
+            Some(done) => done
+                .await
+                .map_err(|_| OxynError::Internal("the preview cleanup owner stopped".into()))?,
+            None => Ok(()),
+        }
+    }
 }
 
 impl Drop for Lease {
@@ -59,6 +72,7 @@ impl Owners {
         state: Weak<AsyncMutex<State>>,
         token: CancelToken,
         permit: OwnedSemaphorePermit,
+        original: bool,
     ) -> Result<Lease> {
         let (reply, answer) = oneshot::channel();
         {
@@ -82,51 +96,77 @@ impl Owners {
             let group_cancel = group.cancel.clone();
             let sessions = Arc::clone(&self.sessions);
             group.tasks.spawn(async move {
-                let _capacity = permit;
-                let opening = owner.open_preview_session(&path, &token);
-                tokio::pin!(opening);
-                let opened = tokio::select! {
-                    result = &mut opening => result,
-                    () = group_cancel.cancelled() => {
-                        token.cancel();
-                        opening.await
+                let capacity = permit;
+                let opening = async {
+                    if original {
+                        let reservation = owner.reserve_original_preview(&token).await?;
+                        Ok((Arc::clone(&owner), Some(reservation)))
+                    } else {
+                        let session = owner.open_preview_session(&path, &token).await?;
+                        Ok((
+                            sessions.insert(SessionSlot::preview(owner.connection(), session)),
+                            None,
+                        ))
                     }
                 };
-                let session = match opened {
-                    Ok(session) => session,
+                tokio::pin!(opening);
+                let opened: Result<_> = tokio::select! {
+                    result = &mut opening => result,
+                    () = group_cancel.cancelled() => { token.cancel(); opening.await }
+                };
+                let (slot, reservation) = match opened {
+                    Ok(opened) => opened,
                     Err(error) => {
                         let _ = reply.send(Err(error));
                         return;
                     }
                 };
                 if token.is_cancelled() || group_cancel.is_cancelled() {
-                    let _ = session.close().await;
+                    if !original {
+                        let _ = slot.close().await;
+                        sessions.remove(slot.id());
+                    }
                     let _ = reply.send(Err(OxynError::Cancelled));
                     return;
                 }
-                let slot = sessions.insert(SessionSlot::preview(owner.connection(), session));
                 let release = CancelToken::new();
-                // Failed delivery drops the lease and wakes cleanup too.
+                let (done, completed) = oneshot::channel();
                 let _ = reply.send(Ok(Lease {
                     slot: Arc::clone(&slot),
                     release: release.clone(),
+                    completed: Some(completed),
                 }));
                 tokio::select! {
                     () = token.cancelled() => {}
                     () = release.cancelled() => {}
                     () = group_cancel.cancelled() => { token.cancel(); }
                 }
-                // A cursor can hold the connection mutex or worker. Closing
-                // the session first would wait behind that cursor forever.
                 if let Some(state) = state.upgrade() {
-                    let mut state = state.lock().await;
-                    state.cursor.take();
-                    state.lease.take();
+                    // Releasing the lease follows cursor destruction. EOF may
+                    // await cleanup while its page still holds the state lock.
+                    let guard = tokio::select! {
+                        biased;
+                        () = release.cancelled() => None,
+                        guard = state.lock() => Some(guard),
+                    };
+                    if let Some(mut state) = guard {
+                        state.cursor.take();
+                        state.lease.take();
+                    }
                 }
-                if slot.close().await.is_err() {
-                    tracing::warn!("a preview session refused a clean close");
+                let closed = if original {
+                    slot.finish_original_preview().await
+                } else {
+                    let closed = slot.close().await;
+                    sessions.remove(slot.id());
+                    closed
+                };
+                if closed.is_err() {
+                    tracing::warn!("a preview resource refused clean cleanup");
                 }
-                sessions.remove(slot.id());
+                drop(reservation);
+                drop(capacity);
+                let _ = done.send(closed);
             });
         }
         answer.await.map_err(|_| {

@@ -64,7 +64,8 @@ export function nameAt(
  */
 export function loadedObject(
   nodes: ReadonlyArray<CatalogNode>,
-  parts: ReadonlyArray<NamePart>
+  parts: ReadonlyArray<NamePart>,
+  includeSystem = false
 ): CatalogAddress | null {
   const relation = parts[parts.length - 1]
   if (relation === undefined || parts.length > 3) return null
@@ -73,7 +74,7 @@ export function loadedObject(
   const found: Array<CatalogNode> = []
   const walk = (level: ReadonlyArray<CatalogNode>) => {
     for (const node of level) {
-      if (node.system) continue
+      if (node.system && !includeSystem) continue
       if (node.address.relation !== null) {
         if (
           sameName(relation, node.name) &&

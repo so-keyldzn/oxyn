@@ -298,12 +298,9 @@ fn parse_ssl_mode(value: &str) -> Result<(PgSslMode, &'static str)> {
 /// that seems frozen ([PERFORMANCE](../../../docs/PERFORMANCE.md)).
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Number of simultaneous connections of a session.
-///
-/// An Oxyn session is not an application server: a few tabs, a catalog tree,
-/// and cancellation — which does **not** borrow from the pool (see
-/// [`crate::session`]). Four is enough, and leaves the database alone.
-pub const MAX_CONNECTIONS: u32 = 4;
+/// One physical backend preserves temporary objects within a logical session.
+/// Independent consoles and the catalog use separate sessions.
+pub const MAX_CONNECTIONS: u32 = 1;
 
 #[cfg(test)]
 mod tests;

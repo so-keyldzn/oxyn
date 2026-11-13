@@ -53,6 +53,8 @@ use crate::error::{
     Bound, is_unresolvable_type, map_connect_error, map_exec_error, map_stream_error,
 };
 use crate::lease::Lease;
+
+mod portal;
 use crate::options::ConnectSpec;
 use crate::transaction_text::{controls_transaction, opens_transaction};
 
@@ -137,6 +139,8 @@ const SQL_NAMESPACE_EXISTS: &str = "SELECT 1 FROM pg_catalog.pg_namespace WHERE 
 pub struct PostgresSession {
     driver: DriverId,
     pool: PgPool,
+    identity: Arc<crate::backend_identity::BackendIdentity>,
+    portals: portal::Owners,
     spec: ConnectSpec,
     canceller: Arc<BackendCanceller>,
     statements: Arc<StatementRegistry>,
@@ -196,12 +200,23 @@ impl PostgresSession {
             statements: Arc::new(StatementRegistry::default()),
             driver,
             pool,
+            identity: Arc::default(),
+            portals: portal::Owners::default(),
             variant,
             capabilities,
             catalog,
             database,
             context: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn with_backend_identity(
+        mut self,
+        identity: Arc<crate::backend_identity::BackendIdentity>,
+    ) -> Self {
+        self.catalog.set_backend_identity(Arc::clone(&identity));
+        self.identity = identity;
+        self
     }
 
     /// Stops on the server a pre-cursor round trip that the token interrupted.
@@ -291,13 +306,16 @@ impl PostgresSession {
     /// Borrows a connection from the pool, without ever becoming
     /// uncancellable.
     async fn acquire(&self, cancel: &CancelToken) -> Result<PoolConnection<Postgres>> {
-        race_cancel(cancel, async {
+        self.identity.check()?;
+        let connection = race_cancel(cancel, async {
             self.pool
                 .acquire()
                 .await
                 .map_err(|error| map_connect_error(&error))
         })
-        .await
+        .await?;
+        self.identity.check()?;
+        Ok(connection)
     }
 }
 
@@ -414,6 +432,7 @@ impl Session for PostgresSession {
         let arguments = bind_params(&params)?;
 
         let mut connection = Lease::new(self.acquire(cancel).await?);
+        self.identity.preserve();
 
         let pid = race_cancel(cancel, async {
             backend_pid(&mut connection)
@@ -616,6 +635,18 @@ impl Session for PostgresSession {
             .await
     }
 
+    async fn execute_original_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.original_preview(request, cancel).await
+    }
+
+    async fn finish_original_preview(&self, cancel: &CancelToken) -> Result<()> {
+        self.portals.wait(cancel).await
+    }
+
     async fn open_preview_session(
         &self,
         path: &oxyn_catalog::CatalogPath,
@@ -673,6 +704,7 @@ impl Session for PostgresSession {
     /// signature stays fallible because the trait shares it with drivers that,
     /// for their part, have something to say.
     async fn close(self: Box<Self>) -> Result<()> {
+        self.portals.close().await;
         self.pool.close().await;
         Ok(())
     }

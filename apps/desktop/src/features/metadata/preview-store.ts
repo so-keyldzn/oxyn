@@ -16,6 +16,8 @@ export interface PreviewEntry {
   address: CatalogAddress
   /** Whether a cancel reaches the server, or only stops reading here. */
   serverCancel: boolean
+  /** Shared UI shape only; never shares rows or a continuation between sessions. */
+  shapeGroup?: string
   /** The command reading now, or `null`. */
   running: string | null
   /**
@@ -48,6 +50,7 @@ export interface PreviewEffects {
     entry: PreviewEntry,
     shape: PreviewShape
   ) => Promise<CommandOutcome>
+  release?: (entry: PreviewEntry, result: string) => Promise<void>
   cancel: (id: string) => void
   refuse: (command: string) => void
   forgetResult: (result: string) => void
@@ -59,8 +62,12 @@ export interface PreviewEffects {
 
 export type Previews = Record<string, PreviewEntry>
 
-export function previewKey(connection: string, relationKey: string) {
-  return `${connection}\u0000${relationKey}`
+export function previewKey(
+  connection: string,
+  relationKey: string,
+  session = ""
+) {
+  return `${connection}\u0000${session}\u0000${relationKey}`
 }
 
 function resultOf(entry: PreviewEntry | undefined) {
@@ -188,6 +195,7 @@ export function createPreviewStore(effects: PreviewEffects) {
         session: string
         address: CatalogAddress
         serverCancel: boolean
+        shapeGroup?: string
       }
     ) {
       const existing = store.state[key]
@@ -203,7 +211,16 @@ export function createPreviewStore(effects: PreviewEffects) {
             ...all,
             [key]: { ...entry, views: entry.views + 1, shownAt: effects.now() },
           }
-        const oldShape = entry?.applied ?? PLAIN_SHAPE
+        const remembered = target.shapeGroup
+          ? Object.values(all)
+              .filter(
+                (candidate) =>
+                  candidate.shapeGroup === target.shapeGroup &&
+                  candidate.views === 0
+              )
+              .sort((left, right) => right.shownAt - left.shownAt)[0]
+          : undefined
+        const oldShape = entry?.applied ?? remembered?.applied ?? PLAIN_SHAPE
         const applied = {
           ...oldShape,
           continuation: null,
@@ -278,6 +295,22 @@ export function createPreviewStore(effects: PreviewEffects) {
       evict()
     },
 
+    /** An explicit tab close releases its cursor; unmounts alone preserve cached rows. */
+    async close(key: string) {
+      const entry = store.state[key]
+      if (!entry) return
+      if (entry.running) effects.cancel(entry.running)
+      const result = resultOf(entry)
+      if (result) {
+        if (effects.release) await effects.release(entry, result)
+        effects.forgetResult(result)
+      }
+      store.setState((all) => {
+        const { [key]: _gone, ...rest } = all
+        return rest
+      })
+    },
+
     /**
      * The view went out of sight (another tab, a hidden workspace) while
      * mounted. A read it started by itself is cancelled — hidden, it would
@@ -333,9 +366,19 @@ export function createPreviewStore(effects: PreviewEffects) {
           serverCancel: current.serverCancel,
         },
       }))
-      effects.read(id, entry, shape).then(
+      const read =
+        previous && !shape.continuation && effects.release
+          ? effects
+              .release(entry, previous)
+              .then(() =>
+                store.state[key]?.running === id
+                  ? effects.read(id, entry, shape)
+                  : null
+              )
+          : effects.read(id, entry, shape)
+      read.then(
         (outcome) => {
-          settle(key, id, outcome)
+          if (outcome) settle(key, id, outcome)
           releasePrevious()
         },
         (error: unknown) => {

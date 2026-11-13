@@ -116,7 +116,9 @@ impl Cursor for Page {
                 }
                 None => {
                     self.state.cursor.take();
-                    self.state.lease.take();
+                    if let Some(lease) = self.state.lease.take() {
+                        lease.finish().await?;
+                    }
                     self.state.permit.take();
                 }
             }

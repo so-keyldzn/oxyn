@@ -56,7 +56,7 @@ fn budget_refuses_oversized_patch_without_losing_previous_reservations() {
     assert_eq!(
         budget
             .scopes
-            .get(&CatalogRefreshScope::Root)
+            .get(&(None, CatalogRefreshScope::Root))
             .map(|held| held.objects),
         Some(1)
     );
@@ -84,9 +84,13 @@ fn scope_limit_evicts_the_least_recently_published_scope() {
     let oldest = CatalogPath::for_catalog("1").expect("valid path");
     assert_eq!(evicted, vec![CatalogScope::Catalog(oldest)]);
     assert_eq!(budget.scopes.len(), MAX_CATALOG_SCOPES);
-    assert!(!budget.scopes.contains_key(&namespaces("1")));
-    assert!(budget.scopes.contains_key(&namespaces("0")));
-    assert!(budget.scopes.contains_key(&CatalogRefreshScope::Root));
+    assert!(!budget.scopes.contains_key(&(None, namespaces("1"))));
+    assert!(budget.scopes.contains_key(&(None, namespaces("0"))));
+    assert!(
+        budget
+            .scopes
+            .contains_key(&(None, CatalogRefreshScope::Root))
+    );
 }
 
 #[test]
@@ -109,7 +113,7 @@ fn object_limit_evicts_the_oldest_listing_and_the_newest_stays_served() {
     assert_eq!(cache.relations(&old).count(), 0);
     assert_eq!(cache.relations(&new).count(), 30_000);
     assert!(cache.server_info().is_some(), "root is never evicted");
-    assert!(!budget.scopes.contains_key(&relations("db", "old")));
+    assert!(!budget.scopes.contains_key(&(None, relations("db", "old"))));
     assert_eq!(budget.scopes.len(), 2);
 }
 
@@ -152,7 +156,7 @@ fn neither_root_nor_a_parent_of_the_published_scope_is_evicted() {
         Err(OxynError::Config(_))
     ));
     assert_eq!(budget.scopes.len(), 2, "a refusal evicts nothing");
-    assert!(!budget.scopes.contains_key(&relation));
+    assert!(!budget.scopes.contains_key(&(None, relation)));
 }
 
 #[test]
@@ -199,5 +203,49 @@ fn a_narrow_relation_scope_takes_the_description_only_when_it_was_the_last() {
         evicted,
         vec![CatalogScope::Constraints(kept)],
         "the description is still charged to the relation scope"
+    );
+}
+
+#[test]
+fn independent_sessions_share_one_connection_budget_and_evict_only_the_owner() {
+    let mut budget = CatalogBudget::default();
+    let first = SessionId::new();
+    let second = SessionId::new();
+    let scope = relations("db", "same");
+    budget
+        .reserve_for(first, &scope, &listing("db", "same", 30_000))
+        .expect("first source");
+    let evicted = budget
+        .reserve_for(second, &scope, &listing("db", "same", 30_000))
+        .expect("second source bounded by the same budget");
+    assert!(!evicted.is_empty());
+    assert!(evicted.iter().all(|(owner, _)| *owner == first));
+    assert!(budget.scopes.contains_key(&(Some(second), scope)));
+    assert!(
+        budget
+            .scopes
+            .values()
+            .map(|held| held.objects)
+            .sum::<usize>()
+            <= MAX_CATALOG_OBJECTS
+    );
+}
+
+#[test]
+fn closing_a_catalog_owner_removes_only_its_reservations() {
+    let mut budget = CatalogBudget::default();
+    let first = SessionId::new();
+    let second = SessionId::new();
+    for owner in [first, second] {
+        budget
+            .reserve_for(owner, &CatalogRefreshScope::Root, &server())
+            .expect("root");
+    }
+    budget.release_owner(first);
+    assert_eq!(budget.scopes.len(), 1);
+    assert!(
+        budget
+            .scopes
+            .contains_key(&(Some(second), CatalogRefreshScope::Root))
     );
 }

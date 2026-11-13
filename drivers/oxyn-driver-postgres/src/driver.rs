@@ -165,11 +165,19 @@ pub(crate) async fn connect_spec(
     cancel: &CancelToken,
 ) -> Result<Box<dyn Session>> {
     let base = spec.database().to_owned();
+    let identity = std::sync::Arc::new(crate::backend_identity::BackendIdentity::default());
+    let opening_identity = std::sync::Arc::clone(&identity);
 
     let opened = race_cancel(cancel, async {
         Ok(PgPoolOptions::new()
             .max_connections(max_connections)
             .min_connections(0)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .after_connect(move |_, _| {
+                opening_identity.opened();
+                Box::pin(async { Ok(()) })
+            })
             .acquire_timeout(ACQUIRE_TIMEOUT)
             // A connection taken from the pool after a network cut must
             // fail here, not in the middle of the user's query.
@@ -206,9 +214,9 @@ pub(crate) async fn connect_spec(
         "session opened"
     );
 
-    Ok(Box::new(PostgresSession::new(
-        driver, pool, spec, variant, base,
-    )))
+    Ok(Box::new(
+        PostgresSession::new(driver, pool, spec, variant, base).with_backend_identity(identity),
+    ))
 }
 
 /// How long [`timeout_cause`] may add to a connect that already waited

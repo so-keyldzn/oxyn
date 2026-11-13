@@ -207,19 +207,18 @@ impl PostgresVariant {
 /// simple protocol, where the schema is known only after the first row — hence
 /// giving up the first display under 100 ms.
 ///
-/// **`TRANSACTIONS`** and **`SAVEPOINTS`**: a transaction lives on **one**
-/// connection, yet an Oxyn session relies on a pool and borrows one per
-/// execution. Declaring the capability without pinning a connection would let
-/// the user believe a `ROLLBACK` cancelled their write, which the contract
-/// explicitly forbids. The transaction *internal* to a read-only execution does
-/// exist: it is [`Capabilities::READ_ONLY_SESSION`].
+/// **`TRANSACTIONS`** and **`SAVEPOINTS`** remain unavailable: the physical
+/// backend is retained (ADR-0079), but bounded reads still open and roll back
+/// their own transaction. They must first preserve an existing user transaction
+/// before the capability can be offered. Internal read-only transactions provide
+/// [`Capabilities::READ_ONLY_SESSION`].
 ///
-/// **`NAMED_CURSORS`** and **`BULK_LOAD`**: `DECLARE`/`FETCH` and `COPY` are not
-/// implemented. The stream goes through the extended protocol's portal, which
-/// is enough for [`Capabilities::STREAMING`].
+/// **`NAMED_CURSORS`** and **`BULK_LOAD`**: user-managed cursors and `COPY` are
+/// not implemented. The private original-preview cursor is owned entirely by
+/// Oxyn and does not expose a user cursor API.
 ///
-// TODO(phase 1): pin a connection per session to open TRANSACTIONS and
-// SAVEPOINTS, and implement `COPY` for BULK_LOAD. Unblocks: data editing with
+// TODO(phase 1): preserve user transactions across bounded reads to open
+// TRANSACTIONS and SAVEPOINTS; implement `COPY` for BULK_LOAD. Unblocks: data editing with
 // DML preview (IMPLEMENTATION-PLAN, phase 1).
 // Trap when pinning: `oxyn-exec` bounds every production read to read-only
 // (issue #11). Inside an already open transaction, `BEGIN READ ONLY` is only a

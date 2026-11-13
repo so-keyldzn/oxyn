@@ -16,6 +16,8 @@
 
 use std::sync::Arc;
 
+mod temporary;
+
 use async_trait::async_trait;
 use mysql_async::prelude::Queryable as _;
 use mysql_async::{Params, Row, Value};
@@ -452,6 +454,9 @@ impl CatalogProvider for MysqlCatalog {
         relation: &CatalogPath,
         cancel: &CancelToken,
     ) -> Result<Relation> {
+        if self.is_temporary(relation, cancel).await? {
+            return self.temporary_relation(relation, cancel).await;
+        }
         let (database, name) = relation_of(relation)?;
         let key = vec![Value::from(database), Value::from(name)];
         let header = self.rows(SQL_RELATION, key, cancel).await?;
@@ -561,6 +566,9 @@ impl CatalogProvider for MysqlCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<Index>> {
         self.capabilities.require(Capabilities::INDEXES)?;
+        if self.is_temporary(relation, cancel).await? {
+            return self.temporary_indexes(relation, cancel).await;
+        }
         let (database, name) = relation_of(relation)?;
         let rows = self
             .rows(
@@ -595,6 +603,9 @@ impl CatalogProvider for MysqlCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<ForeignKey>> {
         self.capabilities.require(Capabilities::FOREIGN_KEYS)?;
+        if self.is_temporary(relation, cancel).await? {
+            return Ok(Vec::new());
+        }
         let (database, name) = relation_of(relation)?;
         let rows = self
             .rows(
@@ -616,6 +627,9 @@ impl CatalogProvider for MysqlCatalog {
     ) -> Result<Vec<IncomingForeignKey>> {
         self.capabilities
             .require(Capabilities::INCOMING_FOREIGN_KEYS)?;
+        if self.is_temporary(relation, cancel).await? {
+            return Ok(Vec::new());
+        }
         let (database, name) = relation_of(relation)?;
         let rows = self
             .rows(

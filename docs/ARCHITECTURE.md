@@ -275,6 +275,8 @@ Native collection previews additionally use `Session::prepare_preview` and `exec
 
 Retained SQL reads may request `PreviewMode::Dedicated` ([ADR-0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md)). The registry reserves one of 16 active/opening slots before calling the live driver's `open_preview_session`. Private sessions are excluded from catalog fallback. Cancellation addresses the actual execution session while continuations remain bound to the logical source. No transaction-state poll runs behind a suspended preview. Owned tasks drop the cursor before closing, hold capacity through cleanup, and are joined on source close, disconnect and shutdown. Authorized writes release retained reads on their connection before execution. Samples leave `continuable` false and never enter this lifecycle.
 
+Session-local reads use `PreviewMode::Original` and the source’s physical session ([ADR-0079](adr/0079-retain-temporary-previews-on-their-owning-session.md)). `SessionSlot` has an immutable Catalog, Console or Preview purpose. `Connect` and `OpenConsoleSession` name the first two; private preview slots remain internal. Original cursors reserve their owner exclusively; other operations fail promptly instead of queuing behind an idle cursor. Cleanup tasks retain occupancy and capacity through `finish_original_preview`, without closing the owner. Mutation admission is exclusive per connection from preview cleanup through execution, while opening readers hold shared admission until binding. `ReleasePreview` closes the source independently of readers retaining already received rows. Console transfer refuses an occupied source and coordinates with in-flight preview commands.
+
 For independent previews, the preview's receive bound reserves one extra row to
 confirm that the cursor of the already-limited query is exhausted. The `ResultBuffer`
 strictly keeps the requested limit: a non-empty extra batch is
@@ -783,7 +785,7 @@ its descendant scopes go with it. `Root` and the parents of the published scope 
 never evicted; if the read still does not fit, it is refused without
 evicting anything. The counted usage is publication: the UI reads the cache without going
 through the bus. The count keeps the maxima of already read scopes, because relisting a
-parent keeps its child details; disconnection resets this budget to zero.
+parent keeps its child details; disconnection resets this budget to zero. `RefreshSessionCatalog` reads the named live session into its own cache, and `session_catalog` validates that owner. All these caches share the same per-connection budget, indexed by session and scope; they do not each receive another 50,000-object allowance. Closing an owner clears its cache and charges. A replacement preferred catalog uses a new cache generation, while the aggregate budget remains shared with surviving sessions.
 This bound does not limit the bytes of the strings nor the temporary vectors
 returned by the provider, and this path provides no offline persistence.
 

@@ -20,6 +20,7 @@
 //! [`TransactionState::Unknown`](oxyn_core::TransactionState::Unknown), never
 //! `Idle` as if nothing had happened.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use futures::future::BoxFuture;
@@ -308,6 +309,7 @@ pub(crate) struct Shared {
     /// connection. Under a synchronous lock, never held across an `await`.
     database: Mutex<Option<String>>,
     pub(crate) killer: Arc<Killer>,
+    pub(crate) local_state: AtomicBool,
 }
 
 impl std::fmt::Debug for Shared {
@@ -335,6 +337,7 @@ impl Shared {
             link: Arc::new(tokio::sync::Mutex::new(link)),
             database: Mutex::new(None),
             killer,
+            local_state: AtomicBool::new(false),
         }
     }
 
@@ -349,6 +352,9 @@ impl Shared {
         })
         .await?;
         if lease.conn().is_none() {
+            if self.local_state.load(Ordering::Acquire) {
+                return Err(OxynError::Config("this MySQL session lost its physical connection and temporary state; reconnect before continuing".into()));
+            }
             let (conn, id) = race_cancel(cancel, open(&self.spec, &self.driver)).await?;
             lease.replace(conn, id);
             let database = self.database();

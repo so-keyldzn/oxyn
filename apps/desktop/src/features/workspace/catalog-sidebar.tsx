@@ -71,8 +71,12 @@ export function CatalogSidebar({
   onOpen,
   onNewConsole,
   onLeave,
+  sourceSelector,
+  sessionScoped = false,
 }: {
   open: OpenConnection
+  sourceSelector?: React.ReactNode
+  sessionScoped?: boolean
   selected: string | null
   onSelect: (node: CatalogNode) => void
   /** Opens a relation on a given tab; without it, the menu selects the node. */
@@ -110,8 +114,8 @@ export function CatalogSidebar({
   const supported = hasCatalog(open)
 
   const tree = useQuery({
-    queryKey: ["catalog", open.connection],
-    queryFn: () => metadata.catalogTree(open.connection),
+    queryKey: ["catalog", open.connection, open.session],
+    queryFn: () => metadata.catalogTree(open.connection, open.session),
     enabled: supported,
     placeholderData: (previous) => previous,
   })
@@ -119,8 +123,8 @@ export function CatalogSidebar({
   treeNodes.current = tree.data ?? []
 
   const hits = useQuery({
-    queryKey: ["catalog-search", open.connection, query],
-    queryFn: () => metadata.searchCatalog(open.connection, query),
+    queryKey: ["catalog-search", open.connection, open.session, query],
+    queryFn: () => metadata.searchCatalog(open.connection, query, open.session),
     enabled: supported && query.trim() !== "",
     placeholderData: (previous) => previous,
   })
@@ -157,7 +161,7 @@ export function CatalogSidebar({
           setCancelling(false)
         }
         await queryClient.invalidateQueries({
-          queryKey: ["catalog", open.connection],
+          queryKey: ["catalog", open.connection, open.session],
         })
         await queryClient.invalidateQueries({
           queryKey: ["catalog-search", open.connection],
@@ -209,7 +213,7 @@ export function CatalogSidebar({
       do {
         owed.current = false
         await refresh(null)
-        const nodes = await metadata.catalogTree(open.connection)
+        const nodes = await metadata.catalogTree(open.connection, open.session)
         for (const address of staleExpanded(nodes, expandedRef.current)) {
           await refresh(address)
         }
@@ -240,6 +244,7 @@ export function CatalogSidebar({
 
   return (
     <Sidebar variant="inset" collapsible="icon">
+      {sourceSelector}
       <CatalogPanel
         connectionName={open.name}
         driver={open.driver}
@@ -274,11 +279,15 @@ export function CatalogSidebar({
           setProblem(problemOf(caught))
         )}
         onRefreshLevel={(node) => void refresh(node.address)}
-        pin={pin}
-        operations={{
-          capabilities: open.capabilities,
-          onOperation: operation.start,
-        }}
+        pin={sessionScoped ? undefined : pin}
+        operations={
+          sessionScoped
+            ? undefined
+            : {
+                capabilities: open.capabilities,
+                onOperation: operation.start,
+              }
+        }
         copyAs={{
           definition: hasCapability(open, "OBJECT_DEFINITION"),
           sql: hasCapability(open, "SQL"),

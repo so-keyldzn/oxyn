@@ -62,6 +62,7 @@ pub async fn close_console(
 ) -> Result<(), IpcError> {
     let window = caller(&backend, &webview)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     backend
         .close_console(parse("connection", &connection)?, session)
@@ -82,6 +83,7 @@ pub async fn run_console(
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     let outcome = run_owned(
         &backend,
@@ -107,6 +109,7 @@ pub async fn set_session_context(
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let session: SessionId = parse("session", &session)?;
+    let _using = backend.inner.workbench.consoles.run_on(session)?;
     backend.inner.windows.check_session(window, session)?;
     run_owned(
         &backend,

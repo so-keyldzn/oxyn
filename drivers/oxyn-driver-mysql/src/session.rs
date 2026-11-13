@@ -283,6 +283,7 @@ impl Session for MysqlSession {
     /// parameters or several statements; [`OxynError::Cancelled`]; the
     /// server's refusal, classified.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
+        self.catalog.note_execution();
         self.capabilities.require_language(request.language)?;
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
@@ -494,11 +495,19 @@ impl Session for MysqlSession {
                 crate::preview::request(path, limit, shape, &facts)?
             },
             mode: if retained {
-                oxyn_driver::PreviewMode::Dedicated
+                if self.catalog.has_local_state() {
+                    oxyn_driver::PreviewMode::Original
+                } else {
+                    oxyn_driver::PreviewMode::Dedicated
+                }
             } else {
                 oxyn_driver::PreviewMode::Bounded
             },
         })
+    }
+
+    async fn finish_original_preview(&self, cancel: &CancelToken) -> Result<()> {
+        self.shared.lease(cancel).await.map(|_| ())
     }
 
     async fn open_preview_session(

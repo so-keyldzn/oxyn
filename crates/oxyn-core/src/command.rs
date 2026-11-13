@@ -305,6 +305,12 @@ pub enum Command {
         statement: StatementHandle,
     },
 
+    /// Open an execution session whose private context belongs to a console.
+    OpenConsoleSession {
+        /// Connection whose configuration and policy apply.
+        connection: ConnectionId,
+    },
+
     /// Read a connection's catalog again.
     RefreshCatalog {
         /// The target connection.
@@ -334,6 +340,26 @@ pub enum Command {
         connection: ConnectionId,
         /// Explicit lazy scope; never recursively loads descendants.
         scope: CatalogRefreshScope,
+    },
+
+    /// Refresh metadata owned by one live session, isolated from other caches.
+    RefreshSessionCatalog {
+        /// Connection whose policy applies.
+        connection: ConnectionId,
+        /// Session that owns temporary state.
+        session: SessionId,
+        /// One bounded metadata level.
+        scope: CatalogRefreshScope,
+    },
+
+    /// Release a preview's live cursor while retaining its already read result.
+    ReleasePreview {
+        /// Owning connection, checked independently of the result identifier.
+        connection: ConnectionId,
+        /// Original session whose cursor may be released.
+        session: SessionId,
+        /// A result from the retained read.
+        result: ResultId,
     },
 
     /// Inspect a bounded text page of one existing value, without executing SQL.
@@ -599,11 +625,14 @@ impl Command {
             Self::Connect { .. }
             | Self::Disconnect { .. }
             | Self::CloseSession { .. }
+            | Self::OpenConsoleSession { .. }
             | Self::SetSessionContext { .. }
             | Self::Cancel { .. }
             | Self::RefreshCatalog { .. }
             | Self::DescribeCatalog { .. }
             | Self::RefreshCatalogScope { .. }
+            | Self::RefreshSessionCatalog { .. }
+            | Self::ReleasePreview { .. }
             | Self::PreviewRelation { .. }
             | Self::ReadResultPage { .. }
             | Self::InspectResultValue { .. }
@@ -648,12 +677,15 @@ impl Command {
             Self::Connect { connection }
             | Self::Disconnect { connection }
             | Self::CloseSession { connection, .. }
+            | Self::OpenConsoleSession { connection }
             | Self::SetSessionContext { connection, .. }
             | Self::Execute { connection, .. }
             | Self::Cancel { connection, .. }
             | Self::RefreshCatalog { connection }
             | Self::DescribeCatalog { connection, .. }
             | Self::RefreshCatalogScope { connection, .. }
+            | Self::RefreshSessionCatalog { connection, .. }
+            | Self::ReleasePreview { connection, .. }
             | Self::PreviewRelation { connection, .. }
             | Self::ReadResultPage { connection, .. }
             | Self::OpenRetainedResult { connection, .. }
@@ -737,11 +769,14 @@ impl Command {
             Self::Connect { .. }
                 | Self::Disconnect { .. }
                 | Self::CloseSession { .. }
+                | Self::OpenConsoleSession { .. }
                 | Self::SetSessionContext { .. }
                 | Self::Execute { .. }
                 | Self::Cancel { .. }
                 | Self::RefreshCatalog { .. }
                 | Self::RefreshCatalogScope { .. }
+                | Self::RefreshSessionCatalog { .. }
+                | Self::ReleasePreview { .. }
                 | Self::PreviewRelation { .. }
                 | Self::Export { .. }
                 | Self::TestConnection { .. }
@@ -762,6 +797,7 @@ impl Command {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Connect { .. } => "Connect",
+            Self::OpenConsoleSession { .. } => "OpenConsoleSession",
             Self::Disconnect { .. } => "Disconnect",
             Self::CloseSession { .. } => "CloseSession",
             Self::SetSessionContext { .. } => "SetSessionContext",
@@ -773,6 +809,8 @@ impl Command {
             Self::RefreshCatalog { .. } => "RefreshCatalog",
             Self::DescribeCatalog { .. } => "DescribeCatalog",
             Self::RefreshCatalogScope { .. } => "RefreshCatalogScope",
+            Self::RefreshSessionCatalog { .. } => "RefreshSessionCatalog",
+            Self::ReleasePreview { .. } => "ReleasePreview",
             Self::Export { .. } => "Export",
             Self::OpenDocument { .. } => "OpenDocument",
             Self::ListQueryDocuments { .. } => "ListQueryDocuments",

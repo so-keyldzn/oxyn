@@ -10,8 +10,12 @@ import { metadata } from "@/lib/ipc/metadata"
 import type { RelationFacet, RelationFacets } from "@/lib/ipc/metadata"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
 
-export function facetsKey(connection: string, address: CatalogAddress) {
-  return ["relation-facets", connection, addressKey(address)] as const
+export function facetsKey(
+  connection: string,
+  address: CatalogAddress,
+  session = ""
+) {
+  return ["relation-facets", connection, session, addressKey(address)] as const
 }
 
 const FACETS: Array<RelationFacet> = [
@@ -54,10 +58,11 @@ export function useRelationFacets(
   address: CatalogAddress
 ) {
   const queryClient = useQueryClient()
-  const key = facetsKey(open.connection, address)
+  const key = facetsKey(open.connection, address, open.session)
   const facets = useQuery({
     queryKey: key,
-    queryFn: () => metadata.relationFacets(open.connection, address),
+    queryFn: () =>
+      metadata.relationFacets(open.connection, address, open.session),
   })
   const [loads, setLoads] = React.useState(idleLoads)
   const running = React.useRef<Partial<Record<RelationFacet, string>>>({})
@@ -119,7 +124,7 @@ export function useRelationFacets(
       await queryClient.invalidateQueries({ queryKey: key })
     },
     // `key` is derived from these two; `address` is compared by its key.
-    [open.connection, open.session, key[2], queryClient]
+    [open.connection, open.session, key[3], queryClient]
   )
 
   const cancel = React.useCallback((facet: RelationFacet) => {
@@ -139,6 +144,10 @@ export function useRelationFacets(
   )
 
   useRefreshSignal(open.connection, (signal) => {
+    if (signal.type === "catalogChanged") {
+      void queryClient.invalidateQueries({ queryKey: key })
+      return
+    }
     if (signal.type !== "catalogInvalidated" && signal.type !== "lagged") return
     // The catalog was invalidated: every facet may be asked for again, and
     // the cache read tells which ones are now stale.

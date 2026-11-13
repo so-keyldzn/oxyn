@@ -26,6 +26,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use oxyn_core::{
@@ -35,6 +36,9 @@ use oxyn_core::{
 use oxyn_driver::{Credentials, Cursor, Session};
 use parking_lot::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
+
+mod access;
+pub(crate) use access::Reservation as PreviewReservation;
 
 /// What knows how to find a connection's credentials.
 ///
@@ -92,6 +96,21 @@ impl fmt::Debug for NoCredentials {
     }
 }
 
+/// Logical purpose is explicit: a connection can have several window catalogs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    Catalog,
+    Console,
+    Preview,
+}
+
+/// Keeps a physically idle session reserved while its owner changes.
+/// Dropping it makes the session usable again; it performs no driver operation.
+#[must_use = "hold this reservation until the ownership transfer finishes"]
+pub struct SessionTransfer {
+    _reservation: PreviewReservation,
+}
+
 /// An open session, shareable and closable.
 ///
 /// Handled through `Arc`: the executor keeps one copy in its registry while an
@@ -103,7 +122,16 @@ pub struct SessionSlot {
     opened_at: Instant,
     session: AsyncRwLock<Option<Box<dyn Session>>>,
     closing: CancelToken,
-    preview: bool,
+    purpose: Purpose,
+    user_activity: AtomicBool,
+    access: access::Access,
+    pub(crate) catalog: crate::catalog::SessionCatalog,
+}
+
+impl fmt::Debug for SessionTransfer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionTransfer").finish_non_exhaustive()
+    }
 }
 
 impl SessionSlot {
@@ -122,19 +150,54 @@ impl SessionSlot {
             opened_at: Instant::now(),
             session: AsyncRwLock::new(Some(session)),
             closing: CancelToken::new(),
-            preview: false,
+            purpose: Purpose::Catalog,
+            user_activity: AtomicBool::new(false),
+            access: access::Access::default(),
+            catalog: crate::catalog::SessionCatalog::default(),
         }
     }
 
     /// A private execution slot, never eligible to become the catalog session.
     pub(crate) fn preview(connection: ConnectionId, session: Box<dyn Session>) -> Self {
         let mut slot = Self::new(connection, session);
-        slot.preview = true;
+        slot.purpose = Purpose::Preview;
         slot
     }
 
+    pub(crate) fn console(connection: ConnectionId, session: Box<dyn Session>) -> Self {
+        let mut slot = Self::new(connection, session);
+        slot.purpose = Purpose::Console;
+        slot
+    }
+
+    pub(crate) const fn is_catalog(&self) -> bool {
+        matches!(self.purpose, Purpose::Catalog)
+    }
+    pub(crate) const fn is_console(&self) -> bool {
+        matches!(self.purpose, Purpose::Console)
+    }
+
+    pub(crate) fn note_user_execution(&self) {
+        self.user_activity.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn has_private_context(&self) -> bool {
+        self.is_console() || self.user_activity.load(Ordering::Acquire)
+    }
+
     pub(crate) const fn is_preview(&self) -> bool {
-        self.preview
+        matches!(self.purpose, Purpose::Preview)
+    }
+
+    /// Refuses an active cursor or operation, including idle retained previews.
+    /// Hold the returned reservation through an ownership transfer.
+    pub fn reserve_transfer(&self) -> Result<SessionTransfer> {
+        if self.closing.is_cancelled() {
+            return Err(session_closed());
+        }
+        Ok(SessionTransfer {
+            _reservation: self.access.exclusive()?,
+        })
     }
 
     /// The session's identifier.
@@ -229,7 +292,8 @@ impl SessionSlot {
         let Some(session) = guard.as_deref() else {
             return Err(session_closed());
         };
-        session.execute(request, cancel).await
+        let reservation = self.access.shared()?;
+        Ok(reservation.hold(session.execute(request, cancel).await?))
     }
 
     /// Compose a preview while retaining the open session; lock waiting is cancellable.
@@ -240,6 +304,7 @@ impl SessionSlot {
         shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<oxyn_driver::PreparedPreview> {
+        let _reservation = self.access.shared()?;
         let token = cancel.child();
         let guard = tokio::select! {
             biased;
@@ -271,6 +336,7 @@ impl SessionSlot {
         path: &oxyn_catalog::CatalogPath,
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>> {
+        let _reservation = self.access.shared()?;
         let token = cancel.child();
         let guard = tokio::select! {
             biased;
@@ -299,7 +365,44 @@ impl SessionSlot {
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        session.execute_preview(request, cancel).await
+        let reservation = self.access.shared()?;
+        Ok(reservation.hold(session.execute_preview(request, cancel).await?))
+    }
+
+    /// Retains the original physical context; incompatible work fails promptly.
+    pub(crate) async fn reserve_original_preview(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<PreviewReservation> {
+        if self.closing.is_cancelled() {
+            return Err(session_closed());
+        }
+        self.access.original(cancel).await
+    }
+
+    /// Cleanup bypasses occupancy and closing cancellation; the owner keeps
+    /// the exclusive reservation until the driver acknowledges physical idle.
+    pub(crate) async fn finish_original_preview(&self) -> Result<()> {
+        let guard = self.session.read().await;
+        match guard.as_deref() {
+            Some(session) => session.finish_original_preview(&CancelToken::new()).await,
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn execute_original_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        session.execute_original_preview(request, cancel).await
     }
 
     /// Declares where this session resolves unqualified names.
@@ -312,6 +415,7 @@ impl SessionSlot {
         context: &oxyn_driver::SessionContext,
         cancel: &CancelToken,
     ) -> Result<()> {
+        let _reservation = self.access.shared()?;
         let token = cancel.child();
         let guard = tokio::select! {
             biased;
@@ -354,6 +458,9 @@ impl SessionSlot {
     /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
     /// A session closing, or closed, reports `Unknown` — never `Idle`.
     pub async fn transaction_state(&self) -> TransactionState {
+        let Ok(_reservation) = self.access.shared() else {
+            return TransactionState::Unknown;
+        };
         let token = self.closing.child();
         let guard = tokio::select! {
             biased;
@@ -372,6 +479,7 @@ impl SessionSlot {
         scope: &oxyn_core::CatalogRefreshScope,
         cancel: &CancelToken,
     ) -> Result<crate::catalog::CatalogPatch> {
+        let _reservation = self.access.shared()?;
         let token = cancel.child();
         let guard = tokio::select! {
             biased;
@@ -415,6 +523,7 @@ impl SessionSlot {
     /// [`OxynError::Connection`] if the session was closed, and any transport
     /// error.
     pub async fn ping(&self) -> Result<Duration> {
+        let _reservation = self.access.shared()?;
         let guard = self.session.read().await;
         let Some(session) = guard.as_deref() else {
             return Err(session_closed());
@@ -425,6 +534,7 @@ impl SessionSlot {
     /// Marks the session as closing before waiting for its provider lock.
     pub(crate) fn begin_close(&self) {
         self.closing.cancel();
+        self.catalog.close();
     }
 
     /// Includes preparation and cursor draining, before a statement handle exists.

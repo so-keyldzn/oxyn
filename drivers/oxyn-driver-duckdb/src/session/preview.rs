@@ -25,7 +25,15 @@ impl DuckDbSession {
                 crate::preview::request(path, limit, shape, &facts)?
             },
             mode: if retained {
-                PreviewMode::Dedicated
+                if self
+                    .worker
+                    .call(cancel, crate::preview_context::reproducible)
+                    .await?
+                {
+                    PreviewMode::Dedicated
+                } else {
+                    PreviewMode::Original
+                }
             } else {
                 PreviewMode::Bounded
             },

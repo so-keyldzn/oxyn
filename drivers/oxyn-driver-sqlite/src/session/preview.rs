@@ -41,17 +41,29 @@ impl SqliteSession {
             }
             Err(error) => return Err(error),
         };
+        let mode = if retained {
+            let shares_memory = crate::preview_uri::shares_memory(&self.spec);
+            let reproducible = self
+                .worker
+                .call(cancel, move |connection| {
+                    Ok(preview_context::Context::read(connection, shares_memory)?.reproducible())
+                })
+                .await?;
+            if preview::database_of(path)? == "temp" || !reproducible {
+                PreviewMode::Original
+            } else {
+                PreviewMode::Dedicated
+            }
+        } else {
+            PreviewMode::Bounded
+        };
         Ok(PreparedPreview {
             request: if retained {
                 preview::stream_request(path, limit, shape, &facts)?
             } else {
                 preview::request(path, limit, shape, &facts)?
             },
-            mode: if retained {
-                PreviewMode::Dedicated
-            } else {
-                PreviewMode::Bounded
-            },
+            mode,
         })
     }
 

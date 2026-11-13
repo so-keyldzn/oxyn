@@ -107,6 +107,13 @@ impl Backend {
         // The outcome of a statement comes back to the webview that sent it:
         // moved in flight, it would reach a window that no longer holds the
         // console (ADR-0043).
+        let slot = self
+            .inner
+            .executor
+            .sessions()
+            .get(moved.session)
+            .ok_or_else(|| IpcError::invalid("This session is no longer open"))?;
+        let _idle = slot.reserve_transfer().map_err(IpcError::from)?;
         match self.inner.workbench.consoles.observed(moved.session).await {
             Some((_, false)) => Ok(()),
             Some((_, true)) => Err(IpcError::invalid(
@@ -149,6 +156,13 @@ impl Backend {
                     .await
                     .map_or(oxyn_core::TransactionState::Unknown, |(state, _)| state);
                 let _moving = consoles.begin_move(moved.session)?;
+                let slot = self
+                    .inner
+                    .executor
+                    .sessions()
+                    .get(moved.session)
+                    .ok_or_else(|| IpcError::invalid("This session is no longer open"))?;
+                let _idle = slot.reserve_transfer().map_err(IpcError::from)?;
                 // A statement held for a confirmation would be decided by the
                 // window that sent it, and run in the other's transaction.
                 let held = self

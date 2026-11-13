@@ -8,6 +8,7 @@ export interface ObjectOpenRequest {
   /** The workspace it belongs to: another connection's screen ignores it. */
   connection: string
   address: CatalogAddress
+  session?: string
 }
 
 // A queue rather than a callback prop, like `openInConsole`: the assistant is
@@ -21,11 +22,15 @@ let next = 0
  * Opens `address` in the workspace of `connection`, as a click in the catalog
  * would: its preview is an ordinary read on the bus, as the user.
  */
-export function openObject(connection: string, address: CatalogAddress) {
+export function openObject(
+  connection: string,
+  address: CatalogAddress,
+  session?: string
+) {
   next += 1
   objectOpenRequests.setState((requests) => [
     ...requests,
-    { id: next, connection, address },
+    { id: next, connection, address, session },
   ])
 }
 

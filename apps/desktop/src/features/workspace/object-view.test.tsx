@@ -371,3 +371,14 @@ describe("a hidden object tab", () => {
     expect(previewVisible).toHaveBeenLastCalledWith(true)
   })
 })
+
+it("explains a missing module discovered before the first data read", () => {
+  detailLoad.current = {
+    status: "error",
+    message: "no such module: vec0",
+    missingModule: "vec0",
+  }
+  renderView({ node: { ...node, kind: "view" } })
+  expect(screen.getByText(/enable sqlite-vec/)).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+})

@@ -1,14 +1,14 @@
 //! The statements a stateless session refuses before sending them.
 //!
 //! Each statement runs on a Hrana stream of its own, closed in the same
-//! request ([`crate::wire`]). Four kinds of statement exist only to change
+//! request ([`crate::wire`]). Session-state statements exist only to change
 //! what the **next** ones mean — and on a stream that ends with them they
 //! would succeed and change nothing, so the user would believe a transaction
 //! was open or a setting held while it was not:
 //!
 //! * `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`;
 //! * `PRAGMA name = value`, which sets a connection's state;
-//! * `ATTACH` and `DETACH`, which last as long as a connection;
+//! * `ATTACH`, `DETACH` and temporary objects, which last as long as a connection;
 //! * `USE`, which SQLite has not, but which the executor flags as a context
 //!   change.
 //!
@@ -42,6 +42,8 @@ pub(crate) const ATTACH_REFUSED: &str = "a typed `ATTACH` or `DETACH`: an attach
 /// Why a context change is refused.
 pub(crate) const CONTEXT_REFUSED: &str = "a typed `USE`: a Turso connection is one database, \
     named by its URL";
+
+const TEMPORARY_REFUSED: &str = "temporary objects across Turso commands: this connection does not keep a server session between commands; keep the work in a single query or use a persistent object";
 
 fn refusal(text: &str) -> OxynError {
     OxynError::NotSupported {
@@ -78,10 +80,59 @@ pub fn refuse_session_state(request: &ExecRequest) -> Result<()> {
     if is("attach") || is("detach") {
         return Err(refusal(ATTACH_REFUSED));
     }
+    if is("create") && creates_temporary(&request.text) {
+        return Err(refusal(TEMPORARY_REFUSED));
+    }
     if is("pragma") && sets_a_pragma(&request.text) {
         return Err(refusal(PRAGMA_REFUSED));
     }
     Ok(())
+}
+
+fn creates_temporary(text: &str) -> bool {
+    let tokens = oxyn_query::tokens(text, DIALECT);
+    let mut words = tokens
+        .iter()
+        .skip_while(|token| token.kind == TokenKind::Separator)
+        .skip(1)
+        .peekable();
+    if words.peek().is_some_and(|token| {
+        token.text.eq_ignore_ascii_case("temp") || token.text.eq_ignore_ascii_case("temporary")
+    }) {
+        return true;
+    }
+    if words.peek().is_some_and(|token| {
+        token.text.eq_ignore_ascii_case("unique") || token.text.eq_ignore_ascii_case("virtual")
+    }) {
+        words.next();
+    }
+    if !words.next().is_some_and(|token| {
+        ["table", "view", "index", "trigger"]
+            .iter()
+            .any(|word| token.text.eq_ignore_ascii_case(word))
+    }) {
+        return false;
+    }
+    if words
+        .peek()
+        .is_some_and(|token| token.text.eq_ignore_ascii_case("if"))
+    {
+        for expected in ["if", "not", "exists"] {
+            if !words
+                .next()
+                .is_some_and(|token| token.text.eq_ignore_ascii_case(expected))
+            {
+                return false;
+            }
+        }
+    }
+    let Some(name) = words.next() else {
+        return false;
+    };
+    ["temp", "\"temp\"", "`temp`", "[temp]", "'temp'"]
+        .iter()
+        .any(|quoted| name.text.eq_ignore_ascii_case(quoted))
+        && words.next().is_some_and(|token| token.text == ".")
 }
 
 /// The pragmas that take an argument and only read: the object they look at.
@@ -146,6 +197,17 @@ mod tests {
     }
 
     #[rstest]
+    #[case(
+        "; /* leading empty statement */ CREATE TEMP TABLE x(id)",
+        TEMPORARY_REFUSED
+    )]
+    #[case("; CREATE TABLE temp.x(id)", TEMPORARY_REFUSED)]
+    #[case("CREATE TEMP TABLE x(id)", TEMPORARY_REFUSED)]
+    #[case("CREATE TEMPORARY VIEW x AS SELECT 1", TEMPORARY_REFUSED)]
+    #[case("CREATE TABLE temp.x(id)", TEMPORARY_REFUSED)]
+    #[case("CREATE VIEW IF NOT EXISTS \"temp\".x AS SELECT 1", TEMPORARY_REFUSED)]
+    #[case("CREATE UNIQUE INDEX [temp].ix ON t(id)", TEMPORARY_REFUSED)]
+    #[case("CREATE VIRTUAL TABLE `temp`.x USING fts5(body)", TEMPORARY_REFUSED)]
     #[case("BEGIN", TRANSACTION_REFUSED)]
     #[case("begin immediate transaction", TRANSACTION_REFUSED)]
     #[case("  /* x */ COMMIT", TRANSACTION_REFUSED)]
@@ -188,6 +250,9 @@ mod tests {
     #[case("INSERT INTO t VALUES ('BEGIN')")]
     #[case("CREATE TRIGGER t AFTER INSERT ON a BEGIN UPDATE b SET x = 1; END")]
     #[case("UPDATE attachments SET detached = 1")]
+    #[case("CREATE TABLE main.temp (id)")]
+    #[case("CREATE TABLE \"temp\" (id)")]
+    #[case("CREATE VIEW x AS SELECT 'CREATE TEMP TABLE' AS note")]
     #[case("EXPLAIN QUERY PLAN SELECT 1")]
     #[case("")]
     fn what_only_mentions_them_goes_through(#[case] text: &str) {

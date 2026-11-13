@@ -245,6 +245,25 @@ pub trait Session: Send + Sync {
         self.execute(request, cancel).await
     }
 
+    /// Runs an exclusive preview without substituting another physical session.
+    /// Drivers may use a resumable portal to preserve temporary state on release.
+    async fn execute_original_preview(
+        &self,
+        request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
+        self.execute_preview(request, cancel).await
+    }
+
+    /// Waits until a dropped original preview has released its physical read.
+    /// Called exclusively, after dropping the cursor; never closes the session
+    /// or ends a user transaction. Drivers selecting `Original` implement it.
+    async fn finish_original_preview(&self, _cancel: &CancelToken) -> Result<()> {
+        Err(OxynError::NotSupported {
+            capability: "original preview cleanup acknowledgement".into(),
+        })
+    }
+
     /// Declares where this session resolves the names a statement does not
     /// qualify, and waits for the server's confirmation.
     ///
@@ -491,13 +510,15 @@ pub enum PreviewMode {
     Retained,
     /// A retained cursor needs a separate session to leave its owner usable.
     Dedicated,
+    /// A session-local cursor exclusively occupies its original session.
+    Original,
 }
 
 impl PreviewMode {
     /// Whether another page resumes the same execution.
     #[must_use]
     pub const fn retains_cursor(self) -> bool {
-        matches!(self, Self::Retained | Self::Dedicated)
+        matches!(self, Self::Retained | Self::Dedicated | Self::Original)
     }
 }
 

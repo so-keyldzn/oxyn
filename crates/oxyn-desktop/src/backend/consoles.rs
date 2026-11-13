@@ -137,7 +137,12 @@ impl Backend {
         inner.policy.register(&config);
         let outcome = inner
             .executor
-            .dispatch_as(id, Actor::Human, Command::Connect { connection }, cancel)
+            .dispatch_as(
+                id,
+                Actor::Human,
+                Command::OpenConsoleSession { connection },
+                cancel,
+            )
             .await;
         let (session, transaction_state) = match outcome {
             Ok(Outcome::Connected {

@@ -34,9 +34,9 @@
 //!
 //! The session context ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md))
 //! adds a third of the same kind: `search_path` is a **per-connection** state,
-//! and an Oxyn session is a pool of four. These tests therefore saturate the
-//! pool and record `pg_backend_pid()` inside the execution itself — a test that
-//! exercised only one connection would be green without proving anything.
+//! retained on one physical backend (ADR-0079). These tests record
+//! `pg_backend_pid()` inside the execution itself to prove that context reset
+//! reuses the original backend rather than silently opening a fresh one.
 
 use std::time::Duration;
 
@@ -1746,12 +1746,9 @@ fn resolution_query(name: &str) -> String {
 /// The query must return `value@pid` in its first column, and enough rows to
 /// keep its connection busy — see [`MARKER_QUERY`].
 ///
-/// The four executions are alive at the same time: `execute` holds its
-/// connection from start to end and the cursor channel is bounded to one batch,
-/// so until we drain, each cursor ties one up. The pool has four
-/// ([`MAX_CONNECTIONS`]), so all four are exercised. The final drain leaves
-/// them healthy: a dropped cursor leaves unread bytes, its connection is
-/// closed, and the next call would not find the same ones.
+/// `execute` holds its physical connection through the bounded cursor. The
+/// final drain leaves it healthy, so the next operation must reuse its PID.
+/// [`MAX_CONNECTIONS`] is one since ADR-0079; the helper keeps that bound explicit.
 async fn on_whole_pool(
     session: &dyn Session,
     sql: &str,
@@ -1846,14 +1843,8 @@ async fn the_resolution_path_is_the_servers_default_whatever_a_console_declared(
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn the_context_applies_to_every_connection_of_the_pool() {
-    // The test that decides the design (ADR-0019). An Oxyn PostgreSQL session
-    // is a pool of four connections and `search_path` is a **per-connection**
-    // state: a `SET` issued once would only apply to the connection that
-    // received it, and every other query would resolve in another schema with
-    // nothing to signal it. That is the worst possible outcome — a control that
-    // looks like it works —, and the fixture is built to make it visible:
-    // `shared_target` exists in both schemas, with a different marker. A wrong
-    // resolution returns `b`, not an error.
+    // Context is physical state. The homonyms return different markers, so a
+    // wrong namespace would silently return different data rather than an error.
     let Some(session) = session().await else {
         return;
     };
@@ -1866,8 +1857,8 @@ async fn the_context_applies_to_every_connection_of_the_pool() {
     let seen_count = on_whole_pool(&*session, MARKER_QUERY).await;
     assert_eq!(
         seen_count.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({seen_count:?}): \
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection ({seen_count:?}): \
          it then proves nothing about per-connection state"
     );
     for (process, marker) in &seen_count {
@@ -1955,8 +1946,8 @@ async fn going_back_to_the_default_undoes_the_context_on_the_connection_that_car
     let sub_context = on_whole_pool(&*session, &resolution_query(SHARED_TABLE)).await;
     assert_eq!(
         sub_context.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections: {sub_context:?}"
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection: {sub_context:?}"
     );
     assert!(
         sub_context.values().all(|seen| seen == SHARED_TABLE),
@@ -2367,19 +2358,17 @@ async fn introspection_does_not_depend_on_a_console_context() {
         .await
         .expect("the context must be accepted");
 
-    // The four pool connections carried the `SET`, then gave it back.
+    // The physical backend carried the `SET`, then restored the default.
     let seen_count = on_whole_pool(&*session, DEFINED_QUERY).await;
     assert_eq!(
         seen_count.len(),
-        usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({seen_count:?}): \
+        usize::try_from(MAX_CONNECTIONS).expect("the pool bound fits in usize"),
+        "the test did not exercise every configured connection ({seen_count:?}): \
          it then proves nothing about what the pool keeps"
     );
 
-    // The hardest case, and it is **deterministic**: the pool is capped at
-    // four, all four just served an execution under a context, and three stay
-    // tied up by live cursors. Introspection can therefore only borrow a
-    // recycled connection — it has no choice.
+    // Introspection must borrow a recycled backend. The bound is currently
+    // one; holding any other configured slots keeps this assertion deterministic.
     let mut held = Vec::new();
     for _ in 1..MAX_CONNECTIONS {
         held.push(
@@ -2896,3 +2885,6 @@ async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement()
     apply(&*session, "DROP TABLE oxyn_preview_witness").await;
     session.close().await.expect("close");
 }
+
+#[path = "original_preview_tests.rs"]
+mod original_previews;

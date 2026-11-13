@@ -428,6 +428,11 @@ struct Probe {
     cancelled: AtomicBool,
     mutating: bool,
     retained: bool,
+    original: bool,
+    cleanup_gate: Option<Arc<tokio::sync::Notify>>,
+    cleanup_started: Arc<tokio::sync::Notify>,
+    wait_for_transaction_state: bool,
+    transaction_state_started: Arc<tokio::sync::Notify>,
     sibling: Option<Arc<Probe>>,
     closed: AtomicBool,
     fork_started: AtomicBool,
@@ -456,6 +461,9 @@ struct PreviewSession(Arc<Probe>);
 impl Session for PreviewSession {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
+        if self.0.wait_for_transaction_state {
+            caps |= Capabilities::TRANSACTIONS;
+        }
         if self.0.shapes_previews {
             caps |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
         }
@@ -504,7 +512,9 @@ impl Session for PreviewSession {
     ) -> Result<oxyn_driver::PreparedPreview> {
         Ok(oxyn_driver::PreparedPreview {
             request: self.preview_request(path, limit, shape, cancel).await?,
-            mode: if self.0.sibling.is_some() {
+            mode: if self.0.original {
+                oxyn_driver::PreviewMode::Original
+            } else if self.0.sibling.is_some() {
                 oxyn_driver::PreviewMode::Dedicated
             } else if self.0.retained {
                 oxyn_driver::PreviewMode::Retained
@@ -513,6 +523,14 @@ impl Session for PreviewSession {
             },
         })
     }
+    async fn finish_original_preview(&self, _cancel: &CancelToken) -> Result<()> {
+        if let Some(gate) = &self.0.cleanup_gate {
+            self.0.cleanup_started.notify_one();
+            gate.notified().await;
+        }
+        Ok(())
+    }
+
     async fn open_preview_session(
         &self,
         _: &CatalogPath,
@@ -553,6 +571,13 @@ impl Session for PreviewSession {
     }
     async fn ping(&self) -> Result<Duration> {
         Ok(Duration::ZERO)
+    }
+    async fn transaction_state(&self, cancel: &CancelToken) -> oxyn_core::TransactionState {
+        if self.0.wait_for_transaction_state {
+            self.0.transaction_state_started.notify_one();
+            cancel.cancelled().await;
+        }
+        oxyn_core::TransactionState::Unknown
     }
     async fn close(self: Box<Self>) -> Result<()> {
         self.0.closed.store(true, Ordering::SeqCst);
@@ -1016,3 +1041,6 @@ mod retained;
 
 #[path = "isolated_preview_tests.rs"]
 mod isolated;
+
+#[path = "original_preview_tests.rs"]
+mod original;
