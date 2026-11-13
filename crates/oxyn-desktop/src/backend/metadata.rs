@@ -229,7 +229,7 @@ impl Backend {
 
     /// What the editor's completion reads of the cache, in one pass.
     ///
-    /// A cache read like [`Self::catalog_tree`], and nothing more: no driver,
+    /// A cache read like [`Self::catalog_tree_for_session`], and nothing more: no driver,
     /// no round trip. What the cache lacks is read by the bus, in bounded
     /// passes ([ADR-0057](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
     pub fn completion_catalog(

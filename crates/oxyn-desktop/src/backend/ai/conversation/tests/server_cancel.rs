@@ -1,7 +1,7 @@
 //! An external agent's query, abandoned, stops **on the PostgreSQL server**.
 //!
 //! Dropping a future cancels nothing remote: a `SELECT` left running keeps a
-//! server process, its locks and one of the session's four connections. These
+//! server process, its locks and the session's physical connection. These
 //! tests follow a call from the agent's HTTP request, through Oxyn's MCP
 //! endpoint, the question's gate, the real `AgentSink` and the executor, down to
 //! the driver — and read the outcome where it is decided, in
@@ -424,14 +424,14 @@ impl Bench {
         }
     }
 
-    /// The connection that ran the abandoned query is released, and the
-    /// session still serves.
+    /// The abandoned physical connection is released. The old logical owner
+    /// refuses lost state, and an explicit reconnect creates a usable owner.
     ///
     /// Released means closed: the stream task cancels while holding it, then
     /// closes it rather than hand a process with a cancellation in flight to
     /// the next query. A connection still held by the abandoned call would
     /// keep that process alive, idle, with one connection fewer in the pool.
-    fn session_serves(&self, first: &(i32, String)) {
+    fn connection_serves_after_explicit_reconnect(&self, first: &(i32, String)) {
         let deadline = Instant::now() + CANCEL_BOUND;
         while self.alive(first.0) {
             assert!(
@@ -440,28 +440,70 @@ impl Bench {
             );
             self.pause(Duration::from_millis(20));
         }
-        let started = Instant::now();
-        let outcome = self
+        let connection = self.open.connection.parse().expect("connection id");
+        let previous = self.open.session.parse().expect("session id");
+        let query = |session| Command::Execute {
+            connection,
+            session,
+            request: Box::new(ExecRequest::new(
+                QueryLanguage::Sql(SqlDialect::Postgres),
+                "SELECT 1 AS still_served",
+            )),
+        };
+        let lost = self
             .runtime
             .block_on(tokio::time::timeout(
                 CANCEL_BOUND,
                 self.backend.inner.executor.dispatch(
                     Actor::Human,
-                    Command::Execute {
-                        connection: self.open.connection.parse().expect("connection id"),
-                        session: self.open.session.parse().expect("session id"),
-                        request: Box::new(ExecRequest::new(
-                            QueryLanguage::Sql(SqlDialect::Postgres),
-                            "SELECT 1 AS still_served",
-                        )),
-                    },
+                    query(previous),
                     &CancelToken::new(),
                 ),
             ))
-            .expect("the session answers after the cancellation")
-            .expect("the query runs");
+            .expect("the lost session refuses promptly");
+        assert!(
+            matches!(lost, Err(oxyn_core::OxynError::Config(_))),
+            "no silent replacement: {lost:?}"
+        );
+        let started = Instant::now();
+        let outcome = self
+            .runtime
+            .block_on(tokio::time::timeout(CANCEL_BOUND, async {
+                let executor = &self.backend.inner.executor;
+                executor
+                    .dispatch(
+                        Actor::Human,
+                        Command::CloseSession {
+                            connection,
+                            session: previous,
+                        },
+                        &CancelToken::new(),
+                    )
+                    .await
+                    .expect("close lost logical owner");
+                let Outcome::Connected { session, .. } = executor
+                    .dispatch(
+                        Actor::Human,
+                        Command::Connect { connection },
+                        &CancelToken::new(),
+                    )
+                    .await
+                    .expect("explicit reconnect")
+                else {
+                    panic!("new owner")
+                };
+                assert_ne!(
+                    session, previous,
+                    "reconnect never reuses a lost logical identity"
+                );
+                executor
+                    .dispatch(Actor::Human, query(session), &CancelToken::new())
+                    .await
+                    .expect("new owner serves")
+            }))
+            .expect("explicit reconnect completes promptly");
         assert!(matches!(outcome, Outcome::Executed { .. }), "{outcome:?}");
-        eprintln!("the session served again within {:?}", started.elapsed());
+        eprintln!("the new session served within {:?}", started.elapsed());
     }
 }
 
@@ -493,7 +535,7 @@ fn closing_the_question_cancels_the_agents_query_on_the_server() {
     // failure an agent would retry (I-13).
     assert!(answer.contains("class: ambiguous"), "{answer}");
     assert!(answer.contains("retryable: false"), "{answer}");
-    bench.session_serves(&first);
+    bench.connection_serves_after_explicit_reconnect(&first);
 
     drop(endpoint);
     bench
@@ -535,7 +577,7 @@ fn stopping_the_endpoint_cancels_the_agents_query_within_its_grace() {
             .is_ok_and(|answer| answer.contains("\"slept\"")),
         "an abandoned call handed back a result: {answer:?}"
     );
-    bench.session_serves(&first);
+    bench.connection_serves_after_explicit_reconnect(&first);
 }
 
 #[test]
@@ -563,6 +605,6 @@ fn dropping_the_serving_future_whole_still_cancels_the_query_on_the_server() {
             .is_ok_and(|answer| answer.contains("\"slept\"")),
         "an aborted call handed back a result: {cut:?}"
     );
-    bench.session_serves(&first);
+    bench.connection_serves_after_explicit_reconnect(&first);
     drop(endpoint);
 }
