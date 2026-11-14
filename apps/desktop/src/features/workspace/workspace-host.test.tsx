@@ -1,17 +1,31 @@
 import * as React from "react"
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { OpenConnection } from "@/lib/ipc/types"
 
 const calls = vi.hoisted(() => ({
   mounted: vi.fn(),
+  navigate: vi.fn(() => Promise.resolve()),
   exit: vi.fn(),
   disconnect: vi.fn(() => Promise.resolve()),
   close: vi.fn(() => Promise.resolve()),
   closeConversation: vi.fn(() => Promise.resolve()),
   closeSessions: vi.fn(),
   pathname: "/workspace",
+}))
+
+// Explorer behavior is covered by its own coordinator/provider tests. This
+// host suite isolates retention and release, with no navigation metadata I/O.
+vi.mock("@/features/multi-base/explorer-provider", () => ({
+  ExplorerProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 
 // Only `disconnect` exists here: a `connect`, a `reconnect` or an execution
@@ -39,7 +53,7 @@ vi.mock("@/features/workspace/aside-panels", () => ({
 }))
 vi.mock("@tanstack/react-router", () => ({
   CatchBoundary: ({ children }: { children: React.ReactNode }) => children,
-  useNavigate: () => () => Promise.resolve(),
+  useNavigate: () => calls.navigate,
   useRouterState: ({
     select,
   }: {
@@ -114,6 +128,21 @@ describe("the workspace host", () => {
     expect(calls.close).not.toHaveBeenCalled()
     // A's previews stay its own: none is evicted on the way (#86).
     expect(calls.closeSessions).not.toHaveBeenCalled()
+  })
+
+  it("keeps an incomplete release visible and retries only the failed workspace", async () => {
+    calls.disconnect.mockRejectedValueOnce(
+      new Error("synthetic cleanup failure")
+    )
+    act(() => openConnection(opened("a")))
+    render(<WorkspaceHost />)
+    act(() => closeConnection("a"))
+    await screen.findByText("synthetic cleanup failure")
+    expect(screen.getByTestId("workspace-a")).toBeTruthy()
+    expect(calls.closeConversation).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "Retry cleanup" }))
+    await waitFor(() => expect(screen.queryByTestId("workspace-a")).toBeNull())
+    expect(calls.disconnect).toHaveBeenCalledTimes(2)
   })
 
   it("releases a connection disconnected explicitly, drafts first", async () => {

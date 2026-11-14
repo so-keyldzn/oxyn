@@ -513,6 +513,27 @@ impl Backend {
         id: CommandId,
         draft: ConnectionDraft,
     ) -> Result<ConnectResponse, IpcError> {
+        self.connect_grouped(id, draft, None).await
+    }
+
+    /// Creates and opens a reviewed child with independent credentials.
+    /// Existing children use reconnect; failed opening returns their saved ID.
+    pub async fn open_database(
+        &self,
+        id: CommandId,
+        profile: oxyn_core::ServerProfileId,
+        seed: ConnectionId,
+        draft: ConnectionDraft,
+    ) -> Result<ConnectResponse, IpcError> {
+        self.connect_grouped(id, draft, Some((profile, seed))).await
+    }
+
+    async fn connect_grouped(
+        &self,
+        id: CommandId,
+        draft: ConnectionDraft,
+        group: Option<(oxyn_core::ServerProfileId, ConnectionId)>,
+    ) -> Result<ConnectResponse, IpcError> {
         let inner = &self.inner;
         let cancel = self.track(id)?;
 
@@ -532,8 +553,15 @@ impl Backend {
             .dispatch_as(
                 id,
                 Actor::Human,
-                Command::CreateConnection {
-                    config: Box::new(config.clone()),
+                match group {
+                    Some((profile, seed)) => Command::CreateDatabaseConnection {
+                        profile,
+                        seed,
+                        config: Box::new(config.clone()),
+                    },
+                    None => Command::CreateConnection {
+                        config: Box::new(config.clone()),
+                    },
                 },
                 &cancel,
             )
@@ -653,13 +681,13 @@ impl Backend {
         approved: bool,
     ) -> Result<Option<ConnectResponse>, IpcError> {
         let inner = &self.inner;
-        if !inner.pending_connections.lock().contains_key(&command) {
-            return Err(IpcError::invalid("No connection is awaiting this decision"));
-        }
         if !approved {
             inner.pending_connections.lock().remove(&command);
             inner.executor.reject(command);
             return Ok(None);
+        }
+        if !inner.pending_connections.lock().contains_key(&command) {
+            return Err(IpcError::invalid("No connection is awaiting this decision"));
         }
         // Registered under the pending command's id, before the host is asked:
         // `cancel(command)` must reach the approval and the session opening
@@ -1195,6 +1223,7 @@ mod proposal;
 mod recovery;
 mod results;
 mod semantic;
+mod server_profiles;
 mod settings;
 mod tracking;
 pub(crate) mod windows;

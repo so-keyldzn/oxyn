@@ -101,6 +101,7 @@ pub mod egress;
 pub mod error;
 pub mod history;
 pub mod journal;
+pub mod server_profiles;
 pub mod store;
 pub mod workspaces;
 
@@ -239,6 +240,8 @@ mod tests {
                 "external_agents",
                 "query_history",
                 "schema_version",
+                "server_profile_members",
+                "server_profiles",
                 "workspace_preferences",
                 "workspace_window_consoles",
                 "workspace_windows",

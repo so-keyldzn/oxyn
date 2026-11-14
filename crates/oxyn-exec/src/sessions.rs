@@ -122,6 +122,7 @@ pub struct SessionSlot {
     opened_at: Instant,
     session: AsyncRwLock<Option<Box<dyn Session>>>,
     closing: CancelToken,
+    opening: Option<ConnectionConfig>,
     purpose: Purpose,
     user_activity: AtomicBool,
     access: access::Access,
@@ -154,7 +155,29 @@ impl SessionSlot {
             user_activity: AtomicBool::new(false),
             access: access::Access::default(),
             catalog: crate::catalog::SessionCatalog::default(),
+            opening: None,
         }
+    }
+
+    /// Capture the immutable destination used at opening, never credentials.
+    pub(crate) fn opened(
+        config: ConnectionConfig,
+        session: Box<dyn Session>,
+        console: bool,
+    ) -> Self {
+        let mut slot = if console {
+            Self::console(config.id, session)
+        } else {
+            Self::new(config.id, session)
+        };
+        slot.opening = Some(config);
+        slot
+    }
+
+    pub(crate) fn opening_matches(&self, config: &ConnectionConfig) -> bool {
+        self.opening
+            .as_ref()
+            .is_some_and(|opened| opened.driver == config.driver && opened.params == config.params)
     }
 
     /// A private execution slot, never eligible to become the catalog session.
@@ -170,7 +193,8 @@ impl SessionSlot {
         slot
     }
 
-    pub(crate) const fn is_catalog(&self) -> bool {
+    /// Whether this slot is dedicated to catalog reads, with no console-local context.
+    pub const fn is_catalog(&self) -> bool {
         matches!(self.purpose, Purpose::Catalog)
     }
     pub(crate) const fn is_console(&self) -> bool {
@@ -489,6 +513,27 @@ impl SessionSlot {
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
         let operation = crate::catalog::read(session.catalog(), self.capabilities, scope, &token);
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
+    }
+
+    pub(crate) async fn discover_databases(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_core::DiscoveredDatabase>> {
+        let _reservation = self.access.shared()?;
+        let token = cancel.child();
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        let operation = session.catalog().discover_databases(&token);
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,

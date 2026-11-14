@@ -22,6 +22,16 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// A profile edit or membership move was based on stale state.
+    #[error("the server profile changed; reload it before applying this change")]
+    ServerProfileConflict,
+
+    /// Invalid profile input; never carries a supplied value.
+    #[error("server profile: {detail}")]
+    InvalidServerProfile {
+        /// Static, non-sensitive reason.
+        detail: &'static str,
+    },
     /// The local operation stopped before completion at the caller's request.
     #[error("local operation cancelled")]
     Cancelled,
@@ -139,6 +149,8 @@ impl From<StoreError> for OxynError {
             // thread, shorten a query — is an action, not a bug report.
             // Retrying identically changes nothing.
             StoreError::DataDirUnavailable
+            | StoreError::ServerProfileConflict
+            | StoreError::InvalidServerProfile { .. }
             | StoreError::SchemaTooRecent { .. }
             | StoreError::SecretInParams { .. }
             | StoreError::TooLarge { .. } => Self::Config(message),

@@ -1,12 +1,13 @@
 # ADR-0080 — Group database connections under server profiles without sharing authority
 
-**Status:** proposed · **Date:** 2026-11-13
+**Status:** accepted · **Date:** 2026-11-13 · **Implemented:** 2026-11-14
 
 **Refines:** [ADR-0019](0019-contexte-de-session.md) on the distinction between
 opening another database and changing a console's namespace, and
 [ADR-0046](0046-workspaces-retenus-restent-connectes.md) on grouping retained
-connections. This is a design proposal; existing security and persistence
-contracts remain in force until implementation and validation.
+connections. The multi-base implementation preserves the existing security and
+persistence contracts; the [completion ledger](../implementation-plan/completion.md)
+records automatic validation and personal acceptance separately.
 
 ## Context
 
@@ -145,16 +146,17 @@ Opening another base does not freeze the whole explorer. Per-window opening
 reservations count toward the existing connection bound; repeated activation
 coalesces on the same child. Late completion of a cancelled opening releases
 only resources it owns, not a session already retained by another operation.
-Labels distinguish discovered, credentials required, opening, connected,
-active, access denied and closing; a failed discovery is not an empty server.
+States distinguish discovered, saved, opening, connected, active, cancelling
+and local failures. The ordinary close review handles pending disconnection;
+a failed discovery is not an empty server.
 
 ### Text routing and context
 
 Within this new grouped navigation, a newly opened base starts with an empty
-console. This is a proposed refinement of the automatic draft copy described
-in UX-SPEC's first workspace navigation; existing ungrouped navigation is not
-silently changed by this proposal. `Copy SQL to database…` explicitly names
-source and destination and creates an unexecuted copy.
+console. This refines the automatic draft copy described in UX-SPEC's first
+workspace navigation; the separate start-screen flow keeps its existing copy
+behavior. A future explicit cross-database copy must name source and destination
+and create an unexecuted copy; it is not an implicit activation action.
 
 Text insertion requests name their destination connection and console/session
 generation; a later change of active base cannot redirect them. Dropping an

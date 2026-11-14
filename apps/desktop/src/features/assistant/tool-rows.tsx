@@ -20,8 +20,10 @@ import { results } from "@/lib/ipc/results"
 export function ToolRows({
   connection,
   entry,
+  workspace,
 }: {
   connection: string
+  workspace?: string
   entry: ToolCallEntry & { result: string }
 }) {
   // Opened for this view alone, like a History tab: the opening counts one
@@ -68,7 +70,7 @@ export function ToolRows({
       state={state}
       fetchPage={fetchPage}
       onOpenAll={() =>
-        openAgentResult(connection, entry.result, entry.statement)
+        openAgentResult(connection, entry.result, entry.statement, workspace)
       }
       onRetry={() => void opened.refetch()}
     />

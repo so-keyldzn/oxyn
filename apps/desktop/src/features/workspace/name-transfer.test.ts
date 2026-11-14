@@ -8,6 +8,7 @@ import {
   consoleTextRequests,
   takeConsoleTextRequests,
 } from "@/features/consoles/open-in-console"
+import { registerConsoleDestination } from "@/features/consoles/text-destination"
 import { setZoneHandle } from "@/lib/actions/context"
 import { metadata } from "@/lib/ipc/metadata"
 import type { CatalogNode } from "@/lib/ipc/types"
@@ -28,11 +29,14 @@ const hostile: CatalogNode = {
 }
 
 /** An editor under the pointer, as `SqlEditor` registers its zone. */
-function editorUnderPointer(insertAt: (text: string) => void) {
+function editorUnderPointer(
+  insertAt: (text: string) => void,
+  connection = "connection-1"
+) {
   const zone = document.createElement("div")
   zone.dataset.actionZone = "editor"
   document.body.append(zone)
-  setZoneHandle(zone, { insertAt })
+  setZoneHandle(zone, { insertAt, owner: { connection, session: "console-a" } })
   // jsdom lays nothing out: say what lies under the point.
   document.elementFromPoint = () => zone
   return zone
@@ -71,12 +75,64 @@ describe("a relation's name taken from the catalog", () => {
 
   it("goes to the active console from the keyboard, unrun", async () => {
     vi.spyOn(metadata, "relationFacets").mockResolvedValue(hostileFacets)
+    const unregister = registerConsoleDestination(
+      "connection-1",
+      "generation-a",
+      () => "console-a"
+    )
     nameTransfer("connection-1", vi.fn()).onInsert(hostile)
     await vi.waitFor(() => expect(consoleTextRequests.state).toHaveLength(1))
     expect(consoleTextRequests.state[0]).toMatchObject({
       sql: '"public"."users""; DROP TABLE audit; --"',
       newConsole: false,
+      connection: "connection-1",
+      workspace: "generation-a",
+      session: "console-a",
     })
+    unregister()
+  })
+
+  it("refuses a foreign editor before reading or inserting the name", () => {
+    const read = vi.spyOn(metadata, "relationFacets")
+    const insert = vi.fn()
+    editorUnderPointer(insert, "connection-2")
+    const review = vi.fn()
+    nameTransfer("connection-1", vi.fn(), undefined, review).onDrop(hostile, {
+      x: 1,
+      y: 1,
+    })
+    expect(review).toHaveBeenCalledWith(hostile)
+    expect(read).not.toHaveBeenCalled()
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it("keeps a delayed keyboard insertion bound to its captured generation and console", async () => {
+    let deliver!: (value: typeof hostileFacets) => void
+    vi.spyOn(metadata, "relationFacets").mockReturnValue(
+      new Promise((resolve) => {
+        deliver = resolve
+      })
+    )
+    const unregister = registerConsoleDestination(
+      "connection-1",
+      "old-generation",
+      () => "old-console"
+    )
+    nameTransfer("connection-1", vi.fn()).onInsert(hostile)
+    unregister()
+    const release = registerConsoleDestination(
+      "connection-1",
+      "new-generation",
+      () => "new-console"
+    )
+    deliver(hostileFacets)
+    await vi.waitFor(() => expect(consoleTextRequests.state).toHaveLength(1))
+    expect(consoleTextRequests.state[0]).toMatchObject({
+      connection: "connection-1",
+      workspace: "old-generation",
+      session: "old-console",
+    })
+    release()
   })
 
   it("reports a failed lookup instead of inserting a guess", async () => {

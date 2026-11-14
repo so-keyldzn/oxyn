@@ -143,7 +143,10 @@ pub(crate) fn held_command(
 ) -> Confirmation {
     let mut body = String::new();
     let title = match (&held.command, saved) {
-        (Command::CreateConnection { config }, _) => {
+        (
+            Command::CreateConnection { config } | Command::CreateDatabaseConnection { config, .. },
+            _,
+        ) => {
             push_connection(&mut body, config, environment);
             body.push_str("\nA new connection is saved with this marking.");
             "Save a production connection?"

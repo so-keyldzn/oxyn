@@ -114,7 +114,11 @@ impl LocalWork {
 pub(crate) const fn is_local_write(command: &Command) -> bool {
     matches!(
         command,
-        Command::WriteWorkspacePreferences { .. }
+        Command::CreateDatabaseConnection { .. }
+            | Command::SaveServerProfile { .. }
+            | Command::RemoveServerProfile { .. }
+            | Command::SetServerProfileMembership { .. }
+            | Command::WriteWorkspacePreferences { .. }
             | Command::SaveQueryDocument { .. }
             | Command::CloseQueryDocument { .. }
             | Command::DeleteQueryDocument { .. }

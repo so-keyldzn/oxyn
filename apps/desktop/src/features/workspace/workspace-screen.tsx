@@ -3,6 +3,13 @@ import { previews } from "@/features/metadata/preview-state"
 import { OpenSessionTable } from "@/components/oxyn/open-session-table"
 import { CatalogSource } from "@/components/oxyn/catalog-source"
 import * as React from "react"
+import {
+  disconnectRequests,
+  takeWorkspaceDisconnect,
+  finishWorkspaceDisconnect,
+  registerDisconnectCosts,
+} from "./disconnect-requests"
+import { serverProfiles } from "@/lib/ipc/server-profiles"
 import { useQuery } from "@tanstack/react-query"
 import { useSelector } from "@tanstack/react-store"
 
@@ -87,7 +94,7 @@ import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
 import { actionKeys } from "@/lib/actions/manifest"
-import { BackendError } from "@/lib/ipc/client"
+import { BackendError, newCommandId } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { metadata } from "@/lib/ipc/metadata"
 import { windows } from "@/lib/ipc/windows"
@@ -379,8 +386,16 @@ export function WorkspaceScreen({
   // catalog would; another connection's requests stay for its own screen.
   const objectRequests = useSelector(objectOpenRequests)
   React.useEffect(() => {
-    if (objectRequests.length === 0) return
+    if (!visible || objectRequests.length === 0) return
     for (const request of takeObjectOpenRequests(open.connection)) {
+      if (request.workspace !== null && request.workspace !== open.session) {
+        toast.add({
+          title: "Object source was replaced",
+          description: "Choose the object again in its current workspace.",
+          type: "warning",
+        })
+        continue
+      }
       const source = request.session
         ? work.entries.find(
             (entry) => entry.session?.session === request.session
@@ -401,7 +416,7 @@ export function WorkspaceScreen({
       )
     }
     // `openObject` reads the tabs through a ref: the requests are the trigger.
-  }, [objectRequests, open.connection])
+  }, [objectRequests, open.connection, open.session, visible])
 
   const openResult = (tab: Omit<ResultTab, "key">) => {
     const key = `result:${tab.result}`
@@ -417,8 +432,16 @@ export function WorkspaceScreen({
   // rows, never a rerun. Another connection's requests stay for its screen.
   const resultRequests = useSelector(resultOpenRequests)
   React.useEffect(() => {
-    if (resultRequests.length === 0) return
+    if (!visible || resultRequests.length === 0) return
     for (const request of takeResultOpenRequests(open.connection)) {
+      if (request.workspace !== null && request.workspace !== open.session) {
+        toast.add({
+          title: "Result source was replaced",
+          description: "Open the result again from its current conversation.",
+          type: "warning",
+        })
+        continue
+      }
       openResult({
         connection: request.connection,
         result: request.result,
@@ -429,7 +452,7 @@ export function WorkspaceScreen({
       })
     }
     // `openResult` only sets state: the requests are the trigger.
-  }, [resultRequests, open.connection])
+  }, [resultRequests, open.connection, open.session, visible])
 
   /**
    * Closes the tab `key`. Resolves `false` when a console's close was
@@ -760,6 +783,84 @@ export function WorkspaceScreen({
     return "blocked" in carried ? carried.blocked : null
   }
 
+  const readCosts = React.useRef(() => ({
+    consoles: 0,
+    unsaved: 0,
+    running: 0,
+  }))
+  readCosts.current = () => {
+    const costs = work.windowCloseCosts()
+    return {
+      consoles: work.entries.length,
+      unsaved: costs.filter((cost) => cost.unsaved || cost.conflict).length,
+      running: costs.filter((cost) => cost.running).length + exporting.size,
+    }
+  }
+  React.useEffect(
+    () => registerDisconnectCosts(open.connection, () => readCosts.current()),
+    [open.connection]
+  )
+  React.useEffect(
+    () => () => finishWorkspaceDisconnect(open.connection, false),
+    [open.connection]
+  )
+
+  const disconnecting = React.useRef(false)
+  const [disconnectRequested, setDisconnectRequested] = React.useState(false)
+  const requestedDisconnects = useSelector(disconnectRequests)
+  const requestDisconnect = async () => {
+    if (disconnecting.current) return
+    if (closeTabs.review) {
+      finishWorkspaceDisconnect(open.connection, false)
+      toast.add({
+        title: "Finish the current tab review first",
+        type: "warning",
+      })
+      return
+    }
+    disconnecting.current = true
+    try {
+      await serverProfiles.disconnectReady(newCommandId(), open.connection)
+      setDisconnectRequested(true)
+      closeTabs.request(tabs.map((tab) => tab.key))
+    } catch (caught) {
+      finishWorkspaceDisconnect(open.connection, false)
+      toast.add({
+        title: "Connection stays open",
+        description: caught instanceof Error ? caught.message : String(caught),
+        type: "error",
+      })
+    } finally {
+      disconnecting.current = false
+    }
+  }
+  React.useEffect(() => {
+    if (
+      visible &&
+      requestedDisconnects.includes(open.connection) &&
+      takeWorkspaceDisconnect(open.connection)
+    )
+      void requestDisconnect()
+  }, [visible, requestedDisconnects, open.connection])
+  React.useEffect(() => {
+    if (!disconnectRequested || tabs.length > 0) return
+    setDisconnectRequested(false)
+    void serverProfiles
+      .disconnectReady(newCommandId(), open.connection)
+      .then(() => {
+        onDisconnect()
+      })
+      .catch((caught) => {
+        finishWorkspaceDisconnect(open.connection, false)
+        toast.add({
+          title: "Connection stays open",
+          description:
+            caught instanceof Error ? caught.message : String(caught),
+          type: "error",
+        })
+      })
+  }, [disconnectRequested, tabs.length, open.connection, onDisconnect])
+
   const closeTabs = useCloseTabs({
     targets: () =>
       tabs.map((tab) => {
@@ -887,6 +988,7 @@ export function WorkspaceScreen({
           leftView === "catalog" ? (
             <CatalogSidebar
               key={sourceOpen?.session ?? open.session}
+              navigation={visible}
               open={sourceOpen ?? open}
               sessionScoped={sourceOpen !== undefined}
               sourceSelector={
@@ -1006,7 +1108,7 @@ export function WorkspaceScreen({
         }
         compact={compact}
         onOpenSettings={onOpenSettings}
-        onDisconnect={onDisconnect}
+        onDisconnect={() => void requestDisconnect()}
         statusBar={
           <StatusBar
             connectionName={open.name}
@@ -1169,7 +1271,11 @@ export function WorkspaceScreen({
       />
       <CloseTabsDialog
         review={visible ? closeTabs.review : null}
-        onCancel={closeTabs.cancel}
+        onCancel={() => {
+          setDisconnectRequested(false)
+          finishWorkspaceDisconnect(open.connection, false)
+          closeTabs.cancel()
+        }}
         onSave={() => void closeTabs.decide("save")}
         onDiscard={() => void closeTabs.decide("discard")}
       />

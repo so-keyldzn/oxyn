@@ -648,6 +648,25 @@ See [ADR-0002](adr/0002-arrow-result-model.md).
 
 ## 6. The catalog
 
+### Local server-profile state
+
+Server grouping ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md))
+adds workspace-local `server_profiles` and `server_profile_members` in store
+migration 20. The four profile commands cross the executor and blocking pool;
+the desktop exposes typed, window-attributed IPC without opening a database.
+Non-secret defaults are validated against the driver registry and rechecked on
+read-back. Optimistic revisions and membership comparison refuse stale edits;
+database constraints preserve workspace/protocol ownership. Removing a profile
+leaves child connection IDs, settings and credential references intact.
+This local grouping state does not change the catalog hierarchy or its cache.
+Server discovery is a separate optional `CatalogProvider` read through an open
+seed session. PostgreSQL implements it; unsupported engines return an error.
+Creating a database child atomically saves its independent configuration and
+membership, then follows the existing approval, keyring and session-opening
+path. The original connection and catalog remain separate.
+
+### Catalog hierarchy and reads
+
 A unified five-level model, whose tiers are **optional**:
 
 ```

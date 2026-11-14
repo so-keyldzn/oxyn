@@ -242,7 +242,7 @@ impl Backend {
         }
         let slot = inner.confirmations.reserve()?;
         let saved = match &held.command {
-            Command::CreateConnection { .. } => None,
+            Command::CreateConnection { .. } | Command::CreateDatabaseConnection { .. } => None,
             command => match command.target_connection() {
                 Some(connection) => match self.read_config(connection).await {
                     Ok(config) => Some(config),
@@ -254,7 +254,11 @@ impl Backend {
             },
         };
         let driver = match (&held.command, &saved) {
-            (Command::CreateConnection { config }, _) => Some(config.driver.clone()),
+            (
+                Command::CreateConnection { config }
+                | Command::CreateDatabaseConnection { config, .. },
+                _,
+            ) => Some(config.driver.clone()),
             (_, Some(saved)) => Some(saved.driver.clone()),
             _ => None,
         };

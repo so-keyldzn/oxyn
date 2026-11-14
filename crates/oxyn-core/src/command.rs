@@ -569,6 +569,46 @@ pub enum Command {
         id: crate::ai::ProviderId,
     },
 
+    /// Read this workspace's local server groups. Human-only (ADR-0080).
+    ListServerProfiles,
+    /// Discover server databases through an already open seed connection.
+    DiscoverDatabases { connection: ConnectionId },
+    /// Save an independently authenticated child and its membership atomically.
+    CreateDatabaseConnection {
+        /// Local group to attach to.
+        profile: crate::ServerProfileId,
+        /// Authorized connection whose endpoint is being explored.
+        seed: ConnectionId,
+        /// Reviewed child destination with its own credential reference.
+        config: Box<ConnectionConfig>,
+    },
+
+    /// Create or revise non-secret defaults without changing any child connection.
+    SaveServerProfile {
+        /// Bounded defaults; credentials are never accepted here.
+        profile: Box<crate::ServerProfile>,
+        /// None creates; Some updates exactly the observed revision.
+        expected_revision: Option<u64>,
+    },
+
+    /// Remove grouping only, preserving child connections and credentials.
+    RemoveServerProfile {
+        /// Profile in the executor's workspace.
+        profile: crate::ServerProfileId,
+        /// Revision observed by the caller.
+        expected_revision: u64,
+    },
+
+    /// Move or unlink one existing connection's local grouping; opens nothing.
+    SetServerProfileMembership {
+        /// Child connection whose configuration is left intact.
+        connection: ConnectionId,
+        /// New group, or None to ungroup.
+        profile: Option<crate::ServerProfileId>,
+        /// Previous group; refuses a concurrent move.
+        expected_profile: Option<crate::ServerProfileId>,
+    },
+
     /// Remove a declared AI provider. Documents keep the provenance they were
     /// written with.
     RemoveAiProvider {
@@ -651,6 +691,10 @@ impl Command {
             | Self::OpenRetainedResult { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. }
+            | Self::DiscoverDatabases { .. }
+            | Self::ListServerProfiles
+            | Self::SaveServerProfile { .. }
+            | Self::RemoveServerProfile { .. }
             | Self::ListAiProviders
             | Self::SaveAiProvider { .. }
             | Self::RemoveAiProvider { .. }
@@ -660,7 +704,9 @@ impl Command {
             // Opens and closes a session, writes nothing: the same effect as
             // `Connect`, on a configuration the workspace does not hold yet.
             | Self::TestConnection { .. } => StatementIntent::Read,
-            Self::CreateConnection { .. }
+            Self::SetServerProfileMembership { .. } => StatementIntent::Read,
+            Self::CreateDatabaseConnection { .. }
+            | Self::CreateConnection { .. }
             | Self::UpdateConnection { .. }
             | Self::DeleteConnection { .. } => StatementIntent::Ddl,
         }
@@ -674,7 +720,9 @@ impl Command {
     pub fn target_connection(&self) -> Option<ConnectionId> {
         match self {
             Self::ReadHistory { filter } => filter.connection,
-            Self::Connect { connection }
+            Self::DiscoverDatabases { connection }
+            | Self::SetServerProfileMembership { connection, .. }
+            | Self::Connect { connection }
             | Self::Disconnect { connection }
             | Self::CloseSession { connection, .. }
             | Self::OpenConsoleSession { connection }
@@ -692,7 +740,8 @@ impl Command {
             | Self::InspectResultValue { connection, .. }
             | Self::Export { connection, .. }
             | Self::DeleteConnection { connection } => Some(*connection),
-            Self::CreateConnection { config }
+            Self::CreateDatabaseConnection { config, .. }
+            | Self::CreateConnection { config }
             | Self::UpdateConnection { config }
             | Self::TestConnection { config } => Some(config.id),
             Self::ListQueryDocuments { .. }
@@ -710,6 +759,9 @@ impl Command {
             // A provider is declared **per machine** (ADR-0023): it has no
             // target connection, and the privacy tier that governs its use
             // stays the one of the open connection.
+            | Self::ListServerProfiles
+            | Self::SaveServerProfile { .. }
+            | Self::RemoveServerProfile { .. }
             | Self::ListAiProviders
             | Self::SaveAiProvider { .. }
             | Self::RemoveAiProvider { .. }
@@ -830,6 +882,12 @@ impl Command {
             Self::TestConnection { .. } => "TestConnection",
             Self::UpdateConnection { .. } => "UpdateConnection",
             Self::DeleteConnection { .. } => "DeleteConnection",
+            Self::ListServerProfiles => "ListServerProfiles",
+            Self::DiscoverDatabases { .. } => "DiscoverDatabases",
+            Self::CreateDatabaseConnection { .. } => "CreateDatabaseConnection",
+            Self::SaveServerProfile { .. } => "SaveServerProfile",
+            Self::RemoveServerProfile { .. } => "RemoveServerProfile",
+            Self::SetServerProfileMembership { .. } => "SetServerProfileMembership",
             Self::ListAiProviders => "ListAiProviders",
             Self::SaveAiProvider { .. } => "SaveAiProvider",
             Self::RemoveAiProvider { .. } => "RemoveAiProvider",

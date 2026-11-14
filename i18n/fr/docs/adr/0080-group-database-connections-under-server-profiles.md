@@ -1,15 +1,15 @@
-<!-- oxyn-translation source="docs/adr/0080-group-database-connections-under-server-profiles.md" sha256="51f88615be39" -->
+<!-- oxyn-translation source="docs/adr/0080-group-database-connections-under-server-profiles.md" sha256="45a1022ae9a8" -->
 
 # ADR-0080 — Regrouper les connexions par serveur sans partager leur autorité
 
-**Statut :** proposé · **Date :** 2026-11-13
+**Statut :** accepté · **Date :** 2026-11-13 · **Implémenté :** 2026-11-14
 
 **Précise :** [ADR-0019](0019-contexte-de-session.md) sur la distinction entre
 ouvrir une autre base et changer l'espace de noms d'une console, et
 [ADR-0046](0046-workspaces-retenus-restent-connectes.md) sur le regroupement des
-connexions conservées. C'est une proposition de conception ; les contrats de
-sécurité et de persistance actuels restent en vigueur jusqu'à l'implémentation
-et sa validation.
+connexions conservées. L’implémentation multi-base préserve les contrats de
+sécurité et de persistance existants ; le [suivi](../implementation-plan/completion.md)
+distingue contrôles automatiques et acceptation personnelle.
 
 ## Contexte
 
@@ -159,17 +159,18 @@ Ouvrir une autre base ne bloque pas tout l'explorateur. Les réservations
 d'ouverture par fenêtre comptent dans la limite existante ; les activations
 répétées se rejoignent sur le même enfant. Une ouverture annulée qui finit
 tardivement ne libère que ses propres ressources, pas une session déjà conservée
-par une autre opération. Les libellés distinguent découverte, identifiants requis,
-ouverture, connexion, activité, accès refusé et fermeture ; une découverte
-échouée n'est pas un serveur vide.
+par une autre opération. Les états distinguent découverte, sauvegarde, ouverture,
+connexion, activité, annulation et erreurs locales. La revue de fermeture
+ordinaire traite la déconnexion en attente ; une découverte échouée n’est pas
+un serveur vide.
 
 ### Routage du texte et contexte
 
 Dans cette nouvelle navigation groupée, une base nouvellement ouverte démarre
-avec une console vide. C'est une précision proposée de la copie automatique
-décrite dans la première navigation d'UX-SPEC ; la navigation non groupée
-existante n'est pas silencieusement changée. `Copy SQL to database…` nomme
-explicitement source et destination et crée une copie non exécutée.
+avec une console vide. Cela précise la copie automatique décrite dans la première
+navigation d’UX-SPEC ; le parcours distinct de l’accueil garde sa copie existante.
+Une future copie explicite entre bases devra nommer source et destination et
+créer une copie non exécutée ; elle ne fait pas partie de l’activation implicite.
 
 Les insertions nomment connexion et génération de console/session destinataires ;
 changer de base active ne peut les rediriger. Déposer un objet sur l'éditeur

@@ -2802,11 +2802,13 @@ The appendices now name SQLite cases SQ01–SQ06 for URI identity, reproducibili
 and recovery; inspected regression-test sources are distinguished from proposed
 end-to-end acceptance cases. No new SQLite test execution is claimed.
 
-The proposed architecture records are [0080](adr/0080-group-database-connections-under-server-profiles.md),
+The architecture records are [0080](adr/0080-group-database-connections-under-server-profiles.md),
 [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md),
 [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) and
 [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md).
-The journeys track their research and validation entry gates; native-tool
+Their current status is in each header; ADR-0080 is implemented in the completion
+ledger, while 0081–0083 remain proposed. The journeys track their research and
+validation entry gates; native-tool
 credential transport remains unresolved and blocks that authentication mode.
 
 These research proposals do not replace UX-SPEC, SECURITY or an accepted ADR.

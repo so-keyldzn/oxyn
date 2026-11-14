@@ -164,6 +164,12 @@ impl Store {
         Workspaces::new(self)
     }
 
+    /// Workspace-local server groups. Every operation may block on the store.
+    #[must_use]
+    pub fn server_profiles(&self) -> crate::server_profiles::ServerProfiles<'_> {
+        crate::server_profiles::ServerProfiles::new(self)
+    }
+
     /// The configured connections.
     #[must_use]
     pub fn connections(&self) -> Connections<'_> {

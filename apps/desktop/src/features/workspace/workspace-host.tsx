@@ -1,4 +1,18 @@
 import * as React from "react"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import {
+  disconnectRequests,
+  finishWorkspaceDisconnect,
+} from "./disconnect-requests"
+import {
+  showConnection,
+  closeConnection,
+  connectionReleased,
+  session,
+  takeConnectionsLeftByReload,
+} from "@/features/session"
+import { ExplorerProvider } from "@/features/multi-base/explorer-provider"
 import {
   CatchBoundary,
   useNavigate,
@@ -6,12 +20,6 @@ import {
 } from "@tanstack/react-router"
 import { useSelector } from "@tanstack/react-store"
 
-import {
-  closeConnection,
-  connectionReleased,
-  session,
-  takeConnectionsLeftByReload,
-} from "@/features/session"
 import { useAsidePanels } from "@/features/workspace/aside-panels"
 import { release } from "@/features/workspace/release-workspace"
 import { RouteError } from "@/features/workspace/route-failures"
@@ -48,6 +56,17 @@ export function WorkspaceHost({
   const [mounted, setMounted] = React.useState<Array<OpenConnection>>(
     () => workspaces
   )
+  const disconnects = useSelector(disconnectRequests)
+  React.useEffect(() => {
+    const target = disconnects[0]
+    if (!target) return
+    if (showConnection(target)) void navigate({ to: "/workspace" })
+    else finishWorkspaceDisconnect(target, false)
+  }, [disconnects, navigate])
+  const [releaseErrors, setReleaseErrors] = React.useState<
+    Record<string, string>
+  >({})
+  const [retry, retryRelease] = React.useReducer((n: number) => n + 1, 0)
   const exits = React.useRef(new Map<string, WorkspaceExit>())
   const releasing = React.useRef(new Set<string>())
 
@@ -68,22 +87,37 @@ export function WorkspaceHost({
       if (releasing.current.has(previous.session)) continue
       releasing.current.add(previous.session)
       void (async () => {
-        await release(
-          previous,
-          () =>
-            session.state.workspaces.some(
-              (held) => held.connection === previous.connection
-            ),
-          exits.current.get(previous.session) ?? null
-        )
-        releasing.current.delete(previous.session)
-        connectionReleased(previous.connection)
-        setMounted((current) =>
-          current.filter((held) => held.session !== previous.session)
-        )
+        try {
+          await release(
+            previous,
+            () =>
+              session.state.workspaces.some(
+                (held) => held.connection === previous.connection
+              ),
+            exits.current.get(previous.session) ?? null
+          )
+          releasing.current.delete(previous.session)
+          connectionReleased(previous.connection)
+          finishWorkspaceDisconnect(previous.connection, true)
+          setReleaseErrors((all) => {
+            const next = { ...all }
+            delete next[previous.session]
+            return next
+          })
+          setMounted((current) =>
+            current.filter((held) => held.session !== previous.session)
+          )
+        } catch (caught) {
+          finishWorkspaceDisconnect(previous.connection, false)
+          setReleaseErrors((all) => ({
+            ...all,
+            [previous.session]:
+              caught instanceof Error ? caught.message : String(caught),
+          }))
+        }
       })()
     }
-  }, [workspaces, mounted])
+  }, [workspaces, mounted, retry])
 
   // A reload of the webview keeps the Rust sessions but loses what they
   // belonged to: close them, then offer the working copies they left. Nothing
@@ -109,7 +143,25 @@ export function WorkspaceHost({
   }, [navigate])
 
   return (
-    <>
+    <ExplorerProvider>
+      {Object.entries(releaseErrors).map(([id, message]) => (
+        <Alert key={id} className="fixed bottom-4 left-4 z-50 max-w-md">
+          <AlertTitle>
+            Workspace disconnect incomplete ·{" "}
+            {mounted.find((held) => held.session === id)?.name}
+          </AlertTitle>
+          <AlertDescription>{message}</AlertDescription>
+          <Button
+            variant="outline"
+            onClick={() => {
+              releasing.current.delete(id)
+              retryRelease()
+            }}
+          >
+            Retry cleanup
+          </Button>
+        </Alert>
+      ))}
       {mounted.map((held) => {
         // The same session with new settings (a tier changed) is the live
         // value; a workspace on its way out keeps the one it had.
@@ -132,12 +184,13 @@ export function WorkspaceHost({
             onSwitchConnection={() => void navigate({ to: "/" })}
             onDisconnect={() => {
               closeConnection(held.connection)
-              void navigate({ to: "/" })
+              if (session.state.open) void navigate({ to: "/workspace" })
+              else void navigate({ to: "/" })
             }}
           />
         )
       })}
-    </>
+    </ExplorerProvider>
   )
 }
 

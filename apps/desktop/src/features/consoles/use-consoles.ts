@@ -1,5 +1,6 @@
 import { previews } from "@/features/metadata/preview-state"
 import * as React from "react"
+import { registerConsoleDestination } from "./text-destination"
 import { useSelector } from "@tanstack/react-store"
 
 import type { ExecutionSummary } from "@/components/oxyn/status-bar"
@@ -26,6 +27,7 @@ import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import {
   session as sessionStore,
   takeMovedConsole,
+  takeEmptyFirstConsole,
   takeRestoredWorkingCopies,
 } from "@/features/session"
 import type { ResultState } from "@/components/oxyn/result-panel"
@@ -580,10 +582,16 @@ export function useConsoles({
       const { sqlDraft, sqlDraftFrom, sqlDraftLanguage } = sessionStore.state
       await add(
         open.console,
-        firstConsoleText(
-          { text: sqlDraft, from: sqlDraftFrom, language: sqlDraftLanguage },
-          language
-        )
+        takeEmptyFirstConsole(open.console.session)
+          ? { text: "", notice: null }
+          : firstConsoleText(
+              {
+                text: sqlDraft,
+                from: sqlDraftFrom,
+                language: sqlDraftLanguage,
+              },
+              language
+            )
       )
       setReady(true)
     })()
@@ -710,19 +718,49 @@ export function useConsoles({
   // Text from the assistant or the inspector, dropped into a console unrun.
   const requests = useSelector(consoleTextRequests)
   const activeRef = React.useRef<string | null>(null)
+  React.useEffect(
+    () =>
+      registerConsoleDestination(
+        open.connection,
+        open.session,
+        () =>
+          entriesRef.current.find((entry) => entry.key === activeRef.current)
+            ?.session?.session ?? null
+      ),
+    [open.connection, open.session]
+  )
   React.useEffect(() => {
     if (requests.length === 0) return
     // Every retained workspace listens; only the shown one takes the text,
     // or it would land unseen in a hidden console (ADR-0046).
     if (!shown) return
-    for (const request of takeConsoleTextRequests()) {
-      const target = activeRef.current
-        ? handles.current.get(activeRef.current)
-        : undefined
+    for (const request of takeConsoleTextRequests(open.connection)) {
+      if (request.workspace !== null && request.workspace !== open.session) {
+        setNotice(
+          "The insertion's workspace was replaced. Nothing was inserted."
+        )
+        continue
+      }
+      const chosen = request.session
+        ? entriesRef.current.find(
+            (entry) => entry.session?.session === request.session
+          )?.key
+        : activeRef.current
+      if (request.session && !chosen) {
+        setNotice("The insertion's console was closed. Nothing was inserted.")
+        continue
+      }
+      const target = chosen ? handles.current.get(chosen) : undefined
+      if (request.session && !target) {
+        setNotice(
+          "The insertion’s console is unavailable. Nothing was inserted."
+        )
+        continue
+      }
       if (request.newConsole || !target) {
         void openConsole({ text: request.sql, notice: request.notice })
-      } else if (activeRef.current) {
-        onActivate(activeRef.current)
+      } else if (chosen) {
+        onActivate(chosen)
         target.insert(request.sql, request.notice)
       }
     }

@@ -197,6 +197,14 @@ fn main() -> Result<()> {
             // Files dropped from the system (ADR-0041, point 9)
             commands::file_drops::subscribe_file_drops,
             // Settings: preferences, saved-connection management, About
+            commands::server_profiles::connection_disconnect_ready,
+            commands::server_profiles::discard_database_opening,
+            commands::server_profiles::discover_databases,
+            commands::server_profiles::open_database,
+            commands::server_profiles::list_server_profiles,
+            commands::server_profiles::save_server_profile,
+            commands::server_profiles::remove_server_profile,
+            commands::server_profiles::set_server_profile_membership,
             commands::settings::read_preferences,
             commands::settings::write_preferences,
             commands::settings::connection_details,

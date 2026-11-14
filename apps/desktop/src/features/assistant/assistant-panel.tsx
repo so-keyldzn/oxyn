@@ -267,10 +267,11 @@ export function AssistantPanel({
       call.result === null ? null : (
         <ToolRows
           connection={open.connection}
+          workspace={open.session}
           entry={{ ...call, result: call.result }}
         />
       ),
-    [open.connection]
+    [open.connection, open.session]
   )
   // Names resolved against this connection's catalog, never believed.
   const renderErd = React.useCallback(
@@ -278,7 +279,9 @@ export function AssistantPanel({
       <ErdBlock
         open={open}
         request={request}
-        onOpenObject={(address) => openObject(open.connection, address)}
+        onOpenObject={(address) =>
+          openObject(open.connection, address, undefined, open.session)
+        }
       />
     ),
     [open]
@@ -414,7 +417,9 @@ export function AssistantPanel({
         }
         onOpenInConsole={onOpenInConsole}
         // In this connection's workspace, as a click in its catalog would.
-        onOpenObject={(address) => openObject(open.connection, address)}
+        onOpenObject={(address) =>
+          openObject(open.connection, address, undefined, open.session)
+        }
         renderToolRows={renderToolRows}
         renderErd={renderErd}
         onChangeAgentSetting={(intent) =>

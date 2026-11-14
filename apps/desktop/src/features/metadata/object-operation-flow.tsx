@@ -284,7 +284,8 @@ export function useObjectOperation(
         }}
         onOpenInConsole={() => {
           if (review)
-            openInConsole(review.sql, {
+            openInConsole(open.connection, review.sql, {
+              workspace: open.session,
               newConsole: true,
               notice:
                 "Refused by the server from the catalog review · nothing has run from this console",

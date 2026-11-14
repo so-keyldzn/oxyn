@@ -241,14 +241,10 @@ impl Backend {
     ) -> Result<CommandOutcome, IpcError> {
         let windows = &self.inner.windows;
         for session in windows.sessions_on(window, connection) {
+            // Preserve ownership on failure so the explicit cleanup can retry.
+            // A successful close of an earlier session remains closed.
+            self.close_console(connection, session).await?;
             windows.release_session(session);
-            if let Err(error) = self.close_console(connection, session).await {
-                tracing::warn!(
-                    session = %session,
-                    error = %error.message,
-                    "a released workspace's session could not be closed"
-                );
-            }
         }
         if windows.has_assistant(window, connection) {
             // An agent's tools act on a session of this connection: none
@@ -348,3 +344,95 @@ impl Backend {
 mod opening_tests;
 #[cfg(test)]
 mod tests;
+
+impl Backend {
+    /// Releases only the sessions returned by an opening cancelled in the webview.
+    /// Other views/sessions of the same connection remain owned and connected.
+    pub(crate) async fn discard_opening(
+        &self,
+        window: WindowKey,
+        connection: ConnectionId,
+        catalog: SessionId,
+        console: SessionId,
+    ) -> Result<(), IpcError> {
+        let _console = self.inner.workbench.consoles.run_on(console)?;
+        let _catalog = self.inner.workbench.consoles.run_on(catalog)?;
+        let owned = self.inner.windows.sessions_on(window, connection);
+        for id in [console, catalog] {
+            if !owned.contains(&id)
+                && self
+                    .inner
+                    .executor
+                    .sessions()
+                    .get(id)
+                    .is_some_and(|slot| slot.is_open())
+            {
+                return Err(IpcError::invalid(
+                    "The opening does not belong to this window and connection",
+                ));
+            }
+        }
+        for id in [console, catalog] {
+            if owned.contains(&id) {
+                self.close_console(connection, id).await?;
+                self.inner.windows.release_session(id);
+            }
+        }
+        if self
+            .inner
+            .windows
+            .sessions_on(window, connection)
+            .is_empty()
+            && let Some(_unused) = self.inner.windows.release_connection(window, connection)
+        {
+            self.inner.ai.release_agents(connection);
+            self.run(CommandId::new(), Command::Disconnect { connection })
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+impl Backend {
+    /// Observe already-reported session state; this performs no SQL or resolution.
+    pub(crate) async fn connection_disconnect_ready(
+        &self,
+        window: WindowKey,
+        command: CommandId,
+        connection: ConnectionId,
+    ) -> Result<(), IpcError> {
+        if !self.inner.windows.holders(connection).contains(&window) {
+            return Err(IpcError::invalid(
+                "This window does not hold the connection",
+            ));
+        }
+        let owned = self.inner.windows.sessions_on(window, connection);
+        let shared = self.inner.windows.held_elsewhere(command, connection);
+        if self
+            .inner
+            .executor
+            .running()
+            .for_connection(connection)
+            .iter()
+            .any(|work| !shared || owned.contains(&work.session))
+        {
+            return Err(IpcError::invalid(
+                "Stop running operations and inspect their outcome before disconnecting.",
+            ));
+        }
+        for slot in self.inner.executor.sessions().for_connection(connection) {
+            if (!shared || owned.contains(&slot.id()))
+                && slot.is_open()
+                && slot
+                    .capabilities()
+                    .contains(oxyn_core::Capabilities::TRANSACTIONS)
+                && slot.transaction_state().await != oxyn_core::TransactionState::Idle
+            {
+                return Err(IpcError::invalid(
+                    "Resolve open or unknown transactions explicitly before disconnecting. Close occupied data previews first if needed.",
+                ));
+            }
+        }
+        Ok(())
+    }
+}

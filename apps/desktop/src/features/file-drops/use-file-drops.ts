@@ -16,7 +16,7 @@ import type { DroppedFile } from "@/lib/ipc/file-drops"
 export function receiveDrop(
   file: DroppedFile,
   effects: {
-    connected: () => boolean
+    destination: () => { connection: string; workspace: string } | null
     openInConsole: typeof openInConsole
     offerConnection: typeof offerConnection
     showConnectionScreen: () => void
@@ -24,21 +24,24 @@ export function receiveDrop(
   }
 ) {
   switch (file.type) {
-    case "sql":
+    case "sql": {
       // A console belongs to a connection: without one, the text would wait
       // in a queue and surface in whatever workspace opens next.
-      if (!effects.connected()) {
+      const destination = effects.destination()
+      if (!destination) {
         effects.warn(
           `${file.name} was not opened`,
           "Open a connection first: a console runs on one."
         )
         return
       }
-      effects.openInConsole(file.text, {
+      effects.openInConsole(destination.connection, file.text, {
+        workspace: destination.workspace,
         newConsole: true,
         notice: `Opened from ${file.name}. Nothing was executed.`,
       })
       return
+    }
     case "database":
       effects.offerConnection({
         driver: file.driver,
@@ -62,7 +65,12 @@ export function useFileDrops() {
     void fileDrops
       .subscribe((file) =>
         receiveDrop(file, {
-          connected: () => session.state.open !== null,
+          destination: () => {
+            const open = session.state.open
+            return open
+              ? { connection: open.connection, workspace: open.session }
+              : null
+          },
           openInConsole,
           offerConnection,
           showConnectionScreen: () => void latest.current({ to: "/" }),

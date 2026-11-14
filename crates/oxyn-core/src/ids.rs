@@ -146,6 +146,9 @@ define_uuid_ids! {
     /// [`ConnectionConfig::name`](crate::connection::ConnectionConfig::name).
     ConnectionId,
 
+    /// A local server profile grouping independently authorized connections.
+    ServerProfileId,
+
     /// A session open on a connection. Capabilities are evaluated at this
     /// level, not at the driver's (ADR-0003).
     SessionId,

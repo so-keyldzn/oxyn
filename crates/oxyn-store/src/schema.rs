@@ -848,6 +848,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "conversation_agent",
         sql: M0019_CONVERSATION_AGENT,
     },
+    Migration {
+        version: 20,
+        name: "server_profiles",
+        sql: include_str!("schema/server_profiles.sql"),
+    },
 ];
 
 /// Schema version this binary can produce.

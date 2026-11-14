@@ -471,3 +471,81 @@ fn a_catalog_session_opened_after_its_cancellation_is_closed() {
     assert!(answer.is_err(), "cancelled: {answer:?}");
     assert_eq!(bench.open_sessions(), before, "no session outlives it");
 }
+
+#[test]
+fn discarded_opening_preserves_other_sessions_and_windows_and_is_idempotent() {
+    let bench = bench();
+    let _guard = bench.runtime.enter();
+    let window = bench.backend.reserve_window(true).expect("window");
+    let other = bench.backend.reserve_window(false).expect("other window");
+    let kept = bench.reopen_in(window);
+    let foreign = bench.reopen_in(other);
+    let discarded = bench.reopen_in(window);
+    bench
+        .runtime
+        .block_on(bench.backend.discard_opening(
+            window,
+            bench.connection,
+            discarded[0],
+            discarded[1],
+        ))
+        .expect("discard own pair");
+    let held = bench.open_sessions();
+    assert!(
+        kept.iter()
+            .chain(foreign.iter())
+            .all(|id| held.contains(id))
+    );
+    assert!(discarded.iter().all(|id| !held.contains(id)));
+    bench
+        .runtime
+        .block_on(bench.backend.discard_opening(
+            window,
+            bench.connection,
+            discarded[0],
+            discarded[1],
+        ))
+        .expect("repeat discard");
+    assert!(
+        bench
+            .runtime
+            .block_on(bench.backend.discard_opening(
+                window,
+                bench.connection,
+                foreign[0],
+                foreign[1]
+            ))
+            .is_err()
+    );
+    assert!(foreign.iter().all(|id| bench.open_sessions().contains(id)));
+}
+
+#[test]
+fn discovery_seed_is_owned_by_its_catalog_window() {
+    let bench = bench();
+    let _guard = bench.runtime.enter();
+    let owner = bench.backend.reserve_window(true).expect("owner");
+    let other = bench.backend.reserve_window(false).expect("other");
+    let sessions = bench.reopen_in(owner);
+    bench
+        .backend
+        .check_discovery_owner(owner, bench.connection)
+        .expect("own catalog");
+    assert!(
+        bench
+            .backend
+            .check_discovery_owner(other, bench.connection)
+            .is_err()
+    );
+    bench
+        .runtime
+        .block_on(bench.backend.close_console(bench.connection, sessions[0]))
+        .expect("close catalog");
+    assert!(
+        bench
+            .backend
+            .check_discovery_owner(owner, bench.connection)
+            .is_err(),
+        "a console alone is not a discovery source"
+    );
+}

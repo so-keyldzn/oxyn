@@ -355,6 +355,7 @@ export function zoneElement(context: ActionContext, zone: Zone) {
 
 /** What a zone element offers the actions that act inside it. */
 export interface ZoneHandle {
+  owner?: { connection: string; session: string }
   find?: () => void
   toggleComment?: () => void
   /** Puts text where `point` falls in the zone, without running it. */

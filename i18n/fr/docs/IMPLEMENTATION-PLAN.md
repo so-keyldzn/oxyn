@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="ca7c7de79646" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="ab5c33226992" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2839,11 +2839,13 @@ URI, reproductibilité et récupération ; les sources de tests de régression
 inspectées sont distinguées des critères de bout en bout proposés. Aucune
 nouvelle exécution de tests SQLite n'est revendiquée.
 
-Les propositions d'architecture sont consignées dans [0080](adr/0080-group-database-connections-under-server-profiles.md),
+Les décisions d’architecture sont consignées dans [0080](adr/0080-group-database-connections-under-server-profiles.md),
 [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md),
 [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) et
 [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md).
-Les parcours suivent leurs prérequis de recherche et de validation ; le transport
+Le statut courant figure dans chaque en-tête : l’ADR-0080 est implémenté dans
+le suivi d’achèvement, tandis que 0081–0083 restent proposés. Les parcours suivent
+leurs prérequis de recherche et de validation ; le transport
 des identifiants vers les outils natifs reste non résolu et bloque ce mode
 d'authentification.
 

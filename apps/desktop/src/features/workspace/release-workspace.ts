@@ -27,12 +27,12 @@ export async function release(
   if (reopened()) {
     // Reopened on the same connection: `disconnect` would close the new
     // sessions too, so only the old ones go.
-    await Promise.allSettled(
+    await Promise.all(
       left.sessions.map((id) => consoles.close(previous.connection, id))
     )
     return
   }
-  await backend.disconnect(previous.connection).catch(() => undefined)
+  await backend.disconnect(previous.connection)
   // The workspace is closed: its conversations go with it, and so does any
   // external agent still running for them — an agent kept alive past its
   // workspace would keep the tools and the tier it was launched under (I-04).

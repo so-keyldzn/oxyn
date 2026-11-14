@@ -372,3 +372,27 @@ fn an_external_agent_dialog_never_abbreviates_executable_content() {
     oversized.env = vec![("x".repeat(4097), "value".to_owned())];
     assert!(external_agent(&oversized, false).is_none());
 }
+
+#[test]
+fn grouped_database_creation_names_the_reviewed_production_destination() {
+    let child = saved("Independent child");
+    let pending = held(
+        Command::CreateDatabaseConnection {
+            profile: oxyn_core::ServerProfileId::new(),
+            seed: ConnectionId::new(),
+            config: Box::new(child),
+        },
+        "review destination",
+    );
+    let dialog = held_command(
+        &pending,
+        Environment::Production,
+        None,
+        Some(&postgres()),
+        &SecretsShown::default(),
+    );
+    let text = dialog.body;
+    assert!(text.contains("Independent child"));
+    assert!(text.contains("billing"));
+    assert!(text.contains("db.example.com"));
+}

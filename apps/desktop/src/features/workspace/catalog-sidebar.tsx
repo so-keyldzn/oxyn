@@ -1,4 +1,6 @@
 import * as React from "react"
+import { CatalogTransferDialog } from "@/components/oxyn/catalog-transfer-dialog"
+import { ExplorerNavigation } from "@/features/multi-base/explorer-provider"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { CatalogPanel } from "@/components/oxyn/catalog-panel"
@@ -9,7 +11,7 @@ import { Sidebar, SidebarRail } from "@/components/ui/sidebar"
 import { usePinToQuestion } from "@/features/assistant/object-pin"
 import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { hasCapability } from "@/features/session"
+import { hasCapability, showConnection } from "@/features/session"
 import { useCatalogCopies } from "@/features/workspace/catalog-copies"
 import { metadataReads } from "@/features/metadata/read-requests"
 import { nameTransfer } from "@/features/workspace/name-transfer"
@@ -75,8 +77,10 @@ export function CatalogSidebar({
   onLeave,
   sourceSelector,
   sessionScoped = false,
+  navigation = true,
 }: {
   open: OpenConnection
+  navigation?: boolean
   sourceSelector?: React.ReactNode
   sessionScoped?: boolean
   selected: string | null
@@ -90,6 +94,7 @@ export function CatalogSidebar({
   onNewConsole?: (place: SessionPlace) => void
   onLeave: () => void
 }) {
+  const [transfer, setTransfer] = React.useState<CatalogNode | null>(null)
   const queryClient = useQueryClient()
   const pin = usePinToQuestion(open)
   const treeNodes = React.useRef<Array<CatalogNode>>([])
@@ -252,6 +257,7 @@ export function CatalogSidebar({
   return (
     <Sidebar variant="inset" collapsible="icon">
       {sourceSelector}
+      {navigation && <ExplorerNavigation />}
       <CatalogPanel
         connectionName={open.name}
         driver={open.driver}
@@ -282,8 +288,11 @@ export function CatalogSidebar({
         onDismissProblem={() => setProblem(null)}
         onOpen={onOpen ?? ((node) => onSelect(node))}
         onCopyName={copies.copyName}
-        nameTransfer={nameTransfer(open.connection, (caught) =>
-          setProblem(problemOf(caught))
+        nameTransfer={nameTransfer(
+          open.connection,
+          (caught) => setProblem(problemOf(caught)),
+          { session: open.session, private: sessionScoped },
+          setTransfer
         )}
         onRefreshLevel={(node) => void refresh(node.address, true)}
         pin={sessionScoped ? undefined : pin}
@@ -313,6 +322,22 @@ export function CatalogSidebar({
       />
       <SidebarRail />
       {operation.element}
+      {transfer && (
+        <CatalogTransferDialog
+          name={transfer.name}
+          connection={open.name}
+          onCancel={() => setTransfer(null)}
+          onSource={() => {
+            showConnection(open.connection)
+            nameTransfer(
+              open.connection,
+              (caught) => setProblem(problemOf(caught)),
+              { session: open.session, private: sessionScoped }
+            ).onInsert(transfer)
+            setTransfer(null)
+          }}
+        />
+      )}
     </Sidebar>
   )
 }

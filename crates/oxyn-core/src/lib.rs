@@ -79,6 +79,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod library;
+pub mod server_profile;
 pub use library::{
     DocumentFilter, HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter,
     MAX_QUERY_DOCUMENT_BYTES, QueryDocumentUpdate,
@@ -108,13 +109,15 @@ pub use error::{ErrorClass, MissingModule, OxynError, Result};
 pub use event::Event;
 pub use ids::{
     AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,
-    DriverId, IdParseError, ResultId, SessionId, StatementHandle, WindowId, WorkspaceId,
+    DriverId, IdParseError, ResultId, ServerProfileId, SessionId, StatementHandle, WindowId,
+    WorkspaceId,
 };
 pub use policy::{ConnectionFacts, Decision, DefaultPolicy, PolicyGate, Preview};
 pub use preview::{PreviewShape, PreviewSort};
 pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
+pub use server_profile::{DiscoveredDatabase, ServerProfile, ServerProfileSnapshot};
 pub use stats::{ExecStats, ExecTimings};
 pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="0847ea25dc49" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="280008a1aaf6" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -666,6 +666,28 @@ Voir [ADR-0002](adr/0002-arrow-result-model.md).
 ---
 
 ## 6. Le catalogue
+
+### État local des profils serveur
+
+Le regroupement serveur ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md))
+ajoute `server_profiles` et `server_profile_members`, propres au workspace,
+dans la migration 20. Les quatre commandes traversent exécuteur et pool bloquant ;
+le desktop expose un IPC typé attribué à la fenêtre, sans ouvrir de base.
+Les valeurs non secrètes sont validées face au registre des drivers et
+revérifiées à la relecture. Révisions et comparaison d'appartenance refusent
+les modifications périmées ; les contraintes du fichier préservent workspace
+et protocole. Supprimer un profil conserve IDs, paramètres et références
+d'identifiants des connexions enfants. Ce regroupement local ne change ni
+la hiérarchie du catalogue ni son cache.
+
+La découverte serveur est une lecture optionnelle distincte de `CatalogProvider`,
+via une session source ouverte. PostgreSQL l'implémente ; les moteurs non pris
+en charge renvoient une erreur. La création d'un enfant enregistre atomiquement
+sa configuration indépendante et son appartenance, puis réutilise approbation,
+trousseau et ouverture de session. La connexion et le catalogue source restent
+distincts.
+
+### Hiérarchie et lectures du catalogue
 
 Modèle unifié à cinq niveaux, dont les paliers sont **optionnels** :
 

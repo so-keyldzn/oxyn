@@ -146,7 +146,18 @@ export function canOpenWorkspace(connection?: string) {
  * same connection handed back — new settings, or a session reopened —
  * replaces its entry in place.
  */
-export function openConnection(open: OpenConnection) {
+const emptyFirstConsoles = new Set<string>()
+
+/** Grouped navigation starts an unexecuted empty editor, preserving the source. */
+export function takeEmptyFirstConsole(consoleSession: string) {
+  return emptyFirstConsoles.delete(consoleSession)
+}
+
+export function openConnection(
+  open: OpenConnection,
+  options: { foreground?: boolean; emptyFirstConsole?: boolean } = {}
+) {
+  if (options.emptyFirstConsole) emptyFirstConsoles.add(open.console.session)
   session.setState((state) => {
     const known = state.workspaces.some(
       (held) => held.connection === open.connection
@@ -156,7 +167,11 @@ export function openConnection(open: OpenConnection) {
           held.connection === open.connection ? open : held
         )
       : [...state.workspaces, open]
-    return withWorkspaces(state, workspaces, open)
+    return withWorkspaces(
+      state,
+      workspaces,
+      options.foreground === false ? state.open : open
+    )
   })
 }
 
@@ -200,13 +215,18 @@ export function closeConnection(
   connection: string | undefined = session.state.open?.connection
 ) {
   if (connection !== undefined) leaving.add(connection)
-  session.setState((state) =>
-    withWorkspaces(
-      state,
-      state.workspaces.filter((open) => open.connection !== connection),
-      state.open?.connection === connection ? null : state.open
+  session.setState((state) => {
+    const remaining = state.workspaces.filter(
+      (open) => open.connection !== connection
     )
-  )
+    return withWorkspaces(
+      state,
+      remaining,
+      state.open?.connection === connection
+        ? (remaining[remaining.length - 1] ?? null)
+        : state.open
+    )
+  })
 }
 
 /** The host closed what a disconnected workspace held: a reload may forget it. */

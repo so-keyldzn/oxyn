@@ -332,6 +332,29 @@ impl DefaultPolicy {
 
 impl PolicyGate for DefaultPolicy {
     fn authorize(&self, actor: &Actor, cmd: &Command, env: Environment) -> Decision {
+        if let Command::CreateDatabaseConnection { config, .. } = cmd {
+            return self.authorize(
+                actor,
+                &Command::CreateConnection {
+                    config: config.clone(),
+                },
+                env,
+            );
+        }
+        // Grouping exposes connection defaults and controls future navigation.
+        // It is the human's state, never an agent's new discovery channel.
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::DiscoverDatabases { .. }
+                    | Command::ListServerProfiles
+                    | Command::SaveServerProfile { .. }
+                    | Command::RemoveServerProfile { .. }
+                    | Command::SetServerProfileMembership { .. }
+            )
+        {
+            return Decision::deny("only the human may inspect or change server profiles");
+        }
         if actor.is_agent() && matches!(cmd, Command::WriteWorkspacePreferences { .. }) {
             return Decision::Deny {
                 reason: "only the human may change workspace display preferences".into(),

@@ -95,6 +95,25 @@ mod session_catalog;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Outcome {
+    /// Server databases, without opening any child session.
+    DatabasesDiscovered {
+        databases: Vec<oxyn_core::DiscoveredDatabase>,
+    },
+    /// The workspace's local grouping state, without credentials.
+    ServerProfilesListed {
+        profiles: Vec<oxyn_core::ServerProfileSnapshot>,
+    },
+    /// A profile revision was persisted atomically.
+    ServerProfileSaved {
+        snapshot: oxyn_core::ServerProfileSnapshot,
+    },
+    /// Only the group and its memberships were removed.
+    ServerProfileRemoved { profile: oxyn_core::ServerProfileId },
+    /// The child's grouping changed; its configuration and sessions did not.
+    ServerProfileMembershipSet {
+        connection: ConnectionId,
+        profile: Option<oxyn_core::ServerProfileId>,
+    },
     /// A session was opened.
     Connected {
         /// The connection.
@@ -802,6 +821,40 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         match command {
+            Command::DiscoverDatabases { connection } => {
+                self.discover_databases(*connection, cancel).await
+            }
+            Command::CreateDatabaseConnection {
+                profile,
+                seed,
+                config,
+            } => {
+                self.create_database_connection(*profile, *seed, config, cancel)
+                    .await
+            }
+            Command::ListServerProfiles => self.list_server_profiles(cancel).await,
+            Command::SaveServerProfile {
+                profile,
+                expected_revision,
+            } => {
+                self.save_server_profile(profile, *expected_revision, cancel)
+                    .await
+            }
+            Command::RemoveServerProfile {
+                profile,
+                expected_revision,
+            } => {
+                self.remove_server_profile(*profile, *expected_revision, cancel)
+                    .await
+            }
+            Command::SetServerProfileMembership {
+                connection,
+                profile,
+                expected_profile,
+            } => {
+                self.set_server_profile_membership(*connection, *profile, *expected_profile, cancel)
+                    .await
+            }
             Command::Connect { connection } => self.connect(*connection, cancel, false).await,
             Command::OpenConsoleSession { connection } => {
                 self.connect(*connection, cancel, true).await
@@ -1469,11 +1522,9 @@ impl Executor {
     ) -> Result<Outcome> {
         let config = self.connection_config(connection, cancel).await?;
         let session = self.open_driver_session(&config, cancel).await?;
-        let slot = self.sessions.insert(if console {
-            SessionSlot::console(connection, session)
-        } else {
-            SessionSlot::new(connection, session)
-        });
+        let slot = self
+            .sessions
+            .insert(SessionSlot::opened(config, session, console));
         // Read, not assumed: a fresh SQLite connection is in autocommit, and
         // the console starts `Idle` because the engine said so. Before any
         // lock below: none may be held across this await.
@@ -2565,7 +2616,8 @@ impl Executor {
         match command {
             // The connection is not registered yet: its own declaration is
             // authoritative, and the gate will cross-check it.
-            Command::CreateConnection { config }
+            Command::CreateDatabaseConnection { config, .. }
+            | Command::CreateConnection { config }
             | Command::UpdateConnection { config }
             | Command::TestConnection { config } => config.environment,
             other => other
@@ -3301,3 +3353,6 @@ mod agent_transaction_tests;
 #[cfg(test)]
 #[path = "stopped_write_tests.rs"]
 mod stopped_write_tests;
+
+#[path = "server_profiles.rs"]
+mod server_profiles;

@@ -68,6 +68,20 @@ pub trait CatalogProvider: Send + Sync {
     /// Any session error: disconnection, insufficient rights, cancellation.
     async fn server_info(&self, cancel: &CancelToken) -> Result<ServerInfo>;
 
+    /// Server databases available for separate connections, distinct from catalogs.
+    ///
+    /// # Errors
+    /// Unsupported engines refuse explicitly; transport and cancellation errors propagate.
+    async fn discover_databases(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_core::DiscoveredDatabase>> {
+        let _ = cancel;
+        Err(OxynError::NotSupported {
+            capability: "server database discovery".into(),
+        })
+    }
+
     /// The visible catalogs.
     ///
     /// Returns an **empty** list by default: it is the right answer for MySQL,

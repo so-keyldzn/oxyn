@@ -80,14 +80,20 @@ impl<'a> Connections<'a> {
     ///   key refuses it — or if the write fails;
     /// * [`StoreError::Json`] if the parameters are not serializable.
     pub fn save(&self, workspace: WorkspaceId, config: &ConnectionConfig) -> Result<()> {
-        refuse_secrets(config)?;
+        self.store
+            .with_connection(|conn| Self::save_on(conn, workspace, config))
+    }
 
+    pub(crate) fn save_on(
+        conn: &rusqlite::Connection,
+        workspace: WorkspaceId,
+        config: &ConnectionConfig,
+    ) -> Result<()> {
+        refuse_secrets(config)?;
         let params_json = serde_json::to_string(&config.params)?;
         let now = Utc::now();
-
-        self.store.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO connections
+        conn.execute(
+            "INSERT INTO connections
                      (id, workspace_id, name, driver, environment,
                       params, secret_ref, read_only, created_at, updated_at,
                       privacy_tier)
@@ -102,22 +108,21 @@ impl<'a> Connections<'a> {
                      read_only    = excluded.read_only,
                      privacy_tier = excluded.privacy_tier,
                      updated_at   = excluded.updated_at",
-                params![
-                    config.id.to_string(),
-                    workspace.to_string(),
-                    config.name,
-                    config.driver.as_str(),
-                    config.environment.as_str(),
-                    params_json,
-                    config.secret_ref,
-                    config.read_only,
-                    now,
-                    now,
-                    config.privacy_tier.as_str(),
-                ],
-            )?;
-            Ok(())
-        })
+            params![
+                config.id.to_string(),
+                workspace.to_string(),
+                config.name,
+                config.driver.as_str(),
+                config.environment.as_str(),
+                params_json,
+                config.secret_ref,
+                config.read_only,
+                now,
+                now,
+                config.privacy_tier.as_str(),
+            ],
+        )?;
+        Ok(())
     }
 
     /// Reads a connection back by its identifier.
@@ -225,7 +230,7 @@ fn normalise_key(key: &str) -> String {
 }
 
 /// Does this parameter name designate a secret?
-fn is_secret_key(key: &str) -> bool {
+pub(crate) fn is_secret_key(key: &str) -> bool {
     let normalised = normalise_key(key);
     SECRET_KEY_MARKERS
         .iter()

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="bc707af0092a" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="ef72929d203f" -->
 
 
 
@@ -883,6 +883,32 @@ changement de connexion, l'ancien workspace reste accessible ; une **nouvelle**
 connexion copie le texte SQL de la console active dans son premier éditeur,
 l'annonce et ne l'exécute pas, et la console d'origine le garde. Les
 connexions ouvertes pendant la session rejoignent immédiatement la liste.
+
+**Explorateur multi-base** ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md)).
+La barre latérale liste les groupes serveur, leurs connexions enregistrées et
+la liste PostgreSQL demandée explicitement. Sélectionner ne change pas le
+contenu actif ; le contrôle de développement ouvre le groupe, tandis qu’Entrée,
+le double-clic ou `Open workspace` active la destination. Les objets affichés
+restent ceux du workspace actif. Les autres moteurs conservent leur hiérarchie.
+
+Un workspace existant revient intact. Les activations concurrentes d’un enfant
+partagent une ouverture ; une ancienne réponse ne vole pas le premier plan.
+Une nouvelle ouverture par cet explorateur commence avec une console vide,
+sans copier brouillon ni secret. Le parcours de copie depuis l’accueil reste
+séparé. Une connexion sauvegardée dont l’ouverture échoue garde son identité ;
+plusieurs comptes correspondants demandent un choix.
+
+Un groupe peut être créé depuis PostgreSQL autorisé, renommé, associé/dissocié
+et supprimé sans effacer ses enfants. `Disconnect group…` révise les membres
+ouverts, puis leurs brouillons dans l’ordre. Opérations en cours et transactions
+ouvertes/inconnues bloquent la déconnexion jusqu’à résolution explicite. Annuler
+ne ferme aucun travail encore en attente ; un échec ultérieur nomme les
+fermetures déjà faites. Un nettoyage échoué reste visible et reprenable.
+Aucun commit ou rollback automatique.
+
+Les demandes de texte et d’objet portent la génération du workspace. Un dépôt
+dans un éditeur étranger propose la console source ou Cancel. Les objets privés
+restent sur leur console propriétaire. Aucun texte n’est exécuté.
 
 **Les workspaces ouverts restent connectés**
 ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Passer de A à B

@@ -822,6 +822,32 @@ active console into its first editor, announces it and does not run it, and the
 original console keeps it. The connections opened during the session join the
 list immediately.
 
+**Multi-base explorer** ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md)).
+The workspace sidebar lists server groups, their saved child connections and an
+explicitly requested PostgreSQL database list. Selecting a row changes no active
+content; its disclosure expands the group, while Enter, double-click or
+`Open workspace` activates a destination. Objects below remain those of the
+active workspace. Other engines keep their native hierarchy.
+
+An existing workspace is revealed intact. Concurrent activations of one child
+share one opening; an older completion cannot steal the latest foreground.
+Opening a destination through this explorer starts its first console empty,
+without copying a draft or credential. The start-screen draft-copy flow above
+remains separate. A saved connection whose opening failed retains its identity
+for retry; multiple matching accounts require a choice.
+
+Groups can be created from an authorized PostgreSQL connection, renamed,
+linked/unlinked and removed without deleting children. `Disconnect group…`
+reviews its currently open members, then asks about their drafts in order.
+Running operations and open/unknown transactions block disconnection until
+explicitly resolved. Cancelling a review closes none of its pending work; a
+later failure reports earlier completed closes. Cleanup failures remain visible
+and explicitly retryable. No commit or rollback is automatic.
+
+Text and object requests carry their workspace generation. Dropping an object
+onto a foreign editor offers insertion in the source console or Cancel;
+private-session objects stay on their owning console. No text is executed.
+
 **Open workspaces stay connected**
 ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Switching from A
 to B closes nothing: A keeps its consoles, their texts and their edit history,
