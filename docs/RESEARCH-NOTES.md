@@ -3492,3 +3492,12 @@ is not recreated. No dependency changes.
 
 - SHOW CREATE VIEW requires SHOW VIEW in addition to SELECT; error 1142 is ER_TABLEACCESS_DENIED_ERROR. A temporary table's SHOW CREATE remains authoritative; only that permission error on a confirmed persistent view falls back to information_schema metadata. Sources: [SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.0/en/show-create-view.html), [server errors](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html).
 - DuckDB exposes SQL-level variables through `duckdb_variables()`. Their presence makes a sibling preview non-reproducible, even without temporary relations. Sources: [SET VARIABLE](https://www.duckdb.org/docs/current/sql/statements/set_variable), [metadata functions](https://www.duckdb.org/docs/preview/sql/meta/duckdb_table_functions).
+
+### Server database discovery — checked 2026-11-13
+
+PostgreSQL database discovery uses `pg_catalog.pg_database`, excluding templates
+and databases that disallow connections. `has_database_privilege(oid, 'CONNECT')`
+is an access hint for the current role, not a guarantee of successful login.
+Sources: [pg_database](https://www.postgresql.org/docs/current/catalog-pg-database.html),
+[access privilege functions](https://www.postgresql.org/docs/current/functions-info.html).
+The 1024-entry/name-byte limits are Oxyn input bounds, not PostgreSQL limits.

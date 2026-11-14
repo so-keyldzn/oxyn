@@ -1,0 +1,62 @@
+Oxyn research mockups — generation record
+2026-11-13; built-in image_gen; fictional data; static raster proposals.
+Pencil get_editor_state was unavailable (application transport disconnected). No CLI/API fallback was used.
+
+01 — Base generation
+Use case: ui-mockup. Create a high-fidelity STATIC desktop application mockup for Oxyn, a professional database workspace. This is a research proposal, not implemented software. All data is fictional. Render one flat front-facing screen, no laptop, no perspective, no surroundings. Landscape 1600x1000 or a similar 16:10 ratio, high resolution, exceptionally crisp legible English UI text.
+Design: match an established compact database IDE, Geist-like sans serif and Geist Mono for identifiers. Light slate/very pale cyan shell #F0F5F5, near-white work surface #FAFCFC, white panels, dark slate text #22383C, muted text #607B80, very restrained verdigris #287F73 accent. Thin separators, 6px control corners, 8px panels, dense 32px tree rows, 13px-style text. Professional precise alignment, no gradients, no decorative illustrations, no big hero title, no purple. Subtle macOS traffic lights in a 38px title bar. Application name Oxyn. No AI chat visible.
+Composition: 300px inset sidebar, flexible central workspace, a 260px right object inspector. Preserve whitespace within professional dense data.
+Top connection bar shows "Commerce / commerce_dev / public" then modest badges "Development" and "Read only". A compact "Schema map" action near the right. A tab strip: "SQL 1 · commerce_dev", selected "orders · commerce_dev", and "Schema map · commerce_dev". Base target is always visible.
+Sidebar heading "EXPLORER", search field "Find a database or object". A server-group row "Commerce" with small PostgreSQL-style database line icon and subtitle "PostgreSQL · localhost". Hierarchical tree:
+commerce_dev [Open] expanded;
+  public expanded;
+    Tables expanded;
+      customers
+      orders (selected verdigris-tinted row)
+      order_items
+      products
+    Views collapsed;
+  audit collapsed;
+analytics_dev [Not connected] collapsed;
+archive_test [Access denied] collapsed with small amber lock.
+Do not draw a single global permissions badge on the parent server group: environment and access are per database.
+Below tree a small inline section for selected base: "Metadata loading", dropdown "Minimal · inherited", button "Preload this scope". Muted note "Details load when opened." Bottom sidebar has Library and Settings.
+Central content: small breadcrumb "commerce_dev / public / orders"; object header "orders", small "TABLE" badge. Tabs "Data", selected "Structure", "Indexes", "Constraints", "Relations", "DDL". Toolbar "Refresh structure", "Copy name"; status "Columns loaded · indexes not read". A precise column table with headers "Column", "Type", "Nullable", "Key":
+id | bigint | No | PK
+customer_id | bigint | No | —
+status | text | No | —
+total | numeric(12,2) | No | —
+created_at | timestamptz | No | —
+fulfilled_at | timestamptz | Yes | —
+Small label above or below "6 columns". Do not claim FK information loaded; keys badge only PK where shown.
+Right inspector title "Object inspector"; show "orders", "Table", location "commerce_dev / public", "Columns 6", "Primary key id", "Indexes Not loaded", "Relationships Not loaded". A lower soft bordered info note "Access is scoped to each database." Small action "View schema map".
+Footer inside app: connection status green dot "commerce_dev connected", "Metadata only", and "F6 Next area". Below the application frame, a slim neutral caption band: "01  MULTI-DATABASE EXPLORER" and "Research mockup · Fictional data · Proposed".
+Critical: spell exact labels accurately, retain base names consistently, no UUIDs/passwords/real data, no fictional performance numbers, no AI indicators, no claim that inaccessible database is empty. The image should look like a carefully designed product screenshot, not an infographic or marketing page.
+
+01 — Final selected edit (on the base image; intermediate audit-row edit discarded)
+Edit this static Oxyn UI screenshot with ONE change only: remove the entire collapsed 'audit' row from the left explorer sidebar (its caret, database icon and word audit). Leave its row space blank; do not shift or reparent any other row. The expanded hierarchy must remain Commerce > commerce_dev > public > Tables > customers, orders, order_items, products, with Views under public; analytics_dev and archive_test remain siblings of commerce_dev under Commerce. Preserve every other pixel as closely as possible, all text, main table, inspector, toolbar, colors, caption and dimensions. Do not add another audit row anywhere. No other changes.
+
+02 — Base generation
+Use case: ui-mockup. Create a high-fidelity STATIC desktop application mockup for Oxyn's standalone Schema map. Research proposal, not running software. One flat front-facing screen, no laptop or perspective. Landscape 1600x1000 or similar 16:10, high resolution with extremely crisp readable English labels.
+Match this exact design system: Geist-like sans, Geist Mono identifiers, pale cyan/slate shell #F0F5F5, near-white #FAFCFC work surface, white cards, text #22383C, muted #607B80, restrained verdigris #287F73. Thin separators, 6px button corners, 8px cards. Compact database IDE layout. No gradients, no neon, no hero text, no AI-chat, no decorative illustrations. macOS traffic lights and "Oxyn" in 38px title bar.
+Layout: 260px inset explorer left, a large diagram canvas center, 280px inspector right. Top connection bar "Commerce / commerce_dev / public" with "Development" badge. Tab strip "SQL 1 · commerce_dev", "orders · commerce_dev", selected "Schema map · commerce_dev". Top diagram toolbar "Schema map" then scope dropdown "public", object filter "Tables", search field "Find an object", "Refresh", "Fit". Secondary view switch "Canvas" selected and "List".
+Left tree: server "Commerce" subtitle "PostgreSQL · localhost"; commerce_dev [Open] expanded, public expanded, tables customers, orders, order_items, products with orders highlighted; audit collapsed; analytics_dev [Not connected]; archive_test [Access denied]. Base target stays explicit. Bottom left metadata preference "Minimal · inherited", note "This map loads its selected scope."
+Just below toolbar an understated amber-tinted information strip: "Partial map · 4 tables shown · 2 objects not loaded", with "Choose scope" action at right. Counts refer to this hypothetical chosen scope, not the whole database. No percentages or benchmark numbers.
+Diagram on subtle pale dotted grid, clean orthogonal connectors behind cards, NO crossing through cards, generous spacing. Four white object cards roughly 220px wide arranged:
+customers at left center, orders in the middle above center (selected fine verdigris border), order_items toward bottom-right center, products at far right above order_items. Ensure all four fit within central canvas and inspector not overlapping.
+Card customers header "customers", small "TABLE"; rows "PK id  bigint", "name  text", "email  text".
+Card orders header "orders", small "TABLE"; rows "PK id  bigint", "FK customer_id  bigint", "status  text", "total  numeric".
+Card order_items header "order_items", small "TABLE"; rows "PK id  bigint", "FK order_id  bigint", "FK product_id  bigint", "quantity  integer".
+Card products header "products", small "TABLE"; rows "PK id  bigint", "name  text", "price  numeric".
+Draw EXACTLY three directed relationships: orders.customer_id -> customers.id; order_items.order_id -> orders.id; order_items.product_id -> products.id. Subtle verdigris lines, arrowheads point to referenced PK card, tiny "FK" labels on lines. Do not invent any other link or cardinality.
+Diagram bottom left floating controls minus, plus, fit; small legend "Declared foreign key" with a line sample. Bottom right mini-map of these four rectangles. Show no draggable-edge connection handles suggesting editing database relationships. Card selection only inspects.
+Right panel "Selected object"; title "orders" badge "TABLE"; location "commerce_dev / public"; sections "METADATA" with "Source Server catalog", "Columns Loaded", "Outgoing keys Loaded", "Incoming keys Not loaded"; small amber note "Some relationships may be missing." Actions stacked "Open structure", "Open data", "Open DDL". Lower "Selected relationship" with monospaced "orders.customer_id → customers.id" and "Declared foreign key"; text "Cardinality not established". Read-only information, no create relationship button. No AI feature needed.
+Bottom status bar "Scope: commerce_dev / public", "Metadata only · no row samples", "F6 Next area". Caption band below frame: "02  STANDALONE SCHEMA MAP" and "Research mockup · Fictional data · Proposed".
+Keep the two app screenshots consistent, labels spelled correctly, no extra features, no fake all-schema completeness, no invented execution stats. Carefully composed production-quality design artifact, not a decorative concept poster.
+
+02 — Final selected edit (schema-map base as target; explorer base as style reference)
+Edit Image 1 (the schema-map screen). Image 2 is a supporting style reference (the explorer screen), not an edit target. Preserve the graph, its EXACTLY THREE directed foreign-key links, all panels, partial-state notice, labels, colors and overall size. Make these targeted consistency corrections:
+1. The top app chrome must use the same single-row arrangement as Image 2: small macOS traffic lights and Oxyn at far left, then connection "Commerce / commerce_dev / public" in the remaining width, with both badges "Development" and "Read only". Remove the redundant second connection-bar row; put the tab strip directly below the top bar like Image 2. Keep workspace content comfortably spaced; do not crop anything.
+2. The selected orders table has six columns, matching the explorer. Its card must show six rows: PK id bigint; FK customer_id bigint; status text; total numeric(12,2); created_at timestamptz; fulfilled_at timestamptz. Grow that card vertically to fit all six, and re-route the existing FK lines around it without adding links or changing their destinations. Preserve declared foreign-key meaning and right-panel "Incoming keys Not loaded".
+3. Use the same schema folder icon as Image 2's public row for both public and audit. Both are siblings under commerce_dev; keep their correct indentation. No decorative gear icons for schemas.
+All text remains English, all data fictional, no other UI changes. Preserve bottom research caption and all warnings. One final static screenshot.

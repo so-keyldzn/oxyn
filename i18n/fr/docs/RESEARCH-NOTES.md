@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="11389137e40f" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b4c457bd1945" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3549,3 +3549,12 @@ Aucune dépendance ne change.
 
 - SHOW CREATE VIEW demande SHOW VIEW en plus de SELECT ; l’erreur 1142 est ER_TABLEACCESS_DENIED_ERROR. SHOW CREATE reste la référence pour une table temporaire ; seule cette erreur de permission sur une vue persistante confirmée permet le repli sur information_schema. Sources : [SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.0/en/show-create-view.html), [erreurs serveur](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html).
 - DuckDB expose les variables SQL par `duckdb_variables()`. Leur présence rend un aperçu sur une autre session non reproductible, même sans relation temporaire. Sources : [SET VARIABLE](https://www.duckdb.org/docs/current/sql/statements/set_variable), [fonctions de métadonnées](https://www.duckdb.org/docs/preview/sql/meta/duckdb_table_functions).
+
+### Découverte des bases serveur — vérifiée le 2026-11-13
+
+La découverte PostgreSQL utilise `pg_catalog.pg_database`, en excluant les modèles
+et bases interdisant les connexions. `has_database_privilege(oid, 'CONNECT')`
+indique un privilège du rôle courant, sans garantir la réussite de l'authentification.
+Sources : [pg_database](https://www.postgresql.org/docs/current/catalog-pg-database.html),
+[fonctions de privilèges](https://www.postgresql.org/docs/current/functions-info.html).
+Les limites de 1024 entrées/octets par nom sont des bornes Oxyn, pas PostgreSQL.

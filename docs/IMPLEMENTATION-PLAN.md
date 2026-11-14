@@ -2669,6 +2669,149 @@ or that are only done once:
 - **publish the WIT interfaces under Apache-2.0** in phase 4, in a
   directory or a crate that carries that license alone.
 
+## Schema exploration research — 2026-11-13
+
+The [completion ledger](implementation-plan/completion.md) records the active
+branch stack, the current implementation/validation boundary and the final
+local-dev acceptance procedure. Historical slice reports below remain dated.
+
+
+### Backend slice 1 — local server-profile lifecycle
+
+Implementation starts on `feat/multi-base-backend`, with local `dev` as the
+integration target; `main` is not a delivery target for this work.
+The slice adds profile vocabulary, migration 20, scoped persistence, optimistic
+profile revisions and membership comparison, four human-only bus commands,
+window-attributed Tauri endpoints and their TypeScript schemas. Shutdown tracks
+these local writes. No grouping operation opens a driver session or copies a
+child's credentials.
+
+Validation on 2026-11-13: all 14 new profile tests passed (core, store,
+executor and desktop), covering migration from schema 19, preservation of child
+identity/secrets, stale edits, ownership, secret refusal, cancellation, audit
+and IPC serialization. The complete Rust test suite then passed: 4664 tests,
+201 skipped. The existing open-format table inventory was updated for the two
+new tables after the first full run caught its stale expectation. Formatting
+and workspace-wide Clippy with all targets/features and `-D warnings` passed.
+Local invariant, boundary and security review found no blocking issue within
+this slice's stated scope.
+
+The frontend's 2238 tests passed in two complete runs; formatting, lint,
+typecheck, production build and production dependency audit passed too. A later
+run under concurrent compilation failed two existing connection-screen tests
+and exceeded a story setup budget; it was stopped. Isolated replays passed all
+4 connection-screen tests and all 10 assistant-rich-block stories. No frontend
+timeout was raised and no assertion was weakened to obtain those results.
+
+The initial slice-1 `make qualite` run was **not validated end to end**;
+the completed slice-2 validation below supersedes that initial limitation. After the complete
+Rust suite passed in the isolated worktree cache, `make rust` was stopped during
+`cargo test --doc`, which had started a fresh native DuckDB build. Documentation
+tests, API documentation generation and package verification remain incomplete.
+The shared target cache had repeatedly serialized builds from separate worktrees;
+subsequent backend validation uses the worktree's ignored `target/` instead.
+
+Validation limits: database-server and embedding reference suites were skipped
+because their URLs/model were not configured. License notices were not generated
+without the pinned `cargo-about`; `make deny` explicitly reported that Rust
+license/advisory checks did not run without `cargo-deny`. Frontend tests emitted
+ResizeObserver/React and markup diagnostics despite their successful runs; the
+build retained its large-chunk warning. These diagnostics are not claimed
+resolved by this backend slice.
+
+After slice 1, the remaining ADR-0080 work included server discovery and
+endpoint-compatible child creation (implemented in slice 2 below),
+opening reservations, group disconnect orchestration, change notifications and
+the shared explorer. This slice checks membership workspace/protocol, not that
+all children still use the same endpoint after independent edits. No UI action
+or discovery capability claims that stronger property yet. ADR-0080 stays
+proposed; the later metadata, schema-map and native-transfer slices are not
+implemented by these endpoints.
+
+### Backend slice 2 — discovery and independently opened children
+
+`DiscoverDatabases` reads through an already open seed session. The optional
+`CatalogProvider` method defaults to `NotSupported`; PostgreSQL implements a
+separate bounded query, without changing `list_catalogs`. Redshift and other
+engines refuse this new discovery API explicitly. Database names and CONNECT
+hints do not authorize opening, and no discovered child is opened automatically.
+
+`CreateDatabaseConnection` saves a new child and profile membership in one store
+transaction. The seed and profile must belong to the workspace; protocol and
+parameters other than database/user must match exactly. Server defaults must
+still match the seed; login defaults may differ.
+Existing IDs and the seed's credential reference cannot be reused. The caller
+supplies independently reviewed environment, privacy and read-only settings.
+Production approval uses the ordinary creation policy and native destination
+confirmation. `open_database` then uses ordinary credential entry/session opening,
+returning the existing `Open`, `Approval` or `Saved` response. Failed opening
+retains the child's ID for the ordinary reconnect flow.
+
+The window opening reservation and ownership path is reused. This API creates
+a new child intentionally; selecting/reusing an existing child, coalescing
+repeated explorer activation and group-wide close remain later orchestration.
+Neither schema maps nor the multi-base explorer UI are implemented by this lot.
+The seed destination captured at session opening is checked before discovery
+and child creation; a saved destination edited while its old session remains
+open requires reconnecting. Discovery results are refused if that destination
+changes during the read. Store rereads bound local configuration fields and
+redact malformed seed JSON errors before returning them.
+
+Validation completed on 2026-11-13: `make qualite` passed on the final code,
+including 4670 Rust tests, 2238 frontend tests, Clippy with `-D warnings`,
+documentation tests, API documentation and verification of the four public
+contract packages. The final targeted runs passed 7 executor profile tests and
+9 store profile tests, including corrupt-workspace redaction and stale live
+seed rejection. Local invariant, boundary and security reviews found no blocking
+issue within this slice's scope after those protections were added.
+
+A driver-level discovery/independent-opening integration test passed against a
+disposable PostgreSQL 17 server (the CI image), as did the existing server-side
+cancellation and two-million-row streaming tests. That server was stopped and
+removed. The application explorer itself has not been wired or exercised.
+
+Local gate exclusions remain explicit: 202 Rust tests were skipped in the
+ordinary suite, the broad multi-engine server suites and embedding reference
+suite lacked their configuration, Rust advisories/licenses were not checked
+without `cargo-deny`, and notices were not generated without `cargo-about`.
+Existing non-fatal frontend diagnostics described in slice 1 remain unresolved.
+No commit, merge or push has been performed; `feat/multi-base-backend` stays in
+the research worktree, with integration into `dev` deferred to the user's later
+instruction. `main` has not been modified.
+
+### Research artifacts
+
+Research only, against source snapshot `6647180`: issues #308, #373, #374,
+#375 and the requested standalone schema map. No implementation or phase-order
+change is approved by this entry. The following are appendices of this plan,
+split by responsibility so that the main chronology does not absorb the study:
+
+- [User journeys](implementation-plan/schema-research-journeys.md): ten proposed
+  flows, failure/recovery cases, acceptance criteria and decisions to prepare.
+- [Engine matrix](implementation-plan/schema-research-engines.md): inspected
+  driver coverage, proposed representations, source evidence and validation gaps.
+- [Static mockups](implementation-plan/schema-research-mockups.md): multi-database
+  explorer and standalone schema map, fictional data and visual review notes.
+- [Multi-base lifecycle mockups](implementation-plan/schema-research-multibase-mockups.md):
+  six additional setup, activation, menu and safety-review states. ADR-0080 and
+  journeys J01/J06/J09 now include the interface ownership analysis at `f456ff1`.
+
+Statically revalidated on 2026-11-13 through `f456ff1` after the three commits
+since `6647180`. No blocking contradiction with the proposed ADRs was found.
+The appendices now name SQLite cases SQ01–SQ06 for URI identity, reproducibility
+and recovery; inspected regression-test sources are distinguished from proposed
+end-to-end acceptance cases. No new SQLite test execution is claimed.
+
+The proposed architecture records are [0080](adr/0080-group-database-connections-under-server-profiles.md),
+[0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md),
+[0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) and
+[0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md).
+The journeys track their research and validation entry gates; native-tool
+credential transport remains unresolved and blocks that authentication mode.
+
+These research proposals do not replace UX-SPEC, SECURITY or an accepted ADR.
+They make no claim that integration tests or performance gates have passed.
+
 ## What does not belong here
 
 Decisions. A phase that needs a decision writes an ADR

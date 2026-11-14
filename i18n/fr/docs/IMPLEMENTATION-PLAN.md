@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="86e25382deef" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="ca7c7de79646" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2691,6 +2691,165 @@ ou qui ne se font qu'une fois :
   titulaire ;
 - **publier les interfaces WIT sous Apache-2.0** en phase 4, dans un
   répertoire ou une crate qui porte cette licence seule.
+
+## Recherche sur l'exploration des schémas — 2026-11-13
+
+Le [suivi d’achèvement](implementation-plan/completion.md) consigne les branches,
+l’état courant de l’implémentation et de la validation, ainsi que les essais
+finaux sur dev local. Les bilans historiques ci-dessous restent datés.
+
+
+### Lot backend 1 — cycle de vie local des profils serveur
+
+L'implémentation démarre sur `feat/multi-base-backend`, avec `dev` local comme
+cible d'intégration ; `main` n'est pas une cible de livraison de ce travail.
+Le lot ajoute vocabulaire de profil, migration 20, persistance délimitée,
+révisions optimistes et comparaison d'appartenance, quatre commandes du bus
+réservées à l'humain, endpoints Tauri attribués à la fenêtre et schémas
+TypeScript. L'arrêt suit ces écritures locales. Aucune opération de regroupement
+n'ouvre de session driver ni ne copie les identifiants d'un enfant.
+
+Validation du 2026-11-13 : les 14 nouveaux tests de profils ont réussi (core,
+store, exécuteur et desktop), couvrant migration depuis le schéma 19,
+préservation des identités/secrets enfants, modifications périmées, propriété,
+refus des secrets, annulation, audit et sérialisation IPC. La suite Rust complète
+a ensuite réussi : 4664 tests, 201 sautés. L'inventaire des tables du test de
+format ouvert a été actualisé pour les deux nouvelles tables après que le
+premier passage complet a détecté cette attente périmée. Le formatage et Clippy
+sur tout le workspace, toutes les cibles/fonctionnalités avec `-D warnings`, ont
+réussi. La revue locale des invariants, frontières et sécurité ne relève aucun
+blocage dans le périmètre annoncé du lot.
+
+Les 2238 tests de l'interface ont réussi lors de deux passages complets ;
+formatage, lint, typage, build de production et audit des dépendances de
+production ont aussi réussi. Une relance pendant des compilations concurrentes
+a échoué sur deux tests existants de l'écran de connexion et dépassé le budget
+de préparation d'une story ; elle a été arrêtée. Les rejeux isolés ont réussi :
+les 4 tests de l'écran de connexion et les 10 stories assistant-rich-blocks.
+Aucun délai frontend n'a été augmenté ni aucune assertion affaiblie pour obtenir
+ces résultats.
+
+Le contrôle initial du lot 1 `make qualite` n'était **pas validé de bout en bout** ;
+la validation achevée du lot 2 ci-dessous remplace cette limite initiale. Après
+la réussite de la suite Rust complète dans le cache isolé du worktree,
+`make rust` a été arrêté pendant `cargo test --doc`, qui avait déclenché une
+nouvelle compilation native de DuckDB. Les tests de documentation, la génération
+de documentation API et la vérification des paquets restent incomplets. Le
+cache target partagé avait sérialisé à plusieurs reprises les builds de
+worktrees distincts ; les validations backend suivantes utilisent le `target/`
+ignoré du worktree.
+
+Limites de validation : les suites sur serveurs et le test de référence embedding
+ont été sautés, leurs URL/modèle n'étant pas configurés. Les mentions de licences
+n'ont pas été générées sans le `cargo-about` épinglé ; `make deny` a explicitement
+signalé que les contrôles de licences/avis de sécurité Rust n'avaient pas tourné
+sans `cargo-deny`. Les tests d'interface ont émis des diagnostics
+ResizeObserver/React et de balisage malgré leurs passages réussis ; le build
+conserve son avertissement de gros fragments. Ce lot backend ne prétend pas
+résoudre ces diagnostics.
+
+Après le lot 1, le travail restant d'ADR-0080 comprenait découverte et création
+d'enfants compatibles (implémentées dans le lot 2 ci-dessous), réservations
+d'ouverture, déconnexion de groupe, notifications
+et explorateur commun. Ce lot vérifie workspace/protocole de l'appartenance,
+pas que tous les enfants visent toujours la même destination après modifications
+indépendantes. Aucune action UI ou capacité de découverte ne revendique encore
+cette propriété plus forte. ADR-0080 reste proposé ; métadonnées, carte et
+transfert natif ne sont pas implémentés par ces endpoints.
+
+### Lot backend 2 — découverte et ouverture indépendante des enfants
+
+`DiscoverDatabases` lit via une session source déjà ouverte. La méthode
+optionnelle de `CatalogProvider` refuse par défaut avec `NotSupported` ;
+PostgreSQL implémente une requête distincte et bornée, sans changer
+`list_catalogs`. Redshift et les autres moteurs refusent explicitement cette
+nouvelle API de découverte. Les noms et indices de privilège CONNECT
+n'autorisent pas l'ouverture ; aucun enfant découvert n'est ouvert automatiquement.
+
+`CreateDatabaseConnection` enregistre un nouvel enfant et son appartenance au
+profil dans une même transaction du store. Source et profil doivent appartenir
+au workspace ; protocole et paramètres hors base/utilisateur doivent correspondre
+exactement.
+Les valeurs serveur par défaut doivent encore correspondre à la source ;
+les valeurs utilisateur peuvent différer. Les identités
+existantes et la référence de secret source ne peuvent pas être réutilisées.
+L'appelant fournit environnement, confidentialité et lecture seule révisés
+indépendamment. L'approbation en production utilise la politique de création et
+la confirmation native de destination existantes. `open_database` réutilise
+ensuite saisie des secrets et ouverture, avec les réponses `Open`, `Approval`
+ou `Saved`. Une ouverture échouée conserve l'identité pour la reconnexion ordinaire.
+
+Réservation d'ouverture et propriété par fenêtre sont réutilisées. Cette API
+crée volontairement un enfant ; sélection/réutilisation d'un enfant existant,
+regroupement des activations répétées dans l'explorateur et fermeture de groupe
+restent des orchestrations ultérieures. Ce lot n'implémente ni carte des schémas
+ni interface d'explorateur multi-base. La destination source capturée à
+l'ouverture est vérifiée avant découverte et
+création d'enfant : modifier une destination enregistrée sans fermer son ancienne
+session impose une reconnexion. Les résultats sont refusés si cette destination
+change pendant la lecture. Le store borne les champs relus et masque les erreurs
+JSON d'une source corrompue.
+
+Validation achevée le 2026-11-13 : `make qualite` a réussi sur le code final,
+avec 4670 tests Rust, 2238 tests frontend, Clippy avec `-D warnings`, tests de
+documentation, documentation API et vérification des quatre paquets publics du
+contrat. Les derniers passages ciblés ont validé 7 tests de profils de
+l'exécuteur et 9 du store, dont masquage des erreurs de workspace corrompu et
+refus d'une session source périmée. Les revues locales des invariants,
+frontières et sécurité ne relèvent aucun blocage dans le périmètre du lot après
+l'ajout de ces protections.
+
+Le test driver de découverte/ouverture indépendante a réussi sur un PostgreSQL
+17 jetable (image CI), ainsi que les tests existants d'arrêt serveur et de
+streaming de deux millions de lignes. Ce serveur a été arrêté et supprimé.
+L'explorateur de l'application n'a pas encore été raccordé ni exercé.
+
+Les exclusions locales restent explicites : 202 tests Rust sautés dans la suite
+ordinaire, suites générales multi-moteur et référence embedding non configurées,
+avis de sécurité/licences Rust non contrôlés sans `cargo-deny`, mentions non
+générées sans `cargo-about`. Les diagnostics frontend non bloquants décrits au
+lot 1 restent non résolus. Aucun commit, merge ou push n'a été effectué ;
+`feat/multi-base-backend` reste dans le worktree de recherche, l'intégration à
+`dev` attendant une instruction ultérieure de l'utilisateur. `main` n'a pas été
+modifiée.
+
+### Documents de recherche
+
+Recherche uniquement, sur le code au commit `6647180` : issues #308, #373, #374,
+#375 et carte autonome des schémas demandée. Cette entrée n'approuve aucune
+implémentation ni modification de l'ordre des phases. Les documents suivants
+sont des annexes de ce plan, séparées par responsabilité pour que la chronologie
+principale n'absorbe pas l'étude :
+
+- [Parcours utilisateur](implementation-plan/schema-research-journeys.md) : dix
+  parcours proposés, cas d'échec/reprise, critères d'acceptation et décisions à préparer.
+- [Matrice des moteurs](implementation-plan/schema-research-engines.md) :
+  couverture des drivers inspectés, représentations proposées, preuves et lacunes
+  de validation.
+- [Maquettes statiques](implementation-plan/schema-research-mockups.md) :
+  explorateur multi-base et carte autonome, données fictives et notes de revue visuelle.
+- [Maquettes du cycle de vie multi-base](implementation-plan/schema-research-multibase-mockups.md) :
+  six états supplémentaires de configuration, activation, menus et revues de
+  protection. L'ADR-0080 et J01/J06/J09 intègrent l'analyse de propriété de l'interface à `f456ff1`.
+
+Revalidation statique le 2026-11-13 jusqu'à `f456ff1`, après les trois commits
+depuis `6647180`. Aucune contradiction bloquante avec les ADR proposés n'a été
+trouvée. Les annexes nomment désormais les cas SQLite SQ01–SQ06 pour identité
+URI, reproductibilité et récupération ; les sources de tests de régression
+inspectées sont distinguées des critères de bout en bout proposés. Aucune
+nouvelle exécution de tests SQLite n'est revendiquée.
+
+Les propositions d'architecture sont consignées dans [0080](adr/0080-group-database-connections-under-server-profiles.md),
+[0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md),
+[0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) et
+[0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md).
+Les parcours suivent leurs prérequis de recherche et de validation ; le transport
+des identifiants vers les outils natifs reste non résolu et bloque ce mode
+d'authentification.
+
+Ces propositions de recherche ne remplacent ni UX-SPEC, ni SECURITY, ni un ADR
+accepté. Elles ne prétendent pas que les tests d'intégration ou les critères de
+performance sont satisfaits.
 
 ## Ce qui n'a pas sa place ici
 
