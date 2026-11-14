@@ -17,7 +17,7 @@ Scope: issues [#308](https://github.com/so-keyldzn/oxyn/issues/308),
 [#373](https://github.com/so-keyldzn/oxyn/issues/373),
 [#374](https://github.com/so-keyldzn/oxyn/issues/374),
 [#375](https://github.com/so-keyldzn/oxyn/issues/375), and the requested standalone
-schema map. This pass specifies journeys and observable acceptance cases only:
+schema map. The initial research pass specified journeys and observable acceptance cases only:
 no application code, server access, new dependency or accepted ADR.
 
 **Implementation revalidation — 2026-11-14, base `ce58839`:** the multi-base
@@ -146,12 +146,13 @@ No automatic object-count threshold or SQLite exemption is assumed.
 
 ## J04 — Open a relational schema map without AI
 
-**Entry:** `View schema map` on a database/schema; `Show related objects` on an
-object; or open an assistant diagram in a workspace tab.
+**Entry:** `View schema map` on the explorer source or a native
+catalog/namespace/object. The assistant uses the same host projection; its
+block remains in the conversation.
 
 **Existing:** the assistant ERD uses catalog metadata, React Flow and Dagre.
-Its source names are resolved only among already listed objects. A standalone
-map, movable saved layouts and image export are not delivered by that component.
+Its source names are resolved only among already listed objects. The standalone tab now reuses its renderer with the shared host projection.
+Movable saved layouts and image export remain separate scope.
 
 **Proposed flow:** select scope and object kinds; list available objects; draw
 the selected objects; load supported columns and links progressively; expand
@@ -359,3 +360,29 @@ The acceptance cases above are a future validation inventory, not passing
 tests. No live database, sample, benchmark or native transfer was exercised.
 The research deliverable is reviewable when every journey has a trigger,
 failure/recovery path, acceptance case and a capability/decision reference.
+
+## J04/J05 implementation revalidation — 2026-11-14
+
+The map branch follows metadata commit `40329e4`, with no main/dev integration
+yet. Opening a map starts no native read. A selected native container is loaded
+one level at a time; a chosen object seeds only that object. Local filtering
+covers loaded names, paths and kinds. Inspect first; Data/Structure/definition
+and one-hop expansion are separate gestures on the original owner. Opening a
+view already present in the workspace changes its displayed section.
+
+The host rejects unknown object requests and source-generation changes. A
+memory-only generation check also rejects a map superseded during IPC delivery.
+Failed/partial/stopped reads keep their distinctions, and a failed refresh
+retains the old map as stale. Closing/hiding cancels the exact owned demand.
+Document inference requires a separate source/object/bounds disclosure; ordinary
+loads never sample. Sampling settings and availability follow the live provider.
+
+Composite keys, cycles, homonyms, nesting, reported/sample/preview provenance,
+unknown cardinality and unloaded endpoints are shared projection contracts.
+Only loaded outgoing keys establish displayed incoming coverage. Technical
+dependencies are explicitly unavailable until structured provider metadata
+exists. No saved map layout or automatic source reopening is introduced.
+SQLite/DuckDB native smoke results and other-engine validation limits are
+recorded in the engine matrix and completion ledger. The existing SQ01–SQ06
+source-identity cases remain applicable; private-memory and deleted owners must
+never turn a map load into creation of an empty replacement database.

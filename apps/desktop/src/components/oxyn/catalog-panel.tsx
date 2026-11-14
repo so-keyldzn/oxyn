@@ -85,6 +85,7 @@ export function CatalogPanel({
   operations,
   copyAs,
   onNewConsole,
+  onSchemaMap,
   nameTransfer,
   onLeave,
 }: {
@@ -126,6 +127,7 @@ export function CatalogPanel({
   /** `Copy as ▸`, composed by the backend (I-10). */
   copyAs?: CopyAs
   /** `New console on this schema`, where a console's context can be one. */
+  onSchemaMap?: (node: CatalogNode) => void
   onNewConsole?: (node: CatalogNode) => void
   /** A relation's quoted name, dragged to the editor or sent by ⌥↵. */
   nameTransfer?: NameTransfer
@@ -276,6 +278,7 @@ export function CatalogPanel({
                     pin={pin}
                     operations={operations}
                     copyAs={copyAs}
+                    onSchemaMap={onSchemaMap}
                     onNewConsole={onNewConsole}
                     nameTransfer={nameTransfer}
                   />

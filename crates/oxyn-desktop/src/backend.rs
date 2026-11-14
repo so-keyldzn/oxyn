@@ -1173,7 +1173,9 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
             preview: preview.map(Into::into),
         },
         Outcome::Denied { reason, .. } => CommandOutcome::Denied { reason },
-        Outcome::CatalogRefreshed { .. } => CommandOutcome::CatalogRefreshed,
+        Outcome::CatalogRefreshed { .. } | Outcome::SchemaMapLoaded { .. } => {
+            CommandOutcome::CatalogRefreshed
+        }
         Outcome::Exported { rows, bytes, .. } => CommandOutcome::Exported { rows, bytes },
         Outcome::Cancelled { .. } => CommandOutcome::Cancelled,
         _ => CommandOutcome::Done,
@@ -1224,6 +1226,7 @@ mod object_operations;
 mod proposal;
 mod recovery;
 mod results;
+mod schema_map;
 mod semantic;
 mod server_profiles;
 mod settings;

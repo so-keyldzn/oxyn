@@ -158,6 +158,11 @@ pub enum Outcome {
     /// A preview cursor was released; retained result rows remain available.
     PreviewReleased { result: ResultId },
 
+    /// A bounded map snapshot; no row values or layout state.
+    SchemaMapLoaded {
+        map: oxyn_catalog::schema_map::SchemaMapLoaded,
+    },
+
     /// Metadata was refreshed without including its contents in the outcome.
     CatalogRefreshed {
         /// Cache generation atomically observed at publication.
@@ -845,6 +850,7 @@ impl Executor {
                 self.create_database_connection(*profile, *seed, config, cancel)
                     .await
             }
+            Command::LoadSchemaMap { request } => self.load_schema_map(id, request, cancel).await,
             Command::PreloadMetadata { request } => {
                 self.preload_metadata(id, request, cancel).await
             }
@@ -3408,3 +3414,6 @@ mod server_profiles;
 
 #[path = "metadata_loading.rs"]
 mod metadata_loading;
+
+#[path = "schema_map.rs"]
+mod schema_map;

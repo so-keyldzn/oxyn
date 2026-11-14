@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="19fa95f55342" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3ae1c651f5cc" -->
 
 
 
@@ -1979,6 +1979,31 @@ cache sait disparu s'affiche atténué, avec « not found », et n'ouvre rien. S
 preuve de sa disparition, une puce reste normale. Le libellé vient du catalogue :
 c'est une entrée hostile, rendue comme du texte.
 
+### Carte des schémas autonome
+
+`View schema map` ouvre un onglet conservé depuis la source de l'explorateur ou
+le menu d'un catalogue/espace/objet. Source et session d'origine restent
+attachées à cet onglet. L'ouverture ne lance aucune introspection native ;
+choisir puis charger un périmètre est explicite, un niveau natif à la fois.
+Les filtres de nom, chemin et type restent locaux. Canevas, déplacement, zoom,
+liste accessible d'objets/liens et F6 de l'onglet visible sont disponibles.
+Sélectionner affiche l'inspecteur sans lire de lignes.
+
+L'inspecteur distingue champs rapportés, déduits d'un échantillon explicite et
+dispositions d'aperçu de clés. Data/Structure/définition suivent les capacités ;
+rouvrir un objet existant applique la vue demandée. Le développement explicite
+lit les voisins immédiats disponibles d'un seul objet dans les limites
+existantes. L'inférence humaine a sa propre confirmation nommant source, objet,
+limites et annulation ; aucune valeur échantillonnée n'entre dans le graphe.
+
+Lecture, annulation, vide connu, indisponibilité, résultat partiel, erreur et
+péremption sont distincts. Un rafraîchissement échoué garde l'ancienne carte
+signalée périmée. Fermer/masquer n'annule que sa lecture. Les extrémités non
+chargées restent visibles. Sans métadonnées structurées, les dépendances
+techniques sont indisponibles ; appartenance et imbrication sont distinctes des
+FK. Une source éphémère fermée ou un fichier SQLite supprimé n'est pas remplacé.
+Dispositions durables, export d'image et édition DDL graphique restent séparés.
+
 ### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
 
 Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
@@ -1997,17 +2022,20 @@ diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
   orthographe (« Not found among the objects Oxyn has read »). La recherche
   n'introspecte pas : une table d'un schéma jamais déplié n'est pas trouvée, et
   le message le laisse entendre.
-* **Ce qui est dessiné vient du backend.** Colonnes, clé primaire et colonnes de
-  clé étrangère sont lues par les mêmes commandes que la vue d'objet
-  (`relation_facets`, puis `refresh_relation_facet` pour une facette jamais lue) ;
-  les arêtes sont les clés étrangères. Aux tables nommées s'ajoutent leurs
-  **voisines directes** par une clé, sortante ou entrante, et les clés entre
-  deux tables dessinées. Aucun modèle n'est consulté, et un même catalogue
-  donne le même diagramme (disposition dagre, de gauche à droite : la table qui
-  porte la clé avant celle qu'elle référence).
-* **Borné.** Un bloc est lu jusqu'à 20 noms, un diagramme s'arrête à 40 tables
-  et une table montre 12 colonnes, clés d'abord ; chaque surplus est compté et
-  dit. Quatre lectures au plus sont en vol à la fois.
+* **Ce qui est dessiné vient du backend.** La commande typée du bus
+  `LoadSchemaMap` lit descriptions et clés sortantes disponibles sur la session
+  d'origine et renvoie la même projection pure que la carte autonome
+  ([ADR-0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md)).
+  L'inférence documentaire n'est jamais implicite. Les noms désignent seulement
+  les objets déjà observés ; les voisins se développent explicitement dans la
+  carte. Les clés entre objets chargés sont dessinées et les extrémités non
+  chargées comptées. Aucun modèle ni nom de colonne ne crée de relation.
+* **Borné.** Un bloc contient au plus 20 noms ; la carte commune s'arrête à
+  40 objets, 12 champs affichés par objet, membres imbriqués compris, et
+  200 liens. Les lectures sont sérialisées par propriétaire d'origine avec
+  priorité interactive. Parties non lues/périmées/omises et facettes
+  indisponibles/échouées restent visibles ; la couverture entrante ne prétend
+  jamais dépasser les clés sortantes chargées.
 * **Navigable.** Déplacer à la souris, zoomer par les boutons, le pincement ou
   le clavier (flèches, `+`, `-`, `0` pour ajuster) quand le diagramme a le
   focus. La molette fait défiler la conversation, pas le diagramme. Un clic sur

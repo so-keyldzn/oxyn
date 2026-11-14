@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="1a4a2ca9a0dd" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="16abefd7ccc2" -->
 
 # Recherche sur les schémas : matrice des moteurs
 
@@ -116,10 +116,10 @@ charge et absence constatée de liens sont des états différents.
 
 | Fonction | État actuel dans ce code | Couverture proposée / prérequis |
 |---|---|---|
-| Profil serveur multi-base (#373) | Pas d'identité de groupe serveur ; hiérarchie propre à chaque driver déjà présente | PostgreSQL d'abord ; politique, cache et sessions indépendants par base. [D01][d01] consigne la portée indépendante proposée des identifiants ; la migration reste à valider. |
+| Profil serveur multi-base (#373) | Profils et découverte/ouverture PostgreSQL implémentés ; hiérarchies natives indépendantes | Découverte PostgreSQL d’abord ; politiques, caches, sessions et identifiants indépendants. Migration et ouverture propriétaire validées dans le bilan. [D01][d01]. |
 | Introspection configurable (#375) | Facettes indépendantes, cache borné et préréglages manuels par connexion/périmètre natif ; pages de préchargement explicites uniquement (validation dans le registre d’achèvement) | Politique commune aux neuf drivers, limitée à leurs facettes disponibles. Aucune exemption générale pour les fichiers locaux. [D02][d02] consigne les déclencheurs explicites et la persistance de préférence. |
 | Export/restauration natifs (#374) | Aucun wrapper `pg_dump`/`pg_restore` trouvé dans le code applicatif ; l'export de résultats conservés est distinct | Adaptateur PostgreSQL proposé uniquement. Compatibilité des variantes et autres moteurs à étudier séparément ; ne pas proposer les outils PostgreSQL simplement parce qu'un driver parle ce protocole. [D04][d04] consigne la frontière des tâches ; le transport d'authentification reste un prérequis. |
-| Navigation F6 (#308) | Documentée, absente du manifeste d'actions | Action commune du workspace, indépendante du driver ; inclure une carte focalisée lorsqu'elle existe. |
+| Navigation F6 (#308) | Cycle des zones visibles implémenté dans le registre et testé dans le navigateur | Action commune indépendante du driver ; inclut la carte focalisée. |
 | Cartes enregistrées / export d'image | Placement et rendu ERD existants ; positions manuelles désactivées et actions de réorganisation/export indisponibles | [D03][d03] d'abord ; enregistrer les choix d'affichage séparément des métadonnées et des valeurs échantillonnées. |
 
 ## Moteurs futurs : périmètre, pas prise en charge implicite
@@ -265,3 +265,37 @@ FK seule, définition seule et description explicitement inférée. Les vérific
 SQLite et MongoDB jetables sont distinctes de cet inventaire statique ; elles ne
 certifient pas toutes les versions des autres serveurs. Le [registre](completion.md)
 détaille les validations réellement exécutées et leurs exclusions.
+
+## Carte commune implémentée (2026-11-14)
+
+L'inventaire historique garde ses instantanés datés. La carte autonome utilise
+désormais la même projection hôte et le même rendu que l'assistant, selon
+[l'ADR-0082][d03]. Chaque ligne passe par la même commande humaine et sa session
+d'origine ; aucun nom de moteur ne choisit un autre assembleur. Privilèges,
+capacités réelles et erreurs déterminent la couverture.
+
+| Moteurs / variantes | Représentation commune disponible | Limite explicite |
+|---|---|---|
+| PostgreSQL, TimescaleDB, pgvector, MySQL/MariaDB, SQLite, DuckDB | Objets et champs dans le périmètre natif, FK sortantes rapportées, développement entrant explicite si pris en charge | Unicité prouvée seulement par une PK fraîche ; dépendances structurées de vues/extensions indisponibles |
+| Redshift | Même projection relationnelle suivant les capacités | Entrants/définitions absents restent indisponibles ; pas de certification d'exécution |
+| ClickHouse | Tables/vues/vues matérialisées par base et champs | Aucune FK inventée |
+| Turso | Espaces, objets, champs et clés sortantes de l'URL courante | Entrants limités aux clés chargées ; aucune autre URL/base ouverte |
+| MongoDB | Identités de collections/vues/séries avant échantillonnage ; champs déduits et imbrication après accord humain borné | Aucun échantillon implicite, relation SQL ou valeur échantillonnée |
+| Elasticsearch / OpenSearch | Types index/alias/data stream et mappings imbriqués rapportés | Dépendances typées d'alias/data streams non exposées par le contrat, donc non devinées |
+| Redis / Valkey | Clés bornées de la base numérotée choisie, types et champs de disposition d'aperçu | Liste échantillonnée, sans exhaustivité, schéma documentaire ni lien déduit d'un préfixe |
+
+Tous les chemins distinguent appartenance native, imbrication et FK, gardent les
+niveaux absents et les identités source/session complètes. Parties non lues,
+périmées, indisponibles, échouées et omises restent visibles. La liste inclut
+les liens sans rendu d'arête. Choisir, dessiner, filtrer, déplacer, zoomer et
+sélectionner ne lit ni lignes ni métadonnées natives. Charger explicitement
+respecte 40 objets, 12 champs par objet, 200 liens et le budget JSON commun.
+Le contrôle de génération après livraison IPC ne lit que la mémoire. Aucune
+carte ne crée/rouvre de source ou n'attache automatiquement un fichier.
+
+Les sources SQLite et DuckDB jetables passent le chargement réel, les clés
+composites, les vues et la réutilisation sans nouvelle lecture. Des propriétaires
+en mémoire privée restent distincts. Les autres lignes ont une couverture
+statique/par fournisseurs simulés, pas une nouvelle certification réelle de
+chaque version. Contrôles, suppression de fichier, mesures de rendu et limites
+de plateforme sont dans le [bilan](completion.md).

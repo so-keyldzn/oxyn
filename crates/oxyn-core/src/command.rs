@@ -453,6 +453,12 @@ pub enum Command {
         /// Exact observed revision, zero for a missing policy.
         expected_revision: u64,
     },
+    /// Load a bounded local schema map without rows or automatic inference.
+    LoadSchemaMap {
+        /// Bounded native identities on the exact live owner; no query text.
+        request: Box<crate::SchemaMapRequest>,
+    },
+
     /// Explicit, bounded metadata preload on an already owned live session.
     PreloadMetadata {
         /// Bounded, reviewed source and policy; never authentication parameters.
@@ -734,6 +740,7 @@ impl Command {
             | Self::Export { .. }
             | Self::ReadWorkspacePreferences { .. }
             | Self::PreloadMetadata { .. }
+            | Self::LoadSchemaMap { .. }
             | Self::ReadMetadataPolicy { .. }
             | Self::WriteMetadataPolicy { .. }
             | Self::WriteWorkspacePreferences { .. }
@@ -779,6 +786,7 @@ impl Command {
         match self {
             Self::ReadHistory { filter } => filter.connection,
             Self::PreloadMetadata { request } => Some(request.connection),
+            Self::LoadSchemaMap { request } => Some(request.connection),
             Self::ReadMetadataPolicy { connection }
             | Self::WriteMetadataPolicy { connection, .. }
             | Self::DiscoverDatabases { connection }
@@ -937,6 +945,7 @@ impl Command {
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
             Self::PreloadMetadata { .. } => "PreloadMetadata",
+            Self::LoadSchemaMap { .. } => "LoadSchemaMap",
             Self::ReadMetadataPolicy { .. } => "ReadMetadataPolicy",
             Self::WriteMetadataPolicy { .. } => "WriteMetadataPolicy",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",

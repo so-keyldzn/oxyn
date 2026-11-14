@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="5ced43803176" -->
+<!-- oxyn-translation source="docs/README.md" sha256="bff773b470d2" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -112,7 +112,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0079](adr/0079-retain-temporary-previews-on-their-owning-session.md) | Les aperçus temporaires gardent leur propriétaire physique avec occupation explicite et métadonnées isolées | accepté |
 | [0080](adr/0080-group-database-connections-under-server-profiles.md) | Regrouper les connexions par serveur sans partager leur autorité | accepté |
 | [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Charger les facettes indépendamment et rendre le préchargement explicite | accepté |
-| [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Construire les cartes de schéma depuis des métadonnées de provenance explicite | proposé |
+| [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Construire les cartes de schéma depuis des métadonnées de provenance explicite | accepté |
 | [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Exécuter les transferts natifs comme tâches autorisées et possédées | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.

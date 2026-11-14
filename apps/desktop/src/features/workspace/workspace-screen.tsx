@@ -1,3 +1,5 @@
+import { SchemaMapTab } from "@/features/schema-map/schema-map-tab"
+import { useMapTabs } from "@/features/schema-map/use-map-tabs"
 import { previewKey } from "@/features/metadata/preview-store"
 import { previews } from "@/features/metadata/preview-state"
 import { OpenSessionTable } from "@/components/oxyn/open-session-table"
@@ -344,6 +346,7 @@ export function WorkspaceScreen({
       current = false
     }
   }, [open.connection])
+  const maps = useMapTabs(activate)
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
 
@@ -374,6 +377,7 @@ export function WorkspaceScreen({
             tab.key === key ? { ...tab, node: richer } : tab
           )
         )
+      if (target) objectHandles.current.get(key)?.openSection(target)
       activate(key)
       return
     }
@@ -497,6 +501,7 @@ export function WorkspaceScreen({
       sections.current.delete(key)
       keepPlace(remaining[remaining.length - 1])
     }
+    maps.close(new Set([key]))
     setObjects((current) => current.filter((tab) => tab.key !== key))
     setRetained((current) => current.filter((tab) => tab.key !== key))
     if (activeRef.current !== key) return true
@@ -660,7 +665,11 @@ export function WorkspaceScreen({
     visible
       ? {
           activeTab: active,
-          tabCount: objects.length + work.entries.length + retained.length,
+          tabCount:
+            objects.length +
+            work.entries.length +
+            retained.length +
+            maps.entries.length,
           consoleCount: work.entries.length,
           objectActive:
             active !== null && objects.some((tab) => tab.key === active),
@@ -707,6 +716,11 @@ export function WorkspaceScreen({
   )
 
   const naturalTabs: Array<WorkspaceTabItem> = [
+    ...maps.entries.map((tab) => ({
+      kind: "map" as const,
+      key: tab.key,
+      title: `Map: ${tab.object?.name ?? tab.scope?.namespace ?? tab.scope?.catalog ?? tab.owner.name}`,
+    })),
     ...objects.map((tab) => ({
       kind: "object" as const,
       key: tab.key,
@@ -899,6 +913,7 @@ export function WorkspaceScreen({
       keepPlace(remaining[remaining.length - 1])
       setObjects((all) => all.filter((tab) => !gone.has(tab.key)))
       setRetained((all) => all.filter((tab) => !gone.has(tab.key)))
+      maps.close(gone)
       if (activeRef.current !== null && gone.has(activeRef.current)) {
         const next = tabs.find((tab) => !gone.has(tab.key))?.key ?? null
         activeRef.current = next
@@ -979,6 +994,18 @@ export function WorkspaceScreen({
     setObjects((current) =>
       current.filter((tab) => !tab.owner || live.has(tab.owner.session))
     )
+    live.add(open.session)
+    maps.retainOwners(live)
+    if (
+      maps.entries.some(
+        (tab) => tab.key === activeRef.current && !live.has(tab.owner.session)
+      )
+    ) {
+      const next = work.entries[0]?.key ?? null
+      activeRef.current = next
+      if (next) activate(next)
+      else setActive(null)
+    }
   }, [work.entries])
 
   return (
@@ -1019,6 +1046,7 @@ export function WorkspaceScreen({
               selected={
                 activeObject ? addressKey(activeObject.node.address) : null
               }
+              onSchemaMap={(node) => maps.open(sourceOpen ?? open, node)}
               onSelect={(node) => openObject(node, undefined, sourceOpen)}
               onOpen={(node, target) => openObject(node, target, sourceOpen)}
               onNewConsole={(place) =>
@@ -1126,6 +1154,28 @@ export function WorkspaceScreen({
           />
         }
       >
+        {maps.entries.map((tab) => (
+          <TabsContent
+            key={tab.key}
+            value={tabPanelValue(tab.key)}
+            keepMounted
+            className="h-full min-h-0"
+          >
+            <SchemaMapTab
+              open={tab.owner}
+              active={visible && tab.key === active}
+              initialScope={tab.scope}
+              initialObject={tab.object}
+              onOpenObject={(node, target, owner) =>
+                openObject(
+                  node,
+                  target,
+                  owner.session === open.session ? undefined : owner
+                )
+              }
+            />
+          </TabsContent>
+        ))}
         {objects.map((tab) => (
           <TabsContent
             key={tab.key}
@@ -1159,6 +1209,7 @@ export function WorkspaceScreen({
                     }
                   : undefined
               }
+              onSchemaMap={() => maps.open(tab.owner ?? open, tab.node)}
               onOpenRelated={(address) =>
                 openObject(relatedNode(address), undefined, tab.owner)
               }

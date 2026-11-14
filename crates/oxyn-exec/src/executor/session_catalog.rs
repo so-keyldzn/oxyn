@@ -113,7 +113,8 @@ impl Executor {
             guard = state.refresh.lock() => guard,
         };
         let generation = slot.catalog.cache.read().generation();
-        if let crate::catalog::priority::Priority::Prefetch(expected) = priority
+        if let crate::catalog::priority::Priority::Prefetch(expected)
+        | crate::catalog::priority::Priority::DemandAt(expected) = priority
             && generation != expected
         {
             return Err(OxynError::Cancelled);

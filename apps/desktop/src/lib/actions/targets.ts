@@ -192,6 +192,7 @@ export interface CatalogMenuState {
 
 export interface CatalogMenuActions {
   openData?: () => void
+  viewSchemaMap?: () => void
   viewStructure?: () => void
   viewDdl?: () => void
   newConsoleOnSchema?: () => void

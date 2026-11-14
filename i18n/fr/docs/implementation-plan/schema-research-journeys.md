@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="580ff07fc069" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="c78d6022611a" -->
 
 # Recherche sur les schémas : parcours utilisateur
 
@@ -159,13 +159,14 @@ n’autorisent aucun seuil automatique.
 
 ## J04 — Ouvrir une carte relationnelle sans IA
 
-**Entrée :** `View schema map` sur une base ou un schéma ; `Show related objects`
-sur un objet ; ou ouverture du diagramme de l'assistant dans un onglet.
+**Entrée :** `View schema map` sur la source de l’explorateur ou un
+catalogue/espace/objet natif. L’assistant partage la projection hôte ; son bloc
+reste dans la conversation.
 
 **Existant :** l'ERD de l'assistant utilise les métadonnées du catalogue, React
 Flow et Dagre. Ses noms sources ne sont résolus que parmi les objets déjà
-listés. Ce composant ne fournit pas de carte autonome, de disposition déplaçable
-enregistrée ni d'export d'image.
+listés. L’onglet autonome partage désormais son rendu et la projection hôte.
+Dispositions persistantes et export image restent séparés.
 
 **Parcours proposé :** choisir périmètre et types d'objets ; lister les objets
 disponibles ; dessiner les objets sélectionnés ; charger progressivement les
@@ -396,3 +397,30 @@ tests réussis. Aucun serveur réel, échantillon, benchmark ou transfert natif
 n'a été essayé. Le livrable de recherche est examinable lorsque chaque parcours
 a un déclencheur, un chemin d'échec/reprise, un critère d'acceptation et une
 référence de capacité/décision.
+
+## Revalidation d'implémentation J04/J05 — 2026-11-14
+
+La branche carte suit `40329e4`, sans intégration main/dev à ce stade. Ouvrir un
+onglet carte ne lance aucune lecture native. Un conteneur se charge un niveau à
+la fois ; choisir un objet ne sélectionne que lui. Les filtres locaux couvrent
+noms, chemins et types chargés. Inspection, Data/Structure/définition et voisins
+immédiats sont des gestes séparés sur le propriétaire d'origine. Une vue déjà
+ouverte passe à la section demandée. Le bloc de l'assistant reste dans la
+conversation et partage la projection hôte ; son ouverture comme onglet carte
+complet n'est pas une entrée livrée. Dispositions durables et export restent séparés.
+
+L'hôte refuse les objets inconnus et les générations remplacées. Un contrôle de
+génération mémoire refuse aussi une carte dépassée pendant la livraison IPC.
+Échec, résultat partiel et arrêt sont distincts ; un rafraîchissement échoué
+garde la carte périmée. Fermer/masquer annule seulement sa demande. L'inférence
+demande séparément source, objet et limites ; un chargement ordinaire ne prélève
+rien. Réglages et disponibilité suivent le fournisseur vivant.
+
+Clés composites, cycles, homonymes, imbrications, provenances rapportée/
+échantillonnée/disposition d'aperçu, cardinalités inconnues et extrémités non
+chargées relèvent de la projection commune. Les entrants ne couvrent que les
+clés sortantes chargées. Les dépendances techniques restent indisponibles sans
+métadonnées structurées. Pas de disposition persistée ni de réouverture de source.
+Résultats SQLite/DuckDB et limites des autres moteurs figurent dans matrice et
+bilan. SQ01–SQ06 restent applicables ; mémoire privée et propriétaires supprimés
+ne doivent jamais provoquer la création d'une base vide de remplacement.

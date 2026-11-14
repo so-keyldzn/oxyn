@@ -328,6 +328,9 @@ export const metadata = {
       facet,
     }),
 
+  catalogGeneration: (connection: string, session: string | null = null) =>
+    call("catalog_generation", z.string().uuid(), { connection, session }),
+
   catalogTree: (connection: string, session: string | null = null) =>
     call("catalog_tree", z.array(CatalogNode), { connection, session }),
 

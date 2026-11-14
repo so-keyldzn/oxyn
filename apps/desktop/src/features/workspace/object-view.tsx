@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
@@ -72,6 +73,8 @@ import type {
 export type ObjectViewHandle = {
   /** Shows Data and focuses its grid (`⌘2`); nothing without a preview. */
   focusPreview: () => void
+  /** Explicit navigation to an existing tab also releases restored-read hold. */
+  openSection: (target: OpenTarget) => void
 }
 
 /**
@@ -95,6 +98,7 @@ export function ObjectView({
   onPlaceChange,
   onInspectRow,
   onOpenRelated,
+  onSchemaMap,
   onOpenInConsole,
   handleRef,
   definitionWidth,
@@ -121,6 +125,8 @@ export function ObjectView({
   onInspectRow?: () => void
   /** Selects another relation, as a click in the explorer would. */
   onOpenRelated?: (address: CatalogAddress) => void
+  /** Opens a map on this exact owner, including objects absent from native listings. */
+  onSchemaMap?: () => void
   /**
    * Opens SQL in a **new** console, without running it. `parameters`
    * pre-fills its Parameters panel; the values are bound there, never
@@ -167,6 +173,11 @@ export function ObjectView({
   React.useImperativeHandle(
     handleRef,
     () => ({
+      openSection: (target) => {
+        const next = initialObjectTab(target, previewable)
+        setHeld(false)
+        setTab(absentTabs.has(next) ? "structure" : next)
+      },
       focusPreview: () => {
         if (!previewable) return
         setHeld(false)
@@ -174,7 +185,7 @@ export function ObjectView({
         setGridFocusRequest((count) => count + 1)
       },
     }),
-    [previewable]
+    [previewable, absentTabs]
   )
   const [direction, setDirection] = React.useState<RelationDirection>(
     () =>
@@ -436,19 +447,26 @@ export function ObjectView({
           onWidthChange: onDefinitionWidthChange,
         }}
         toolbar={
-          tab === "data" && previewable && !moduleMissing ? (
-            <PreviewToolbar
-              running={preview.running}
-              cancelling={preview.cancelling}
-              onRefresh={() => {
-                setHeld(false)
-                if (metadataReady || preview.status !== "initial")
-                  preview.refresh()
-                else requestDescription()
-              }}
-              onCancel={preview.cancel}
-            />
-          ) : null
+          <>
+            {onSchemaMap && (
+              <Button size="sm" variant="outline" onClick={onSchemaMap}>
+                View schema map
+              </Button>
+            )}
+            {tab === "data" && previewable && !moduleMissing ? (
+              <PreviewToolbar
+                running={preview.running}
+                cancelling={preview.cancelling}
+                onRefresh={() => {
+                  setHeld(false)
+                  if (metadataReady || preview.status !== "initial")
+                    preview.refresh()
+                  else requestDescription()
+                }}
+                onCancel={preview.cancel}
+              />
+            ) : null}
+          </>
         }
         notice={
           <>

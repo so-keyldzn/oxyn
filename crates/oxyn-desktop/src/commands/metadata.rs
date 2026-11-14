@@ -138,6 +138,21 @@ pub async fn refresh_relation_facet(
     .await
 }
 
+/// A memory-only snapshot used to reject a projection superseded during IPC delivery.
+#[tauri::command]
+pub async fn catalog_generation(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    session: Option<String>,
+    connection: String,
+) -> Result<oxyn_catalog::CatalogGenerationId, IpcError> {
+    let (owner, _using) = checked_source(&backend, &webview, session)?;
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.catalog_generation_for_session(connection, owner))
+        .await
+}
+
 #[tauri::command]
 pub async fn catalog_tree(
     webview: Webview,

@@ -623,6 +623,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     "Open it from the workspace's catalog",
     (state) => (state.relation ? true : "absent")
   ),
+  "catalog.viewSchemaMap": onTarget(
+    "catalogNode",
+    (source) => source.actions.viewSchemaMap,
+    "Open it from the workspace catalog"
+  ),
   "catalog.viewDdl": onTarget(
     "catalogNode",
     (source) => source.actions.viewDdl,

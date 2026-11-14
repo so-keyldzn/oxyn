@@ -31,6 +31,7 @@ pub(crate) struct Probe {
     describe_started: tokio::sync::Notify,
     describe_release: tokio::sync::Notify,
     wait: AtomicBool,
+    relations_waiting: tokio::sync::Notify,
     observed_cancel: AtomicBool,
     failure: Mutex<Option<ErrorClass>>,
     /// What the source answers to `resolution_path`; `None` is a source that
@@ -68,6 +69,7 @@ impl CatalogProvider for Probe {
     ) -> Result<Vec<RelationRef>> {
         self.calls.lock().push(format!("relations:{parent}"));
         if self.wait.load(Ordering::SeqCst) {
+            self.relations_waiting.notify_one();
             cancel.cancelled().await;
             self.observed_cancel.store(true, Ordering::SeqCst);
             return Err(OxynError::Cancelled);
@@ -726,3 +728,6 @@ fn merge_at_scope_limit_evicts_the_oldest_scope_and_publishes() {
 
 #[path = "catalog_tests/metadata_loading.rs"]
 mod metadata_loading;
+
+#[path = "catalog_tests/schema_map.rs"]
+mod schema_map;

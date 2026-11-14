@@ -881,6 +881,33 @@ impl CatalogCache {
             .map(|relation| (&relation.summary, relation.detail.value.as_ref()))
     }
 
+    /// Whether a relation-list scope was observed in this live cache.
+    /// Missing native levels stay absent; this performs no discovery or I/O.
+    #[must_use]
+    pub fn observes_native_scope(
+        &self,
+        catalog: Option<&str>,
+        namespace: Option<&str>,
+        capabilities: oxyn_core::Capabilities,
+    ) -> bool {
+        if self.server_info().is_none() {
+            return false;
+        }
+        let catalog_known = catalog.map_or_else(
+            || self.catalogs().next().is_none(),
+            |name| self.catalogs().any(|catalog| catalog.name() == name),
+        );
+        let namespace_known = if capabilities.contains(oxyn_core::Capabilities::SCHEMAS) {
+            namespace.is_some_and(|name| {
+                self.namespaces(catalog)
+                    .any(|namespace| namespace.name() == name)
+            })
+        } else {
+            namespace.is_none()
+        };
+        catalog_known && namespace_known
+    }
+
     /// Number of known relations, all levels together.
     #[must_use]
     pub fn relation_count(&self) -> usize {

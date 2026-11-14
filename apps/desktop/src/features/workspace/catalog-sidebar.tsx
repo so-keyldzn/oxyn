@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button"
 import * as React from "react"
 import { MetadataLoadingSettings } from "@/features/metadata/loading-settings"
 import { CatalogTransferDialog } from "@/components/oxyn/catalog-transfer-dialog"
@@ -75,6 +76,7 @@ export function CatalogSidebar({
   onSelect,
   onOpen,
   onNewConsole,
+  onSchemaMap,
   onLeave,
   sourceSelector,
   sessionScoped = false,
@@ -87,6 +89,7 @@ export function CatalogSidebar({
   sourceSelector?: React.ReactNode
   sessionScoped?: boolean
   selected: string | null
+  onSchemaMap?: (node?: CatalogNode) => void
   onSelect: (node: CatalogNode) => void
   /** Opens a relation on a given tab; without it, the menu selects the node. */
   onOpen?: (node: CatalogNode, target: OpenTarget) => void
@@ -261,6 +264,16 @@ export function CatalogSidebar({
     <Sidebar variant="inset" collapsible="icon">
       {sourceSelector}
       {navigation && <ExplorerNavigation />}
+      {supported && onSchemaMap && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="mx-2"
+          onClick={() => onSchemaMap()}
+        >
+          View schema map
+        </Button>
+      )}
       <CatalogPanel
         connectionName={open.name}
         driver={open.driver}
@@ -290,6 +303,7 @@ export function CatalogSidebar({
         notice={notice}
         onDismissProblem={() => setProblem(null)}
         onOpen={onOpen ?? ((node) => onSelect(node))}
+        onSchemaMap={onSchemaMap}
         onCopyName={copies.copyName}
         nameTransfer={nameTransfer(
           open.connection,

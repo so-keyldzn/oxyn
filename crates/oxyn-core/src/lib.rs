@@ -80,6 +80,8 @@ pub mod event;
 pub mod ids;
 pub mod library;
 pub mod metadata_loading;
+pub mod schema_map;
+pub use schema_map::{MapObjectRef, SchemaMapRequest};
 pub mod server_profile;
 pub use library::{
     DocumentFilter, HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter,

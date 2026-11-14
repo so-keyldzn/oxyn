@@ -1868,6 +1868,33 @@ against the cache: an object the cache knows to be gone is shown dimmed, with
 stays normal. The label comes from the catalog: it is hostile input, rendered
 as text.
 
+### Standalone schema map
+
+`View schema map` opens a retained workspace tab from the explorer's current
+source or a catalog/namespace/object menu. Source and original session stay
+attached to that tab. Opening the tab performs no native introspection; choose
+a native scope and load it explicitly. Containers are read one level at a time.
+Filters affect loaded names, native paths and kinds locally. The canvas has
+pan/zoom controls and a keyboard-accessible object/link list; F6 participates
+only while the tab is visible. Selection reveals an inspector rather than rows.
+
+The inspector distinguishes reported fields, explicit sample-derived fields
+and key preview layouts; it offers Data/Structure/definition only where
+applicable. Expand neighbours reads one selected object's supported incoming
+keys plus the available direct references, under the existing bounds. Reopening
+an existing object applies the requested view. Human inference has its own
+source/object/limits disclosure and Cancel; no sampled values enter the graph.
+
+Reading, cancellation, known-empty, unavailable, partial, failed and stale maps
+are distinct. A failed refresh keeps the previous map labelled stale. Closing
+or hiding a map cancels its exact active read, without touching another tab's
+job. References to unloaded objects remain visible; technical dependencies are
+explicitly unavailable without structured provider metadata. Membership and
+field containment are named separately from foreign keys. A closed ephemeral
+source or removed SQLite file never causes an empty replacement to be opened.
+Dispositions across launches, image export and graphical DDL editing remain
+separate work.
+
 ### An `erd` block is drawn from the catalog, not from the answer
 
 A fenced code block of language `erd` in an answer lists table names, one per
@@ -1885,17 +1912,19 @@ at every arriving name would read as a defect.
   spelling ("Not found among the objects Oxyn has read"). The search does not
   introspect: a table of a schema never expanded is not found, and the message
   hints at it.
-* **What is drawn comes from the backend.** Columns, primary key and foreign
-  key columns are read by the same commands as the object view
-  (`relation_facets`, then `refresh_relation_facet` for a facet never read);
-  the edges are the foreign keys. To the named tables are added their **direct
-  neighbors** through a key, outgoing or incoming, and the keys between two
-  drawn tables. No model is consulted, and the same catalog gives the same
-  diagram (dagre layout, left to right: the table that carries the key before
-  the one it references).
-* **Bounded.** A block is read up to 20 names, a diagram stops at 40 tables and
-  a table shows 12 columns, keys first; each surplus is counted and said. At
-  most four reads are in flight at once.
+* **What is drawn comes from the backend.** The typed `LoadSchemaMap` bus
+  command reads available descriptions and outgoing keys on the original
+  session and returns the same pure projection as the standalone map
+  ([ADR-0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md)).
+  Documentary inference is never implicit. Names resolve only to already
+  observed objects; neighbors are expanded explicitly in the standalone map.
+  Keys between loaded objects are drawn, and unresolved endpoints are counted.
+  No model is consulted and no column name creates a relationship.
+* **Bounded.** A block is read up to 20 names; the shared map stops at 40
+  objects, 12 displayed fields per object (nested members included), and 200
+  links. Reads are serialized per original metadata owner with interactive
+  priority. Unread/stale/omitted and unsupported/failed parts remain visible;
+  incoming coverage never claims more than loaded outgoing keys.
 * **Navigable.** Pan with the mouse, zoom with the buttons, pinching or the
   keyboard (arrows, `+`, `-`, `0` to fit) when the diagram has the focus. The
   wheel scrolls the conversation, not the diagram. A click on a table name

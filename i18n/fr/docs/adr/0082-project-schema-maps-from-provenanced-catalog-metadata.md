@@ -1,119 +1,128 @@
-<!-- oxyn-translation source="docs/adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md" sha256="900e7c9bd846" -->
-
+<!-- oxyn-translation source="docs/adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md" sha256="8880480a7ff2" -->
 # ADR-0082 — Construire les cartes de schéma depuis des métadonnées de provenance explicite
 
-**Statut :** proposé · **Date :** 2026-11-13
+**Statut :** accepté · **Date :** 2026-11-14
 
-**Précise :** [ADR-0003](0003-driver-capabilities.md) sur les capacités de
-présentation et [ADR-0041](0041-registre-d-actions-menus-et-raccourcis.md) sur les
-actions de carte du workspace. Cette proposition ne remplace pas le contrat ERD
-livré de l'assistant et n'active aucune introspection non prise en charge.
+**Précise :** [ADR-0003](0003-driver-capabilities.md),
+[ADR-0041](0041-registre-d-actions-menus-et-raccourcis.md) et
+[ADR-0081](0081-load-catalog-facets-independently-with-explicit-prefetch.md).
 
 ## Contexte
 
-La carte autonome demandée pendant la recherche doit couvrir sources
-relationnelles, documentaires et espaces de clés. Au commit `6647180`,
-l'assistant rend déjà un ERD avec React Flow et Dagre. Son modèle contient tables
-et clés étrangères, mais omet le type d'objet et la provenance déduite des
-champs ; ses lectures initiales demandent les clés entrantes même sans cette
-capacité du driver.
-
-La [matrice des moteurs](../implementation-plan/schema-research-engines.md)
-montre pourquoi un graphe de style SQL ne représente pas fidèlement toutes les
-sources. Clés déclarées, appartenance de mappings et champs déduits d'échantillons
-ont des sens différents.
+La carte autonome doit couvrir les sources relationnelles, documentaires et
+les espaces de clés. L'assistant utilise déjà React Flow/Dagre, mais son
+assembleur séparé perd les types d'objet, la provenance et les identités
+complètes des propriétaires. Hiérarchies natives, clés étrangères, mappings et
+champs déduits ont des sens différents ; la [matrice des moteurs](../implementation-plan/schema-research-engines.md)
+décrit les métadonnées disponibles sans promettre toutes les fonctions serveur.
 
 ## Décision
 
-La carte est un onglet ordinaire du workspace, disponible sans fournisseur IA.
-Elle s'ouvre depuis une connexion, un espace de noms ou un objet sélectionné ;
-l'assistant peut ouvrir la même carte avec un périmètre présélectionné.
-Sélection et dessin n'accèdent pas au serveur par eux-mêmes. Les demandes
-explicites de métadonnées utilisent le bus et
-[ADR-0081](0081-load-catalog-facets-independently-with-explicit-prefetch.md).
+La carte est un onglet ordinaire, disponible sans fournisseur IA, ouvert depuis
+la source sélectionnée ou un catalogue/espace/objet natif. Ouvrir, choisir le
+périmètre, dessiner, filtrer, sélectionner, déplacer et zoomer ne lance aucune
+lecture native de métadonnées ou de lignes. Charger, rafraîchir, développer les
+voisins immédiats d'un objet sélectionné et ouvrir Data/Structure/définition
+sont des gestes humains séparés. Le fichier et la session propriétaires restent
+les mêmes : aucune connexion ni pièce jointe n'est ouverte pour remplir la
+carte. Un fichier SQLite supprimé ou une source éphémère fermée n'est jamais
+remplacé par une nouvelle base vide.
 
-`oxyn-catalog` possède une `SchemaMapProjection` pure : identités d'objets,
-descriptions de champs, liens typés, provenance, fraîcheur et couverture.
-Elle ne contient pas de coordonnées et ne fait pas d'I/O. `oxyn-desktop`
-orchestre les lectures autorisées et construit une projection IPC bornée.
-Une fonctionnalité front partagée possède rendu React Flow, placement Dagre et
-navigation ; l'assistant conserve seulement son adaptateur de demande, pas un
-second assembleur de graphe.
+Core porte la commande typée réservée à l'humain `LoadSchemaMap`. `oxyn-exec`
+possède les lectures bornées et annulables, via la file de métadonnées de la
+session et les contrôles atomiques de génération existants. Une demande peut
+passer devant un préchargement en attente, mais ne peut publier dans une source
+modifiée. Le passage de 60 secondes attend le nettoyage d'annulation ; il garde
+les parties disponibles et signale séparément échecs et indisponibilités. Le
+pont desktop contrôle fenêtre/session et renvoie un IPC validé.
 
-L'identité d'un nœud comprend `ConnectionId` et l'adresse complète validée
-de l'objet. Les libellés ne sont pas des clés. Le type d'objet est conservé ;
-les champs distinguent information déclarée, observée et indisponible.
-Les champs déduits portent couverture/provenance, pas des valeurs de lignes exemples.
+`oxyn-catalog` possède une `SchemaMapProjection` pure, sans E/S ni coordonnées.
+Un adaptateur/rendu frontend commun dessine cette projection dans la carte et
+l'assistant. L'assistant ne garde que la résolution des noms déjà listés et
+l'adaptation de requête ; il ne tranche pas les ambiguïtés et ne développe pas
+automatiquement les voisins. Sa couverture indique les parties non lues,
+périmées, omises et les extrémités non chargées. La carte n'envoie rien à une IA ;
+tout contexte destiné à l'assistant passe toujours par la passerelle de confidentialité.
 
-Les liens ont des types explicites : clé étrangère déclarée, dépendance d'objet
-rapportée, appartenance rapportée ou inclusion de champ. Chacun porte sa source
-et sa couverture. Une cardinalité inconnue reste inconnue. Inverser les clés
-sortantes chargées ne démontre les liens entrants que dans cet ensemble. Un
-lien vers un objet non chargé montre une extrémité non résolue au lieu d'impliquer
-une découverte complète. Un nom tel que `user_id` ne crée jamais de lien.
+Les clés d'objet comprennent connexion, session d'origine et niveaux natifs
+optionnels complets. Les clés de champ gardent les segments exacts, dont les
+points littéraux. Les membres composites ordonnés distinguent les clés sans
+nom. Les libellés ne sont jamais des identités. Types d'objet, provenance et
+fraîcheurs indépendantes sont conservés. Seules des clés primaires déclarées et
+fraîches prouvent l'unicité ; l'absence de preuve reste une cardinalité inconnue.
+Les liens périmés sont signalés.
+
+Les liens distinguent clé étrangère rapportée, dépendance technique,
+appartenance native et imbrication de champs. Le canevas dessine les clés
+étrangères ; liste accessible, fil natif et inspecteur exposent aussi
+appartenance et imbrication. Des membres composites incomplets ne sont jamais
+réparés par supposition. Inverser les clés sortantes chargées ne donne des liens
+entrants que dans cet ensemble. Les références non chargées restent visibles
+dans la liste/l'inspecteur. Aucun nom ni DDL analysé n'invente de lien. Les
+dépendances techniques structurées restent explicitement indisponibles tant
+que le contrat fournisseur ne les expose pas.
 
 | Métadonnées disponibles | Représentation |
 |---|---|
-| Relations et clés étrangères | Cartes d'objets et liens déclarés |
-| Relations sans introspection des clés | Cartes d'objets ; aucune relation inventée |
-| Collections et champs observés | Structure de collection avec provenance d'échantillonnage |
-| Mappings et appartenance rapportée | Hiérarchie de champs et liens techniques typés |
-| Espace de clés échantillonné | Vue clés/types ; regroupement facultatif par préfixe marqué comme convention |
-| Métadonnées de graphe futures | Labels/types/propriétés avec certitude et couverture explicites du driver |
+| Relations avec introspection des FK | Cartes d'objet et liens de clés rapportées |
+| Relations sans introspection des clés | Cartes d'objet avec clés indisponibles |
+| Collections avec champs échantillonnés explicitement | Collections, champs imbriqués et provenance échantillonnée |
+| Mappings serveur | Hiérarchie de champs rapportée, sans relations inventées |
+| Espaces de clés | Cartes clé/type et provenance de disposition d'aperçu, sans prétendre un schéma documentaire déclaré |
 
-La capacité `GRAPH` du moteur ne conditionne pas cet écran. Sa disponibilité
-dépend de l'introspection réellement exposée par la session. Une facette
-facultative manquante ou un objet en échec produit une carte partielle, pas un
-graphe vide inventé ni l'échec total des objets déjà lus. Les objets refusés ne
-révèlent aucune métadonnée au-delà de ce que fournit la réponse autorisée.
+La disponibilité suit les capacités de la session d'origine, pas une liste de
+moteurs ou le drapeau `GRAPH`. Une facette optionnelle manquante n'efface pas
+les objets utiles. Aucune exemption SQLite générale, introspection de toutes
+les bases, requête IA automatique ou inférence documentaire implicite n'est
+ajoutée. Une confirmation humaine séparée nomme objet/source et limites de
+documents/octets/temps déclarées avant l'échantillon. Seules les métadonnées de
+champs/types entrent dans la carte, jamais les valeurs échantillonnées.
 
-La carte part d'un périmètre choisi et borné, puis développe explicitement les
-voisins. Les limites ERD et budgets de catalogue existants restent en vigueur
-jusqu'à l'acceptation de changements mesurés. Les grands périmètres affichent
-les comptes dessinés/omis/non lus et proposent filtrage ou réduction. Une passe
-bornée terminée n'est pas appelée schéma complet de la base.
+Les limites existantes de 40 objets et 12 champs affichés par objet sont
+conservées ; les champs imbriqués partagent ce total. Publication/rendu bornent
+aussi les liens à 200. Omissions d'objets/champs/liens, descriptions non lues ou
+périmées et références non chargées sont visibles ; un passage borné terminé
+n'est jamais appelé schéma complet. Les types affichés sont limités à 256
+caractères avec indication explicite. Identités/membres natifs trop grands sont
+omis sans être tronqués en une autre identité. La garde commune de 16 Mio de
+métadonnées JSON couvre aussi les cartes dont les clés répètent des chemins.
+Si nécessaire, liens puis ensembles de champs sont réduits avec comptes
+d'omissions, en conservant les identités d'objet. Une identité qui ne tient pas
+produit une erreur explicite.
 
-La lecture déduite d'échantillons est annoncée avant lancement et suit la
-politique de connexion existante. Une carte locale ne lance aucune requête IA ;
-envoyer ses métadonnées à l'assistant traverse toujours la passerelle unique.
-Actualiser annule/remplace la génération active, marque les anciennes données
-périmées et conserve les positions stables lorsque les identités subsistent.
-Accès clavier et liste d'objets/liens accompagnent le canevas ; F6 reste une
-action ordinaire du workspace.
+Un rafraîchissement préserve les positions des identités complètes survivantes.
+Les filtres masquent les objets retenus sans reconstruire leurs identités.
+Dagre ne recalcule les positions que lorsque le graphe projeté change. Le
+[bilan](../implementation-plan/completion.md) conserve mesures et contrôles
+réellement effectués. F6 réutilise l'enregistrement des zones visibles.
 
-La persistance facultative `SchemaMapView` conserve périmètre versionné,
-IDs sélectionnés, positions, filtres et cadrage dans `oxyn-store`, via une
-commande du bus réservée à l'humain. Elle ne conserve ni instantané de schéma,
-ni échantillons, ni identifiants d'authentification. Rouvrir affiche les choix
-enregistrés et exige une lecture explicite des métadonnées actuelles.
-Exporter une image est un geste humain explicite qui marque le contenu partiel
-ou périmé ; son rendu ne peut élargir le périmètre ni lire d'autres données.
+Dispositions durables, export d'image, copie hors ligne et édition DDL graphique
+restent des lots séparés. Cette décision n'ajoute aucun format de carte persisté.
 
 ## Conséquences
 
-* **+** Assistant et vue autonome partagent une interprétation des métadonnées.
-* **+** L'interface expose une structure utile sans prétendre que chaque moteur a des FK.
-* **−** Provenance, résultats partiels et extrémités inaccessibles complexifient le modèle.
-* **−** Une disposition enregistrée n'est pas une archive de schéma hors ligne ;
-  une carte bornée peut omettre des objets. De nouveaux liens propres à un moteur
-  nécessitent un véritable travail dans son driver.
+- Assistant et carte partagent la même interprétation pour tous les moteurs.
+- Sessions d'origine et facettes indépendantes restent la frontière d'autorité.
+- Provenance, états partiels et références non chargées complexifient modèle et interface.
+- Dépendances natives et vues graphe/vecteur/séries demandent des métadonnées fournisseur.
+- Un graphe borné peut omettre objets/champs ; le placement initial peut dépasser
+  un budget d'image. Cela ne justifie pas d'élargir les limites.
 
-**Coût de sortie :** remplacer projection et adaptateurs de rendu, migrer les
-choix d'affichage enregistrés et conserver les lectures du catalogue. Réutiliser
-les bibliothèques actuelles évite une seconde pile graphique ; aucune nouvelle
-version de paquet n'est choisie.
+**Coût de sortie :** remplacer projection, DTO du bus et deux adaptateurs ;
+garder lectures natives et propriété. Pas de migration de disposition ni de
+nouveau paquet de rendu.
 
-**À reconsidérer si** les tailles de graphe mesurées dépassent cette approche,
-ou si les usages exigent un instantané hors ligne ou des liens affirmés
-manuellement. Ces extensions changent persistance ou provenance et exigent
-un ADR distinct.
+**Réexaminer si** les tailles mesurées imposent un autre rendu, ou si des copies
+hors ligne/liens manuels deviennent nécessaires. Ces changements touchent
+persistance/provenance et demandent une décision séparée.
 
 ## Alternatives rejetées
 
-| Alternative | Motif du rejet |
+| Alternative | Motif |
 |---|---|
-| Demander à un LLM de reconstruire le schéma | Rend une inspection déterministe dépendante d'une inférence et d'une destination IA |
-| Dessiner chaque moteur comme des tables à clés étrangères | Déforme les structures documentaires et les espaces de clés |
-| Parser le DDL dans le front pour deviner les dépendances | Duplique la connaissance des dialectes et peut inventer des liens incorrects |
-| Persister tout le graphe comme schéma actuel | Fige des métadonnées partielles ou sensibles et contredit le catalogue en mémoire |
-| Faire échouer toute la carte pour une facette facultative indisponible | Empêche une inspection utile sur les drivers moins capables |
+| Demander le schéma à un LLM | Rend l'inspection déterministe dépendante de l'inférence et d'une destination IA |
+| Présenter tous les moteurs comme des tables SQL avec FK | Déforme documents et espaces de clés |
+| Garder plusieurs assembleurs frontend | Fait diverger identités, fraîcheur, provenance et clés composites |
+| Déduire les dépendances du DDL ou des noms | Duplique les dialectes et peut inventer des liens |
+| Persister le graphe comme vérité courante | Fige des métadonnées partielles contre le contrat de cache mémoire |
+| Échouer totalement pour une facette optionnelle absente | Empêche une inspection utile des sources moins capables |

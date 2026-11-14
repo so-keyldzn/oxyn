@@ -664,6 +664,11 @@
       "label": "View structure",
       "zone": "tree"
     },
+    {
+      "id": "catalog.viewSchemaMap",
+      "label": "View schema map",
+      "zone": "tree"
+    },
     { "id": "catalog.viewDdl", "label": "View DDL", "zone": "tree" },
     {
       "id": "catalog.newConsoleOnSchema",

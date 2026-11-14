@@ -1,6 +1,6 @@
 # Database tooling completion ledger
 
-Updated 2026-11-14. This appendix tracks the user's completion request for #308,
+Updated 2026-11-15. This appendix tracks the user's completion request for #308,
 #373, #374, #375 and the standalone schema map. It separates implementation from
 validation and personal acceptance.
 
@@ -24,7 +24,7 @@ image-generation prompts retain the identifiers used at generation time.
 | #373 | `feat/multi-base-backend` | Implemented and automatically validated on `ce58839`; `make qualite` passed. Code commit `a3f5961` follows shared research `356c8d6`; personal acceptance remains pending. |
 | #308 | `feat/f6-navigation` | Created from `a3f5961` after a clean #373 commit. Registry/visible-region cycle implemented; Completed: 93 action tests, five browser interaction stories, full quality gate and final frontend revalidation passed. Personal/native OS acceptance pending. |
 | #375 | `feat/metadata-loading` | Created from #308 commit `4c80bfa` after a clean validated commit. Completed and automatically validated: shared capability-driven policies/facets/preload, explicit inference and shadcn controls; make qualite passed 4,733 Rust / 2,391 frontend tests. Personal acceptance awaits final dev integration. |
-| Schema map | `feat/schema-map` | Not created; depends on metadata coverage/policy from #375 and focus registration from #308. Existing assistant ERD is reusable rendering, not a standalone map. |
+| Schema map | `feat/schema-map` | Created clean from #375 commit `40329e4`. Standalone tab, shared host projection, original-owner navigation and explicit neighbor/sampling controls implemented. Completed and automatically validated: make qualite passed 4,753 Rust / 2,415 frontend tests, documentation and four package archives. Personal acceptance awaits final dev integration. |
 | #374 | `feat/native-backup-restore` | Not created; inherits the completed stack, reuses ownership/operation state and metadata invalidation. No native-transfer implementation yet. |
 
 This intentional linear stack avoids duplicating common commits. Each branch
@@ -247,6 +247,94 @@ Milliseconds are floored, so zero is below report resolution, not zero work.
 This is a local smoke measurement, not a network benchmark or evidence for
 an automatic threshold/SQLite exemption. The current checked implementation
 must still pass the complete gate before the branch changes.
+
+## Current standalone map implementation and validation
+
+The human-only `LoadSchemaMap` bus demand reuses exact live session metadata,
+interactive queue priority and atomic cache generations. The catalog projection
+is pure and shared with assistant diagrams; name resolution remains the
+assistant's only graph adapter responsibility. A memory-only generation getter
+also rejects projections superseded while their IPC response was delivered.
+No new database session/file, automatic AI request or implicit sample is opened.
+
+The explorer root, native container/object menus and object-view toolbar open
+owner-qualified retained tabs. A selected object and a whole native scope are
+separate load choices. Scope selection, filters, inspection, pan/zoom and the
+accessible object/link list remain local. Neighbor expansion is explicit and
+one hop. Data/Structure/definition navigation retains the original source and
+changes an already-open object's section. Closing/hiding releases only the map's
+command; a console cannot move while that owned demand uses it. New/taller cards
+are placed without covering retained neighbours. Compact layout scrolls diagram
+and inspector instead of overlapping them; a browser story checks geometry.
+
+Native hierarchy absence, homonyms, composite/cyclic/unnamed or malformed keys,
+unloaded endpoints and reported/sample/preview-layout provenance are preserved.
+Unknown cardinality stays unknown; stale descriptions cannot prove uniqueness.
+Coverage names omissions, stale/unread descriptions, failed/unavailable facets
+and stopped reads. Technical dependencies stay unavailable without provider
+metadata. SQLite/DuckDB attachments are never opened automatically, and a map
+cannot replace a deleted file or a closed ephemeral owner with an empty source.
+Durable layouts, image export and graphical DDL editing remain separate scope.
+
+Targeted evidence on 2026-11-14:
+
+- Eight pure projection tests and nine executor/publication tests passed,
+  covering identities, provenance, bounds, capability combinations, exact
+  facet calls/cache reuse, unknown-object refusal, human/owner checks,
+  cancellation cleanup and late generation rejection. Later review additionally
+  refuses cardinality proof from malformed keys; the final gate rechecks it.
+- Real disposable SQLite and DuckDB fixtures passed view/composite-key/native-
+  scope maps: three objects, four links, seven scope reads, then zero on repeat.
+  Two separate private-memory sources retained distinct object keys. Deleted-
+  file/closed-owner coverage was added for the final gate.
+- Controller and IPC tests reject late/replaced owners and post-delivery epochs,
+  retain previous maps after failed refresh, coalesce clicks and avoid mount
+  reads/sampling. Pure placement regressions cover overlapping added/taller
+  nodes and owner replacement. Fifty-two focused map/tree stories passed with
+  axe, including compact geometry and menu dispatch; shared ERD/assistant
+  stories also passed earlier in this lot.
+- Workspace-wide Clippy with `-D warnings` passed after moving a misplaced
+  core re-export. Initial full gates caught frontend lint and a tree-menu
+  regression; all were corrected without suppressions. Final full-gate counts
+  are recorded below after it completes.
+- Final `make qualite` passed on 2026-11-15: 4,753 Rust tests (211 skipped),
+  2,415 frontend tests, format/lint/types/build, doctests/rustdoc and four
+  independently verified package archives. The deleted-file/closed-owner test
+  and malformed-key regression passed in this final tree. Foundation had zero
+  warnings. npm audit and 415 production package licenses passed.
+- `cargo-deny` remains absent (Rust license/RUSTSEC audits not checked), and
+  `cargo-about` remains absent (notices not regenerated). Live server/model
+  suites were unset; only the disposable SQLite/DuckDB native map fixtures ran
+  in this lot. Existing browser ResizeObserver/React act diagnostics remain
+  unsuppressed; assertions passed. Only macOS was exercised locally.
+- Local invariant, boundary, security, organization and UI reviews found no
+  remaining blocker after the corrections above. The map holds a console-use
+  lease during its demand, and its cache-only getter performs no native read.
+  Existing large workspace/object/cache/bus entry points retain their established
+  composition responsibility; projection, placement, loading, ownership state,
+  IPC validation and pure presentation are separate modules.
+- Personal acceptance is not obtained. The feature branch has not been merged
+  into dev/main or pushed.
+
+### Exploratory schema-map rendering (2026-11-14)
+
+Chromium via the installed Playwright, Storybook on loopback, 1,440 × 1,050
+viewport; synthetic 40-object/12-field/200-FK graph. Both 40 DOM nodes and
+200 edges rendered, with no page errors. Five direct Dagre calls took
+181.2 / 141.4 / 133.2 / 121.3 / 117.2 ms. A filter previously reran this placement
+for each input; placement is now keyed only by the graph, independently from
+filter/selection handlers. Stable positions and collision handling are pure
+and separately tested.
+
+Input-to-two-animation-frame observations for four local filters were
+309.6 / 247.3 / 200.6 / 447.1 ms before and
+511.6 / 113.7 / 73.1 / 226.7 ms after separating placement. The cold first value
+regressed; these runs overlapped compiler/browser activity and establish no
+reliable speedup, p99 or budget compliance. They are exploratory diagnostics,
+not an accepted idle-machine/system-instrument benchmark. The initial layout
+and continuous interaction budgets remain unverified on the Tauri webview;
+no budget or object/link limit was raised. Reference timing needs a separate
+controlled run. A local build must not be reported as user acceptance.
 
 ## Validation and acceptance gates
 

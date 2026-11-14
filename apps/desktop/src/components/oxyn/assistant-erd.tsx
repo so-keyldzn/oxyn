@@ -38,6 +38,8 @@ export type ErdState =
       ambiguous: Array<ErdAmbiguity>
       /** Names past `ERD_MAX_NAMES`, not even looked up. */
       ignoredNames: number
+      /** Bounded host coverage, independent from whether any card was drawn. */
+      coverageNotice?: string
     }
 
 function Unresolved({
@@ -151,6 +153,14 @@ function Body({
           ) : (
             <p className="px-3 py-2 text-xs text-muted-foreground">
               No table to draw.
+            </p>
+          )}
+          {state.coverageNotice && (
+            <p
+              role="status"
+              className="px-3 py-2 text-xs text-muted-foreground"
+            >
+              {state.coverageNotice}
             </p>
           )}
           <Unresolved state={state} />

@@ -1,108 +1,123 @@
 # ADR-0082 — Project schema maps from catalog metadata with explicit provenance
 
-**Status:** proposed · **Date:** 2026-11-13
+**Status:** accepted · **Date:** 2026-11-14
 
-**Refines:** [ADR-0003](0003-driver-capabilities.md) on presentation capabilities
-and [ADR-0041](0041-registre-d-actions-menus-et-raccourcis.md) on the map's
-workspace actions. This proposal does not replace the delivered assistant ERD
-contract or enable unsupported database introspection.
+**Refines:** [ADR-0003](0003-driver-capabilities.md),
+[ADR-0041](0041-registre-d-actions-menus-et-raccourcis.md) and
+[ADR-0081](0081-load-catalog-facets-independently-with-explicit-prefetch.md).
 
 ## Context
 
-The standalone map requested during schema research must cover relational,
-documentary and key-space sources. At `6647180`, the assistant already renders
-an ERD using React Flow and Dagre. Its model contains tables and foreign keys,
-but omits object kind and inferred-field provenance; its starting reads ask for
-incoming keys even when the driver lacks that capability.
-
-[The engine matrix](../implementation-plan/schema-research-engines.md) shows why
-one SQL-style graph cannot represent every source honestly. Declared keys,
-mapping membership and sample-derived fields have different meanings.
+The standalone map must cover relational, documentary and key-space sources.
+The assistant already uses React Flow/Dagre, but its separate assembler loses
+object kinds, field provenance and complete owner identities. Native hierarchy,
+foreign keys, mappings and inferred fields have different meanings; the
+[engine matrix](../implementation-plan/schema-research-engines.md) records the
+available metadata rather than promising every server feature.
 
 ## Decision
 
-The map is an ordinary workspace tab, available without an AI provider. It
-opens from a selected connection, namespace or object; the assistant may open
-the same map with a preselected scope. UI selection and painting perform no
-server access by themselves. Explicit metadata demands use the bus and
-[ADR-0081](0081-load-catalog-facets-independently-with-explicit-prefetch.md).
+The map is an ordinary workspace tab available without an AI provider, opened
+from the selected source or a native catalog/namespace/object. Opening, choosing
+a scope, drawing, filtering, selecting, panning and zooming start no native
+metadata or row read. Loading a scope, refreshing, expanding one selected
+object's one-hop neighbors, and opening Data/Structure/definition are separate
+human gestures. Native file/session ownership is preserved; no connection or
+attachment is opened to fill a map. A removed SQLite file or closed ephemeral
+owner is never replaced by a newly created empty source.
 
-`oxyn-catalog` owns a pure `SchemaMapProjection`: object identities, field
-descriptions, typed links, provenance, freshness and coverage. It contains no
-layout coordinates and performs no I/O. `oxyn-desktop` orchestrates authorized
-reads and creates a bounded IPC projection. A shared front-end map feature
-owns React Flow rendering, Dagre placement and navigation; the assistant retains
-only its request adapter, not a second graph assembler.
+Core carries the typed human-only `LoadSchemaMap` command. `oxyn-exec` owns
+its bounded, cancellable reads through the existing session metadata queue and
+atomic generation checks. Demand can overtake queued prefetch, but cannot
+publish into a changed source. A 60-second pass awaits cancellation cleanup;
+it retains available parts and reports failed/unavailable parts independently.
+The desktop bridge checks window/session ownership and returns validated IPC.
 
-A node's identity includes `ConnectionId` and the complete validated object
-address. Display labels are not keys. Object kind is retained; field metadata
-distinguishes declared, observed and unavailable information. Sample-derived
-fields carry coverage/provenance, not example row values.
+`oxyn-catalog` owns a pure `SchemaMapProjection`, with no I/O or coordinates.
+A shared frontend adapter/renderer draws this projection in the standalone map
+and assistant. The assistant retains only name resolution against already
+listed objects and a request adapter; it does not guess ambiguous names or
+automatically expand neighbors. Its coverage text names unread/stale/omitted
+parts and unloaded endpoints. Map metadata reaches no AI destination by itself;
+any context sent to an assistant still uses the single privacy gateway.
 
-Links have explicit kinds: declared foreign key, reported object dependency,
-reported membership, or field containment. Each includes its source and
-coverage. Unknown cardinality stays unknown. Reversing the loaded outgoing-key
-set establishes incoming edges only within that set. A link to an unloaded
-object shows an unresolved endpoint instead of implying complete discovery.
-Names such as `user_id` never create a link.
+Object keys contain the connection, original session and all native optional
+address levels. Field keys contain exact segments, preserving literal dots.
+Ordered composite members distinguish unnamed keys. Display labels are never
+identities. Reported object kinds, field provenance and independent freshness
+are retained. Only fresh declared primary keys can prove uniqueness; absence
+of proof remains unknown cardinality. Stale links remain identified as stale.
+
+Links have distinct kinds: reported foreign key, technical dependency, native
+membership and field containment. The canvas draws reported FK edges; the
+accessible object/link list, breadcrumbs and inspector also expose membership
+and nesting. Unknown or malformed composite members are never repaired by
+pairing guesses. Reversing loaded outgoing keys gives incoming edges only
+within that loaded set. References to unloaded targets stay visible in the
+list/inspector. No column-name or DDL parsing invents links. Structured
+technical dependencies remain explicitly unavailable until the provider
+contract exposes them.
 
 | Available metadata | Representation |
 |---|---|
-| Relations and foreign keys | Object cards and declared relationship edges |
-| Relations without key introspection | Object cards; no invented relationships |
-| Collections and observed fields | Collection structure with sample provenance |
-| Mappings and reported membership | Field hierarchy and typed technical links |
-| Sampled key space | Key/type overview; optional prefix grouping marked as a convention |
-| Future graph metadata | Labels/types/properties with the driver's explicit certainty and coverage |
+| Relations with FK introspection | Object cards and reported key edges |
+| Relations without key introspection | Object cards with unavailable keys |
+| Collections with explicit sampled fields | Collection cards, nested fields and sample provenance |
+| Server mappings | Reported field hierarchy; no invented collection relationships |
+| Key-space objects | Key/type cards and preview-layout provenance, not a declared document schema |
 
-The engine's `GRAPH` capability does not gate this screen. Availability follows
-the introspection actually exposed by the session. A missing optional facet or
-one failed object produces a partial map, not a fabricated empty graph or total
-failure of already read objects. Permission-denied objects reveal no metadata
-beyond what the authorized response actually provided.
+Availability follows the original session's capabilities, not an engine-name
+allowlist or `GRAPH` flag. Missing optional facets do not erase useful objects.
+No blanket SQLite exemption, all-database introspection, automatic AI call or
+implicit document inference is introduced. A separate human confirmation names
+the object/source and provider-declared document/byte/time limits before a
+sample. Only type/field metadata enters the map, never sampled values.
 
-The map starts from a chosen bounded scope and expands neighbors explicitly.
-Existing ERD display bounds and catalog budgets remain in force until measured
-changes are accepted. Large scopes show drawn/omitted/unread counts and offer
-filtering or a smaller scope. A completed bounded pass is not called a complete
-database schema.
+The existing limits of 40 objects and 12 displayed fields per object remain;
+nested fields share the same total. Publication/rendering additionally bounds
+links at 200. Scope/field/link omissions, unread/stale descriptions and unresolved
+endpoints are visible, and a completed bounded pass is never called a complete
+database schema. Displayed type strings are capped at 256 characters with an
+explicit shortened flag; oversized native identities/members are omitted rather
+than truncated into another identity. The shared 16 MiB encoded metadata guard
+also covers derived maps, whose qualified keys repeat paths. If necessary,
+relationships and then field sets are reduced with omission counts while
+retaining object identities. Failure to fit identities is an explicit error.
 
-Sample-derived reading is disclosed before starting and follows existing
-connection policy. Local maps initiate no AI request; sending their metadata
-to an assistant still uses the single privacy gateway. Refresh cancels/replaces
-the active generation, marks old data stale and preserves stable node positions
-where identities survive. Keyboard access and an object/link list accompany
-the canvas; F6 remains an ordinary workspace action.
+A refresh preserves node positions whose complete keys survive. Filters hide
+retained nodes rather than rebuilding graph identity. Layout changes only with
+the projected graph, so a local filter does not rerun Dagre. The
+[completion ledger](../implementation-plan/completion.md) records measurements
+and actual validation. F6 uses the existing visible-region registration.
 
-Optional `SchemaMapView` persistence stores a versioned scope, selected IDs,
-positions, filters and viewport in `oxyn-store`, through a human-only bus
-command. It stores no schema snapshot, row samples or credentials. Reopening
-shows saved view choices and requires an explicit read for current metadata.
-Image export is an explicit human action and labels partial/stale content;
-its renderer cannot expand the scope or perform additional data reads.
+Durable layouts, image export, an offline schema snapshot and graphical DDL
+editing are separate lots. This decision introduces no persisted map format.
 
 ## Consequences
 
-* **+** The assistant and standalone view share one interpretation of metadata.
-* **+** The same UI can expose useful structure without pretending every engine has FKs.
-* **−** Provenance, partial results and inaccessible endpoints complicate the model.
-* **−** A saved layout is not an offline schema archive, and a bounded map can
-  omit objects. Additional engine-specific edges require actual driver work.
+- The assistant and standalone view share one interpretation across engines.
+- Original sessions and independent cache facets remain the authority boundary.
+- Provenance, partial states and unresolved endpoints add model/UI complexity.
+- Native dependencies and richer graph/vector/time-series views need provider
+  metadata rather than an extension badge or name heuristic.
+- A bounded graph can omit objects or fields; initial layout can exceed a frame
+  budget. No larger rendering limit is justified by this implementation.
 
-**Exit cost:** replace the projection and renderer adapters, migrate saved view
-choices and keep the existing catalog reads. Reusing current rendering packages
-avoids introducing a second graphics stack; no new package version is selected.
+**Exit cost:** replace the pure projection, bus DTO and two renderer adapters;
+retain native catalog reads and ownership. No persisted layout migration or new
+rendering package is involved.
 
-**Reconsider if** measured graph sizes exceed the existing rendering approach,
-or users need an offline catalog snapshot or manually asserted links. Either
-extension changes persistence or provenance and needs a separate ADR.
+**Reconsider if** measured graph sizes require another rendering approach,
+or users need offline snapshots or manually asserted links. Either extension
+changes persistence/provenance and needs a separate decision.
 
 ## Rejected alternatives
 
 | Alternative | Reason for rejection |
 |---|---|
-| Ask an LLM to reconstruct the schema | Makes a deterministic inspection depend on inference and an AI destination |
-| Render every engine as tables with foreign keys | Misrepresents documentary and key-space structure |
-| Parse DDL in the front end to guess dependencies | Duplicates dialect knowledge and can invent incorrect links |
-| Persist the whole graph as the current schema | Freezes partial or sensitive metadata and contradicts the in-memory catalog contract |
-| Fail the whole map when one optional facet is unsupported | Prevents useful inspection on drivers with fewer capabilities |
+| Ask an LLM to reconstruct the schema | Makes deterministic inspection depend on inference and an AI destination |
+| Render every engine as SQL tables with foreign keys | Misrepresents documentary and key-space structure |
+| Separate frontend graph assemblers | Diverges on identity, freshness, provenance and composite keys |
+| Parse DDL or names to guess dependencies | Duplicates dialect knowledge and can invent links |
+| Persist the graph as current source truth | Freezes partial metadata and contradicts the in-memory catalog contract |
+| Fail the entire map for an unsupported optional facet | Prevents useful inspection on sources with fewer capabilities |

@@ -1,6 +1,5 @@
 import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
-import dagre from "@dagrejs/dagre"
 import {
   Background,
   BackgroundVariant,
@@ -25,84 +24,38 @@ import {
 import "@xyflow/react/dist/base.css"
 
 import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
-import { ERD_MAX_COLUMNS, ERD_MAX_TABLES } from "@/components/oxyn/erd-model"
-import type { ErdColumn, ErdLink, ErdTable } from "@/components/oxyn/erd-model"
+import { NODE_WIDTH, layoutErd, retainErdPositions } from "./erd-layout"
+import { visibleColumns } from "./erd-model"
+import { ERD_MAX_TABLES } from "@/components/oxyn/erd-model"
+import type { ErdLink, ErdTable } from "@/components/oxyn/erd-model"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
 import type { CatalogAddress } from "@/lib/ipc/types"
 
+export { layoutErd } from "./erd-layout"
+export { visibleColumns } from "./erd-model"
 export { ERD_MAX_COLUMNS, ERD_MAX_TABLES } from "@/components/oxyn/erd-model"
 export type { ErdColumn, ErdLink, ErdTable } from "@/components/oxyn/erd-model"
 
-const NODE_WIDTH = 240
-const HEADER_HEIGHT = 32
-const ROW_HEIGHT = 22
-const NODE_PADDING = 8
-
-/** The columns drawn: keys first, in position order, bounded. Pure, so tested. */
-export function visibleColumns(columns: Array<ErdColumn>) {
-  const keys = columns.filter(
-    (column) => column.primaryKey || column.foreignKey
-  )
-  const rest = columns.filter(
-    (column) => !column.primaryKey && !column.foreignKey
-  )
-  const shown = [...keys, ...rest].slice(0, ERD_MAX_COLUMNS)
-  return { shown, hidden: columns.length - shown.length }
-}
-
-function nodeHeight(table: ErdTable) {
-  const { shown, hidden } = visibleColumns(table.columns)
-  const rows = Math.max(shown.length, 1) + (hidden > 0 ? 1 : 0)
-  return HEADER_HEIGHT + rows * ROW_HEIGHT + NODE_PADDING
-}
-
-function tableLabel(table: Pick<ErdTable, "name" | "namespace">) {
-  return table.namespace === null
-    ? table.name
-    : `${table.namespace}.${table.name}`
-}
-
-/**
- * Places the tables left to right, referencing table after referenced one's
- * dependants. Pure and deterministic, so the same answer draws the same map.
- */
-export function layoutErd(
-  tables: Array<ErdTable>,
-  links: Array<ErdLink>
-): Map<string, { x: number; y: number }> {
-  const graph = new dagre.graphlib.Graph({ multigraph: true })
-  graph.setGraph({ rankdir: "LR", nodesep: 32, ranksep: 72 })
-  graph.setDefaultEdgeLabel(() => ({}))
-  for (const table of tables)
-    graph.setNode(table.key, { width: NODE_WIDTH, height: nodeHeight(table) })
-  for (const link of links)
-    if (graph.hasNode(link.from) && graph.hasNode(link.to))
-      graph.setEdge(link.from, link.to, {}, link.key)
-  dagre.layout(graph)
-  const positions = new Map<string, { x: number; y: number }>()
-  for (const table of tables) {
-    const node = graph.node(table.key)
-    // dagre gives centres; the canvas places corners.
-    positions.set(table.key, {
-      x: (node.x ?? 0) - NODE_WIDTH / 2,
-      y: (node.y ?? 0) - nodeHeight(table) / 2,
-    })
-  }
-  return positions
+function tableLabel(table: Pick<ErdTable, "name" | "namespace" | "catalog">) {
+  return [table.catalog, table.namespace, table.name]
+    .filter((part) => part !== null && part !== undefined)
+    .join(".")
 }
 
 type TableNodeData = {
   table: ErdTable
   onOpen?: (address: CatalogAddress) => void
   onCopyName?: (table: ErdTable) => void
+  actionLabel?: string
 }
 type TableNode = Node<TableNodeData, "table">
 
 /** A table, drawn as React text: its name and columns come from a server. */
 function TableNodeView({ data }: NodeProps<TableNode>) {
-  const { table, onOpen, onCopyName } = data
+  const { table, onOpen, onCopyName, actionLabel = "Open" } = data
   const { shown, hidden } = visibleColumns(table.columns)
   const label = tableLabel(table)
   const [anchor, setAnchor] = React.useState<Element | null>(null)
@@ -115,10 +68,16 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
         aria-hidden
       />
       <span className="min-w-0 truncate">
+        {table.catalog && (
+          <span className="text-muted-foreground">{table.catalog}.</span>
+        )}
         {table.namespace !== null ? (
           <span className="text-muted-foreground">{table.namespace}.</span>
         ) : null}
         <span className="font-medium">{table.name}</span>
+        {table.kind && (
+          <Badge variant="outline">{table.kind.replaceAll("_", " ")}</Badge>
+        )}
       </span>
     </>
   )
@@ -152,7 +111,7 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
             <Button
               variant="ghost"
               size="sm"
-              aria-label={`Open ${label}`}
+              aria-label={`${actionLabel} ${label}`}
               className="nodrag nopan h-8 w-full justify-start gap-1.5 rounded-none border-b px-2 text-xs"
               onClick={() => onOpen(table.address)}
             >
@@ -166,6 +125,9 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
             </div>
           </ContentHint>
         )}
+        {table.fieldsState === "stale" && (
+          <Badge variant="outline">Retained stale fields</Badge>
+        )}
         <ul className="flex flex-col py-1">
           {shown.length === 0 ? (
             <li className="flex h-5.5 items-center px-2 text-muted-foreground">
@@ -176,7 +138,7 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
           ) : null}
           {shown.map((column) => (
             <li
-              key={column.name}
+              key={column.key ?? column.name}
               className="flex h-5.5 min-w-0 items-center gap-1.5 px-2"
             >
               <span className="flex w-3.5 shrink-0 justify-center">
@@ -207,6 +169,11 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
               {column.foreignKey ? (
                 <span className="sr-only">, foreign key</span>
               ) : null}
+              {column.origin && column.origin !== "reported" && (
+                <Badge variant="outline">
+                  {column.origin === "sampled" ? "Sampled" : "Layout"}
+                </Badge>
+              )}
               <span className="ml-auto max-w-[45%] shrink-0 truncate pl-2 font-mono text-muted-foreground">
                 {column.type}
               </span>
@@ -286,23 +253,34 @@ function Canvas({
   links,
   onOpenObject,
   onCopyName,
+  visibleKeys,
+  actionLabel,
 }: {
   tables: Array<ErdTable>
   links: Array<ErdLink>
   onOpenObject?: (address: CatalogAddress) => void
   onCopyName?: (table: ErdTable) => void
+  visibleKeys?: ReadonlySet<string>
+  actionLabel?: string
 }) {
+  const positionsRef = React.useRef(new Map<string, { x: number; y: number }>())
   const flow = useReactFlow()
   const keysHint = React.useId()
+  const positions = React.useMemo(() => {
+    const arranged = layoutErd(tables, links)
+    const next = retainErdPositions(tables, arranged, positionsRef.current)
+    positionsRef.current = next
+    return next
+  }, [tables, links])
   const { nodes, edges } = React.useMemo(() => {
-    const positions = layoutErd(tables, links)
     const byKey = new Map(tables.map((table) => [table.key, table]))
     return {
       nodes: tables.map((table): TableNode => ({
         id: table.key,
         type: "table",
         position: positions.get(table.key) ?? { x: 0, y: 0 },
-        data: { table, onOpen: onOpenObject, onCopyName },
+        data: { table, onOpen: onOpenObject, onCopyName, actionLabel },
+        hidden: visibleKeys !== undefined && !visibleKeys.has(table.key),
       })),
       edges: links.flatMap((link): Array<Edge> => {
         const from = byKey.get(link.from)
@@ -311,6 +289,9 @@ function Canvas({
         return [
           {
             id: link.key,
+            hidden:
+              visibleKeys !== undefined &&
+              (!visibleKeys.has(link.from) || !visibleKeys.has(link.to)),
             // The default label spells the internal keys.
             ariaLabel: `${link.name}: ${tableLabel(from)} references ${tableLabel(to)}`,
             source: link.from,
@@ -320,12 +301,24 @@ function Canvas({
               type: MarkerType.ArrowClosed,
               color: "var(--muted-foreground)",
             },
-            style: { stroke: "var(--muted-foreground)", strokeWidth: 1.25 },
+            style: {
+              stroke: "var(--muted-foreground)",
+              strokeWidth: 1.25,
+              strokeDasharray: link.stale ? "4 3" : undefined,
+            },
           },
         ]
       }),
     }
-  }, [tables, links, onOpenObject, onCopyName])
+  }, [
+    tables,
+    links,
+    positions,
+    onOpenObject,
+    onCopyName,
+    visibleKeys,
+    actionLabel,
+  ])
 
   // The canvas takes arrows and +/- only when it has the focus itself: a
   // button inside keeps its own keys.
@@ -371,12 +364,12 @@ function Canvas({
     <div
       role="region"
       tabIndex={0}
-      aria-label={`Diagram of ${tables.length} ${tables.length === 1 ? "table" : "tables"}`}
+      aria-label={`Diagram of ${tables.length} ${tables.some((table) => table.kind) ? "objects" : tables.length === 1 ? "table" : "tables"}`}
       aria-describedby={keysHint}
       onKeyDown={onKeyDown}
       // Its pinch zooms the diagram, which the page's zoom guard leaves to it.
       data-own-zoom=""
-      className="h-90 min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      className="h-90 min-h-80 min-w-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
     >
       <span id={keysHint} hidden>
         Arrow keys move the diagram, plus and minus zoom, zero fits it to the
@@ -436,6 +429,8 @@ export function ErdDiagram({
   omitted = 0,
   onOpenObject,
   onCopyName,
+  visibleKeys,
+  actionLabel,
   className,
 }: {
   tables: Array<ErdTable>
@@ -445,11 +440,17 @@ export function ErdDiagram({
   onOpenObject?: (address: CatalogAddress) => void
   /** Copies the table's name — the one the backend quotes, where it can. */
   onCopyName?: (table: ErdTable) => void
+  visibleKeys?: ReadonlySet<string>
+  actionLabel?: string
   className?: string
 }) {
   const byKey = new Map(tables.map((table) => [table.key, table]))
   const drawnLinks = links.filter(
-    (link) => byKey.has(link.from) && byKey.has(link.to)
+    (link) =>
+      byKey.has(link.from) &&
+      byKey.has(link.to) &&
+      (visibleKeys === undefined ||
+        (visibleKeys.has(link.from) && visibleKeys.has(link.to)))
   )
   return (
     <div
@@ -462,6 +463,8 @@ export function ErdDiagram({
           links={links}
           onOpenObject={onOpenObject}
           onCopyName={onCopyName}
+          visibleKeys={visibleKeys}
+          actionLabel={actionLabel}
         />
       </ReactFlowProvider>
       {/* The edges are drawn, not written: this list is what a screen
@@ -480,13 +483,23 @@ export function ErdDiagram({
       </ul>
       <p className="flex flex-wrap gap-x-2 border-t px-3 py-1.5 text-xs text-muted-foreground">
         <span className="tabular-nums">
-          {tables.length} {tables.length === 1 ? "table" : "tables"},{" "}
-          {drawnLinks.length} {drawnLinks.length === 1 ? "key" : "keys"}
+          {visibleKeys?.size ?? tables.length}{" "}
+          {tables.some((table) => table.kind)
+            ? "objects"
+            : tables.length === 1
+              ? "table"
+              : "tables"}
+          , {drawnLinks.length} {drawnLinks.length === 1 ? "key" : "keys"}
         </span>
         {omitted > 0 ? (
           <span>
-            · {omitted} more related {omitted === 1 ? "table" : "tables"} not
-            drawn: a diagram stops at {ERD_MAX_TABLES}
+            · {omitted} more related{" "}
+            {tables.some((table) => table.kind)
+              ? "objects"
+              : omitted === 1
+                ? "table"
+                : "tables"}{" "}
+            not drawn: a diagram stops at {ERD_MAX_TABLES}
           </span>
         ) : null}
       </p>

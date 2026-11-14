@@ -13,11 +13,14 @@ export const ERD_MAX_TABLES = 40
 export const ERD_MAX_COLUMNS = 12
 
 export interface ErdColumn {
+  key?: string
   name: string
   /** As the server reports it, already a string: never parsed here. */
   type: string
   primaryKey: boolean
   foreignKey: boolean
+  origin?: "reported" | "sampled" | "previewLayout"
+  depth?: number
 }
 
 export interface ErdTable {
@@ -26,6 +29,9 @@ export interface ErdTable {
   address: CatalogAddress
   name: string
   namespace: string | null
+  catalog?: string | null
+  kind?: string
+  fieldsState?: "fresh" | "stale" | "unread"
   columns: Array<ErdColumn>
   /** False distinguishes unread/sample-required structure from known empty. */
   columnsKnown?: boolean
@@ -41,4 +47,17 @@ export interface ErdLink {
   name: string
   fields: Array<string>
   referencedFields: Array<string>
+  stale?: boolean
+}
+
+/** The columns drawn: keys first, in position order, bounded. Pure, so tested. */
+export function visibleColumns(columns: Array<ErdColumn>) {
+  const keys = columns.filter(
+    (column) => column.primaryKey || column.foreignKey
+  )
+  const rest = columns.filter(
+    (column) => !column.primaryKey && !column.foreignKey
+  )
+  const shown = [...keys, ...rest].slice(0, ERD_MAX_COLUMNS)
+  return { shown, hidden: columns.length - shown.length }
 }

@@ -32,6 +32,7 @@ const meta = {
     selected: null,
     onExpand: fn(),
     onSelect: fn(),
+    onSchemaMap: fn(),
   },
 } satisfies Meta<typeof CatalogTree>
 
@@ -608,6 +609,7 @@ export const SiblingTablesShareTheirMenu: Story = {
     await expect(customers).toEqual([
       "Open data",
       "View structure",
+      "View schema map",
       "View DDL",
       "Copy qualified name",
       "Copy as",
@@ -916,5 +918,29 @@ export const InsertANameFromTheKeyboard: Story = {
       expect.objectContaining({ name: HOSTILE })
     )
     await expect(args.onSelect).not.toHaveBeenCalled()
+  },
+}
+
+export const OpenSchemaMap: Story = {
+  args: { onSchemaMap: fn() },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("public"))
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("invoices"),
+    })
+    const body = within(document.body)
+    await userEvent.click(
+      await body.findByRole("menuitem", {
+        name: "View schema map",
+      })
+    )
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
+    await expect(args.onSchemaMap).toHaveBeenCalledTimes(1)
+    await expect(args.onSchemaMap).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "invoices", address: invoicesAddress })
+    )
+    await expect(args.onSelect).not.toHaveBeenCalled()
+    await expect(args.onExpand).not.toHaveBeenCalled()
   },
 }

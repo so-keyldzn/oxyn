@@ -297,6 +297,7 @@ pub mod metadata_loading;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;
+pub mod schema_map;
 pub mod semantic;
 pub mod server_profiles;
 pub mod settings;

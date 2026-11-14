@@ -31,6 +31,7 @@ export const CONTEXT_MENUS = {
       [
         "catalog.openData",
         "catalog.viewStructure",
+        "catalog.viewSchemaMap",
         "catalog.viewDdl",
         "catalog.newConsoleOnSchema",
       ],

@@ -11,6 +11,7 @@ const MAX_QUEUED: usize = 256;
 #[derive(Clone, Copy)]
 pub(crate) enum Priority {
     Demand,
+    DemandAt(oxyn_catalog::CatalogGenerationId),
     Prefetch(oxyn_catalog::CatalogGenerationId),
 }
 
@@ -80,7 +81,7 @@ impl Queue {
                 ));
             }
             match priority {
-                Priority::Demand => state.demand.push_back(id),
+                Priority::Demand | Priority::DemandAt(_) => state.demand.push_back(id),
                 Priority::Prefetch(_) => state.prefetch.push_back(id),
             }
         }

@@ -1,8 +1,8 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="695e4728b15f" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="4a9fc8c53980" -->
 
 # Suivi d'achèvement des outils de bases de données
 
-Actualisé le 2026-11-14. Cette annexe suit la demande d'achèvement des issues
+Actualisé le 2026-11-15. Cette annexe suit la demande d'achèvement des issues
 #308, #373, #374, #375 et de la carte autonome. Implémentation, validation et
 acceptation personnelle restent distinctes.
 
@@ -27,7 +27,7 @@ Les prompts historiques conservent leurs identifiants de génération.
 | #373 | `feat/multi-base-backend` | Implémenté et validé automatiquement sur `ce58839` ; `make qualite` réussi. Le commit `a3f5961` suit la recherche `356c8d6` ; acceptation personnelle attendue. |
 | #308 | `feat/f6-navigation` | Créée depuis `a3f5961` après un commit #373 propre. Cycle visible via registre implémenté ; Terminé : 93 tests d’actions, cinq stories navigateur, gate complet et revalidation frontend finale réussis. Acceptation personnelle/native attendue. |
 | #375 | `feat/metadata-loading` | Créée depuis `4c80bfa` (#308), propre et validé. Implémentation commune selon capacités terminée et validée automatiquement : make qualite passe 4733 tests Rust / 2391 frontend. Acceptation personnelle après intégration finale sur dev. |
-| Carte | `feat/schema-map` | Non créée ; dépend de couverture/politique #375 et du focus #308. L'ERD de l'assistant est un rendu réutilisable, pas une carte autonome. |
+| Carte des schémas | `feat/schema-map` | Créée proprement depuis `40329e4` (#375). Onglet autonome, projection hôte commune, navigation propriétaire et voisins/échantillonnage explicites implémentés. Terminée et validée automatiquement : make qualite passe 4 753 tests Rust / 2 415 frontend, documentation et quatre archives de paquets. Acceptation personnelle après intégration finale dev. |
 | #374 | `feat/native-backup-restore` | Non créée ; héritera de la pile terminée et réutilisera propriété, opérations et invalidation. Aucun transfert natif implémenté. |
 
 Cette pile linéaire volontaire évite les doublons de commits. Avant chaque
@@ -268,3 +268,95 @@ et UI pure/contrôleur sont séparés. Aucun second cache driver, seuil automati
 exemption SQLite, protocole ou configuration globale ajouté. L’ERD est adapté
 comme consommateur de facettes/propriété, sans seconde carte autonome. Aucune
 intégration dev/main ni publication effectuée.
+
+## Carte autonome : implémentation et validation courantes
+
+La demande humaine `LoadSchemaMap` réutilise session exacte, priorité
+interactive et générations atomiques du cache. La projection pure est commune
+à la carte et à l'assistant ; ce dernier ne garde que résolution des noms et
+adaptation de requête. Un contrôle mémoire refuse aussi une projection dépassée
+pendant la livraison IPC. Aucun fichier/session, appel IA ou échantillon implicite.
+
+Source de l'explorateur, menus natifs et barre de fiche d'objet ouvrent des
+onglets propriétaires conservés. Objet choisi et périmètre entier ont des
+chargements distincts. Périmètre, filtres, inspection, zoom/déplacement et liste
+d'objets/liens restent locaux. Les voisins se développent explicitement à un
+saut. Data/Structure/définition gardent la source et changent la section d'un
+objet déjà ouvert. Fermer/masquer libère seulement sa commande ; la console ne
+peut se déplacer pendant sa demande. Nouvelles cartes/cartes agrandies ne
+recouvrent pas les voisines. En compact, diagramme et inspecteur défilent sans
+se chevaucher ; une story vérifie cette géométrie.
+
+Niveaux natifs absents, homonymes, clés composites/cycliques/sans nom ou
+incomplètes, références non chargées et provenances restent distincts. Une
+cardinalité inconnue le reste ; une description périmée ne prouve pas l'unicité.
+Couverture, omissions, erreurs/indisponibilités et arrêts sont visibles. Les
+dépendances techniques restent indisponibles sans métadonnées fournisseur.
+Aucune pièce jointe SQLite/DuckDB n'est ouverte ; aucune source supprimée ou
+éphémère fermée n'est remplacée par une base vide. Dispositions durables, export
+image et DDL graphique restent séparés.
+
+Preuves ciblées du 2026-11-14 :
+
+- Huit tests de projection et neuf tests exécuteur/publication passent :
+  identités, provenance, bornes, capacités, appels exacts/cache, objets inconnus,
+  humain/propriétaire, nettoyage d'annulation et générations tardives. La revue
+  a aussi refusé la preuve de cardinalité pour une clé incomplète ; le contrôle
+  final la revalide.
+- SQLite et DuckDB jetables passent vues, clés composites et périmètres natifs :
+  trois objets, quatre liens, sept lectures puis zéro à la répétition. Deux
+  sources mémoire privées ont des clés distinctes. Le cas fichier supprimé/
+  propriétaire fermé a été ajouté pour le contrôle final.
+- Tests contrôleur/IPC : propriétaires tardifs/remplacés et générations à la
+  livraison refusés, ancienne carte conservée après erreur, clics regroupés,
+  aucun chargement/échantillon au montage. Le placement pur couvre ajout,
+  agrandissement et remplacement de propriétaire. Cinquante-deux stories
+  carte/arbre passent avec axe, dont géométrie compacte et menu ; les stories
+  ERD/assistant communes passaient aussi plus tôt dans ce lot.
+- Clippy de tout le workspace avec `-D warnings` passe après déplacement d'un
+  réexport Core mal placé. Les premiers contrôles globaux ont trouvé du lint
+  frontend et une régression de menu, corrigés sans suppression. Les comptes
+  finaux seront consignés après le contrôle complet.
+- `make qualite` final passe le 2026-11-15 : 4 753 tests Rust / 2 415 frontend,
+  documentation et quatre paquets. Acceptation personnelle non obtenue ; pas
+  d’intégration dev/main ni de push.
+
+### Rendu exploratoire de la carte (2026-11-14)
+
+Chromium/Playwright installé, Storybook local, vue 1 440 × 1 050 ; graphe
+synthétique de 40 objets/12 champs/200 FK. Les 40 nœuds et 200 arêtes sont rendus,
+sans erreur de page. Cinq placements Dagre : 181,2 / 141,4 / 133,2 / 121,3 /
+117,2 ms. Le filtre relançait ce placement ; il dépend maintenant du graphe,
+séparément des filtres/gestionnaires. Positions et collisions sont testées à part.
+
+Observations entrée-vers-deux-images pour quatre filtres : 309,6 / 247,3 /
+200,6 / 447,1 ms avant ; 511,6 / 113,7 / 73,1 / 226,7 ms après. La première
+valeur à froid régresse. Compilation et navigateur actifs rendent ces chiffres
+impropres à établir gain fiable, p99 ou respect des budgets. Ce sont des
+diagnostics exploratoires, pas un benchmark de référence sur machine au repos.
+Placement initial et interactions continues restent à mesurer dans Tauri ;
+aucun budget ni limite n'a été augmenté. Une mesure contrôlée distincte reste
+nécessaire. Un build local ne vaut pas acceptation personnelle.
+
+### Contrôle final de la carte — 2026-11-15
+
+`make qualite` passe : 4 753 tests Rust, 211 exclus, 2 415 tests frontend,
+format/lint/types/build, doctests/rustdoc et quatre archives de paquets vérifiées
+indépendamment. Les régressions fichier supprimé/propriétaire fermé et clé
+incomplète passent dans cet arbre final. Le socle ne rapporte aucun avertissement.
+Audit npm et licences des 415 paquets de production passent.
+
+`cargo-deny` reste absent : audits de licences Rust/RUSTSEC non effectués.
+`cargo-about` reste absent : notices non régénérées. Les suites de serveurs et
+le modèle de référence n'étaient pas configurés ; seuls les essais natifs de
+carte SQLite/DuckDB jetables ont été exécutés dans ce lot. Les diagnostics
+existants ResizeObserver/React act n'ont pas été masqués ; les assertions
+passent. Seul macOS est exercé localement.
+
+Revues locales des invariants, frontières, sécurité, organisation et interface :
+pas de blocage restant après corrections. La demande conserve un bail d'usage
+de console ; son contrôle de génération mémoire n'introspecte rien. Les grands
+points de composition existants gardent leur responsabilité ; projection,
+placement, chargement, propriété, validation IPC et présentation sont séparés.
+Acceptation personnelle non obtenue ; pas d'intégration dev/main ni de push.
+Ce contrôle remplace l'état d'attente consigné pendant les vérifications ci-dessus.

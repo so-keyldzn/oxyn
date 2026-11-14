@@ -247,6 +247,17 @@ impl Backend {
         Ok(catalog::tree(&cache))
     }
 
+    /// Current transient cache epoch only; never opens or introspects a source.
+    pub fn catalog_generation_for_session(
+        &self,
+        connection: ConnectionId,
+        owner: Option<SessionId>,
+    ) -> Result<oxyn_catalog::CatalogGenerationId, IpcError> {
+        let cache = self.catalog_for(connection, owner)?;
+        let generation = cache.read().generation();
+        Ok(generation)
+    }
+
     /// What the editor's completion reads of the cache, in one pass.
     ///
     /// A cache read like [`Self::catalog_tree_for_session`], and nothing more: no driver,

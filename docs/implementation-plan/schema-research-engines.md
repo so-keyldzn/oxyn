@@ -109,10 +109,10 @@ unsupported and known-empty links are different states.
 
 | Feature | Current state in this snapshot | Proposed coverage / prerequisite |
 |---|---|---|
-| Multi-database server profile (#373) | No server-group identity; driver-specific hierarchy already exists | PostgreSQL first; preserve independent per-base policy, cache and sessions. [D01][d01] records the proposed independent credential scope; migration still needs validation. |
+| Multi-database server profile (#373) | Server profiles and PostgreSQL discovery/opening implemented; native hierarchies remain independent | PostgreSQL discovery first; independent per-base policy/cache/sessions/credentials. Migration and owned opening validated in the completion ledger; other native hierarchies are retained. [D01][d01]. |
 | Configurable introspection (#375) | Independent facets, bounded cache and manual per-connection/native-scope presets; explicit preload pages only (validation in completion ledger) | Common policy for all nine drivers, restricted to their supported facets. No blanket local-file exemption. [D02][d02] records explicit prefetch triggers and preference persistence. |
 | Native database export/restore (#374) | No `pg_dump`/`pg_restore` wrapper found in application sources; retained-result export is different | Proposed PostgreSQL adapter only. Compatibility with variants and additional engines requires separate research; do not offer PostgreSQL tools merely because a driver speaks its protocol. [D04][d04] records the job boundary; authentication transport remains an entry gate. |
-| F6 navigation (#308) | Documented, absent from the action manifest | Common workspace action, independent of driver; include a focused map when present. |
+| F6 navigation (#308) | Registry-driven visible-region cycle implemented and browser-tested | Common workspace action, independent of driver; include a focused map when present. |
 | Saved maps / image export | ERD layout and rendering exist; manual positions are disabled and re-layout/image-export actions are unavailable | [D03][d03] first; persist view choices separately from metadata and sampled values. |
 
 ## Future engines: scope, not implied support
@@ -247,3 +247,37 @@ index-only, FK-only, definition-only and explicitly inferred descriptions.
 Disposable SQLite and MongoDB checks are separate from this static inventory;
 they do not certify live behavior of every other server/version. See the
 [completion ledger](completion.md) for actual validation and exclusions.
+
+## Implemented shared schema-map path (2026-11-14)
+
+The historical inventory above remains dated to its source snapshots. The
+standalone map now reuses one host projection and renderer with the assistant,
+under [ADR-0082][d03]. Every row below uses the same human bus command and
+original session; no engine-name branch selects a different graph assembler.
+Actual source privileges, metadata support and failures still decide coverage.
+
+| Engines / variants | Available representation through the common path | Honest limit |
+|---|---|---|
+| PostgreSQL, TimescaleDB, pgvector, MySQL/MariaDB, SQLite, DuckDB | Native-scope object cards, fields, reported outgoing FKs and explicit supported incoming-neighbor expansion | Primary-key proof only when fresh; structured view/extension dependencies are unavailable |
+| Redshift | Same capability-driven relational projection | Unsupported incoming keys/definitions stay unavailable; no claim of runtime certification |
+| ClickHouse | Database-scoped table/view/materialized-view cards and fields | No invented foreign keys |
+| Turso | Current URL's namespaces, objects, fields and outgoing keys | Incoming links cover loaded outgoing keys only; no other URL/database is opened |
+| MongoDB | Collection/view/time-series identities before sampling; explicit bounded inferred fields and nesting after human approval | No hidden document sample; no SQL relationships or sample values |
+| Elasticsearch / OpenSearch | Index/alias/data-stream object kinds and reported nested mapping fields | Typed alias/data-stream dependencies are not exposed by the current provider contract; none are guessed |
+| Redis / Valkey | Selected numbered database's bounded key identities, key kinds and preview-layout fields | Key enumeration remains sampled; no exhaustive key-space claim, document schema or prefix-derived relation |
+
+All paths distinguish native membership and field containment from FK edges,
+preserve absent native levels and full source/session identities, and display
+unread/stale/unsupported/failed/omitted parts. The accessible list includes link
+kinds that have no canvas edge renderer. Choosing/painting/filtering/panning/
+zooming/selecting reads no rows or native metadata. An explicit load is bounded
+at 40 objects, 12 fields per object, 200 links and the shared encoded metadata
+budget; a cache-generation read after IPC delivery never introspects a source.
+No map creates/reopens a source or automatically attaches a SQLite/DuckDB file.
+
+Disposable SQLite and DuckDB fixtures passed real map loading, composite keys,
+view kinds and repeated zero-read cache reuse. Separate private-memory owners
+remain distinct. Other rows have static capability/provider-fixture coverage,
+not a new live certification of every engine/version. Gate details, deleted-file
+coverage, render measurements and remaining platform limits live in the
+[completion ledger](completion.md).

@@ -27,12 +27,17 @@ impl CatalogPatch {
         if let Some(bytes) = self.encoded_size {
             return Ok(bytes);
         }
-        let mut counter = Counter(0);
-        serde_json::to_writer(&mut counter, self).map_err(|_| {
-            OxynError::Config("metadata response exceeds its encoded byte budget".into())
-        })?;
-        Ok(counter.0)
+        encoded_bytes(self)
     }
+}
+
+/// Shared publication guard for metadata snapshots, without a second encoded buffer.
+pub(crate) fn encoded_bytes(value: &impl serde::Serialize) -> Result<usize> {
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value).map_err(|_| {
+        OxynError::Config("metadata response exceeds its encoded byte budget".into())
+    })?;
+    Ok(counter.0)
 }
 
 #[cfg(test)]

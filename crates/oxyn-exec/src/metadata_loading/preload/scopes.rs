@@ -11,25 +11,11 @@ pub(super) fn observed_scope(
     slot: &SessionSlot,
     request: &MetadataPreloadRequest,
 ) -> Result<()> {
-    if cache.server_info().is_none() {
-        return Err(OxynError::Config(
-            "read the source's available scopes before preloading".into(),
-        ));
-    }
-    let catalog_known = request.scope.catalog.as_ref().map_or_else(
-        || cache.catalogs().next().is_none(),
-        |name| cache.catalogs().any(|catalog| catalog.name() == name),
-    );
-    let namespace_known = if slot.capabilities().contains(Capabilities::SCHEMAS) {
-        request.scope.namespace.as_ref().is_some_and(|name| {
-            cache
-                .namespaces(request.scope.catalog.as_deref())
-                .any(|namespace| namespace.name() == name)
-        })
-    } else {
-        request.scope.namespace.is_none()
-    };
-    if !catalog_known || !namespace_known {
+    if !cache.observes_native_scope(
+        request.scope.catalog.as_deref(),
+        request.scope.namespace.as_deref(),
+        slot.capabilities(),
+    ) {
         return Err(OxynError::Config(
             "choose an observed native catalog/namespace before preloading".into(),
         ));

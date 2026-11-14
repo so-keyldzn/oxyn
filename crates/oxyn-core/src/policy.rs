@@ -346,7 +346,8 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent()
             && matches!(
                 cmd,
-                Command::PreloadMetadata { .. }
+                Command::LoadSchemaMap { .. }
+                    | Command::PreloadMetadata { .. }
                     | Command::ReadMetadataPolicy { .. }
                     | Command::WriteMetadataPolicy { .. }
                     | Command::DiscoverDatabases { .. }

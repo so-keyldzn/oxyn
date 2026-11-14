@@ -77,6 +77,7 @@ pub mod path;
 pub mod provider;
 mod reserved;
 mod sampling;
+pub mod schema_map;
 pub mod search;
 
 pub use cache::{CacheError, CatalogCache, CatalogHandle, CatalogScope, Freshness, SharedCatalog};

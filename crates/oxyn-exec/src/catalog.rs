@@ -1,7 +1,7 @@
 //! Lazy catalog reads and atomic cache publication, confined to the bus.
 
 mod budget;
-mod payload;
+pub(crate) mod payload;
 pub(crate) mod priority;
 
 use std::sync::Arc;
