@@ -63,6 +63,12 @@ describe("formatCheckedAt", () => {
     )
   })
 
+  it("dates a check from five minutes ago in full after midnight", () => {
+    expect(
+      formatCheckedAt(at(2026, 10, 13, 23, 56), new Date(2026, 10, 14, 0, 1))
+    ).toBe("Nov 13, 2026, 11:56 PM")
+  })
+
   it("shows an unreadable timestamp as it came", () => {
     expect(formatCheckedAt("yesterday", NOW)).toBe("yesterday")
   })

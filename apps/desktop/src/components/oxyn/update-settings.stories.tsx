@@ -4,8 +4,11 @@ import { expect, fn, userEvent } from "storybook/test"
 import { UpdateSettings } from "./update-settings"
 import type { UpdateSnapshot, UpdateState } from "@/lib/ipc/updates"
 
-/** Today, a little earlier: the line reads « today at … ». */
+/** A recent download, even when it belongs to the previous calendar day. */
 const EARLIER = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+// Fixed local time: either calendar label is valid on the fixture's own day.
+// The formatter's day boundary is covered with an explicit clock in unit tests.
+const CHECKED_AT = new Date(2026, 9, 1, 14, 32).toISOString()
 
 function snapshot(
   state: UpdateState,
@@ -92,14 +95,14 @@ export const Checking: Story = {
 export const UpToDate: Story = {
   args: {
     snapshot: snapshot(
-      { type: "upToDate", checkedAt: EARLIER },
-      { lastCheckedAt: EARLIER }
+      { type: "upToDate", checkedAt: CHECKED_AT },
+      { lastCheckedAt: CHECKED_AT }
     ),
   },
   play: async ({ canvas }) => {
     await expect(
       canvas.getByText(
-        /^Oxyn 1\.3\.2 is the latest version\. Last checked today at/
+        /^Oxyn 1\.3\.2 is the latest version\. Last checked (?:today at|Oct 1, 2026,) 2:32 PM\.$/
       )
     ).toBeVisible()
   },
@@ -380,14 +383,16 @@ export const SaveFailed: Story = {
 export const JustUpdated: Story = {
   args: {
     snapshot: snapshot(
-      { type: "upToDate", checkedAt: EARLIER },
-      { currentVersion: "1.4.0", lastCheckedAt: EARLIER }
+      { type: "upToDate", checkedAt: CHECKED_AT },
+      { currentVersion: "1.4.0", lastCheckedAt: CHECKED_AT }
     ),
-    justUpdated: { from: "1.3.2", at: EARLIER },
+    justUpdated: { from: "1.3.2", at: CHECKED_AT },
   },
   play: async ({ canvas, args }) => {
     await expect(
-      canvas.getByText(/^Updated from 1\.3\.2 on today at/)
+      canvas.getByText(
+        /^Updated from 1\.3\.2 on (?:today at|Oct 1, 2026,) 2:32 PM\.$/
+      )
     ).toBeVisible()
     await userEvent.click(canvas.getByRole("button", { name: "What's new" }))
     await expect(args.onWhatsNew).toHaveBeenCalledOnce()
