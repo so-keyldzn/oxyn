@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CommandLineIcon } from "@hugeicons/core-free-icons"
 
@@ -29,14 +30,16 @@ export function AssistantToolDraft({ entry }: { entry: ToolDraftEntry }) {
         <Spinner className="ml-auto" />
       </header>
       {entry.arguments ? (
-        <pre
-          data-selectable
-          tabIndex={0}
-          aria-label="Arguments being written"
-          className="max-h-40 overflow-auto border-t px-3 py-2 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {entry.arguments}
-        </pre>
+        <ScrollArea className="min-w-0 border-t [&>[data-slot=scroll-area-viewport]]:max-h-40">
+          <pre
+            data-selectable
+            tabIndex={0}
+            aria-label="Arguments being written"
+            className="px-3 py-2 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {entry.arguments}
+          </pre>
+        </ScrollArea>
       ) : null}
     </section>
   )

@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CodeIcon } from "@hugeicons/core-free-icons"
@@ -15,6 +16,7 @@ import {
 } from "@/components/oxyn/code-highlight"
 import type { CodeLines } from "@/components/oxyn/code-highlight"
 import { Button } from "@/components/ui/button"
+import { ContentHint } from "./content-hint"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import type { QueryLanguageName } from "@/lib/query-language"
 
@@ -127,20 +129,24 @@ export function CodeBlock({
               {block.language || (sql ? "sql" : "code")}
             </span>
             {sql ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={Boolean(openSqlDisabledReason)}
-                title={openSqlDisabledReason ?? undefined}
-                onClick={() => onOpenSql(code)}
-              >
-                <HugeiconsIcon
-                  icon={CodeIcon}
-                  strokeWidth={2}
-                  data-icon="inline-start"
-                />
-                Open in console
-              </Button>
+              <ContentHint content={openSqlDisabledReason}>
+                <span className="inline-flex">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={Boolean(openSqlDisabledReason)}
+                    aria-description={openSqlDisabledReason ?? undefined}
+                    onClick={() => onOpenSql(code)}
+                  >
+                    <HugeiconsIcon
+                      icon={CodeIcon}
+                      strokeWidth={2}
+                      data-icon="inline-start"
+                    />
+                    Open in console
+                  </Button>
+                </span>
+              </ContentHint>
             ) : null}
             {onCopy ? (
               <AssistantCopyButton
@@ -151,21 +157,24 @@ export function CodeBlock({
             ) : null}
           </figcaption>
         ) : null}
-        <pre
-          data-selectable
-          data-highlighted={lines !== null || undefined}
-          tabIndex={0}
-          aria-label={
-            sql
-              ? consoleLanguage === "sql"
-                ? "Proposed SQL"
-                : "Proposed command"
-              : "Code"
-          }
-          className="overflow-x-auto p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <code>{lines ? <Tokens lines={lines} /> : block.text}</code>
-        </pre>
+        <ScrollArea className="min-w-0">
+          <pre
+            data-selectable
+            data-highlighted={lines !== null || undefined}
+            tabIndex={0}
+            aria-label={
+              sql
+                ? consoleLanguage === "sql"
+                  ? "Proposed SQL"
+                  : "Proposed command"
+                : "Code"
+            }
+            className="p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <code>{lines ? <Tokens lines={lines} /> : block.text}</code>
+          </pre>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
       </ContextMenuTrigger>
       <ActionMenuContent
         surface="assistantCode"

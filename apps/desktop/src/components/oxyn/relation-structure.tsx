@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import {
   flexRender,
   getCoreRowModel,
@@ -124,9 +125,11 @@ const columns: Array<ColumnDef<RelationField>> = [
             aria-label="Primary key"
           />
         ) : null}
-        <span dir="auto" className="truncate" title={row.original.name}>
-          {row.original.name}
-        </span>
+        <ContentHint content={row.original.name}>
+          <span dir="auto" className="truncate">
+            {row.original.name}
+          </span>
+        </ContentHint>
         {row.original.inferred ? <InferredBadge /> : null}
       </span>
     ),
@@ -135,12 +138,13 @@ const columns: Array<ColumnDef<RelationField>> = [
     accessorKey: "rawType",
     header: "Type",
     cell: ({ row }) => (
-      <span
-        className="block max-w-64 truncate font-mono text-xs"
-        title={`${row.original.rawType} · ${row.original.logicalType}`}
+      <ContentHint
+        content={`${row.original.rawType} · ${row.original.logicalType}`}
       >
-        {row.original.rawType}
-      </span>
+        <span className="block max-w-64 truncate font-mono text-xs">
+          {row.original.rawType}
+        </span>
+      </ContentHint>
     ),
   },
   {
@@ -163,25 +167,25 @@ const columns: Array<ColumnDef<RelationField>> = [
     accessorKey: "default",
     header: "Default",
     cell: ({ getValue }) => (
-      <span
-        className="block max-w-64 truncate font-mono text-xs text-muted-foreground"
-        title={getValue<string | null>() ?? undefined}
-      >
-        {getValue<string | null>() ?? ""}
-      </span>
+      <ContentHint content={getValue<string | null>() ?? undefined}>
+        <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">
+          {getValue<string | null>() ?? ""}
+        </span>
+      </ContentHint>
     ),
   },
   {
     accessorKey: "comment",
     header: "Comment",
     cell: ({ getValue }) => (
-      <span
-        dir="auto"
-        className="block max-w-96 truncate text-muted-foreground"
-        title={getValue<string | null>() ?? undefined}
-      >
-        {getValue<string | null>() ?? ""}
-      </span>
+      <ContentHint content={getValue<string | null>() ?? undefined}>
+        <span
+          dir="auto"
+          className="block max-w-96 truncate text-muted-foreground"
+        >
+          {getValue<string | null>() ?? ""}
+        </span>
+      </ContentHint>
     ),
   },
 ]

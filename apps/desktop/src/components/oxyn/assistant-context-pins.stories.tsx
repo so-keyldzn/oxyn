@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, within } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { AssistantContextPins } from "./assistant-context-pins"
 import type { ContextPin } from "./assistant-context-pins"
@@ -161,9 +161,15 @@ export const HostileAndRightToLeftLabels: Story = {
     await expect(canvasElement.querySelector("script")).toBeNull()
     await expect(canvas.getByText("<script>alert(1)</script>")).toBeVisible()
     // The full name stays reachable without widening the pin.
-    await expect(
-      canvas.getByTitle('public.users"; DROP TABLE audit; --')
-    ).toBeVisible()
+    const name = 'public.users"; DROP TABLE audit; --'
+    const pin = canvas.getByText(name)
+    await userEvent.hover(pin)
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-slot="tooltip-content"]')
+      ).toHaveTextContent(name)
+    )
+    await userEvent.unhover(pin)
   },
 }
 

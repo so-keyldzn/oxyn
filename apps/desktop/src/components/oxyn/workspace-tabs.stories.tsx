@@ -114,10 +114,16 @@ export const ResultExporting: Story = {
   play: async ({ canvas, args }) => {
     const result = canvas.getByRole("tab", { name: /Result #42/ })
     await expect(result).toHaveTextContent("exporting")
-    await expect(result).toHaveAttribute(
-      "title",
-      expect.stringMatching(/finish or cancel the export/)
+    await expect(result).not.toHaveAttribute("title")
+    const label = within(result).getByText("Result #42")
+    await userEvent.hover(label)
+    const tooltip = await within(document.body).findByText(
+      /finish or cancel the export/,
+      { selector: '[data-slot="tooltip-content"]' }
     )
+    await expect(tooltip).toHaveTextContent(/finish or cancel the export/)
+    await userEvent.unhover(label)
+    await waitFor(() => expect(tooltip).not.toBeVisible())
     await expect(result.querySelector('[data-slot="tab-close"]')).toBeNull()
     result.focus()
     await userEvent.keyboard("{Delete}")

@@ -43,6 +43,11 @@ export default [
           ],
           patterns: [
             {
+              group: ["@base-ui/react", "@base-ui/react/**"],
+              message:
+                "Use the generated shadcn primitives from @/components/ui.",
+            },
+            {
               group: ["**/ui/native-select"],
               message: "Use the themed Select from @/components/ui/select.",
             },
@@ -51,6 +56,27 @@ export default [
               message: "Use the fields of @/components/oxyn/text-field.",
             },
           ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.*", "**/*.stories.*"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "JSXOpeningElement[name.type='JSXIdentifier'][name.name=/^(button|input|textarea|select|option|dialog|details|summary|progress|meter)$/]",
+          message:
+            "Compose the corresponding shadcn primitive instead of a native UI control.",
+        },
+        {
+          selector:
+            "JSXOpeningElement[name.type='JSXIdentifier'][name.name=/^([a-z].*|Button|Badge|ItemContent|ItemDescription|ItemTitle|AttachmentTitle|SelectTrigger|SidebarMenuButton|TableCell|TableHead)$/] > JSXAttribute[name.name='title']",
+          message:
+            "Use ContentHint or Tooltip instead of the operating-system title tooltip.",
         },
       ],
     },

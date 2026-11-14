@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import { CodeBlock } from "@/components/oxyn/assistant-code-block"
@@ -209,36 +210,38 @@ function Blocks({
             return <Separator key={index} />
           case "table":
             return (
-              <div
-                key={index}
-                tabIndex={0}
-                role="region"
-                aria-label="Table"
-                className="overflow-x-auto rounded-lg border outline-none focus-visible:ring-2 focus-visible:ring-ring [&>[data-slot=table-container]]:overflow-visible"
-              >
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {block.header.map((cell, cellIndex) => (
-                        <TableHead key={cellIndex}>
-                          <InlineContent nodes={cell} />
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {block.rows.map((row, rowIndex) => (
-                      <TableRow key={rowIndex}>
-                        {row.map((cell, cellIndex) => (
-                          <TableCell key={cellIndex} className="align-top">
+              <ScrollArea key={index} className="min-w-0 rounded-lg border">
+                <div
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Table"
+                  className="outline-none focus-visible:ring-2 focus-visible:ring-ring [&>[data-slot=table-container]]:overflow-visible"
+                >
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {block.header.map((cell, cellIndex) => (
+                          <TableHead key={cellIndex}>
                             <InlineContent nodes={cell} />
-                          </TableCell>
+                          </TableHead>
                         ))}
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {block.rows.map((row, rowIndex) => (
+                        <TableRow key={rowIndex}>
+                          {row.map((cell, cellIndex) => (
+                            <TableCell key={cellIndex} className="align-top">
+                              <InlineContent nodes={cell} />
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
             )
         }
       })}

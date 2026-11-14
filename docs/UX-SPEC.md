@@ -461,8 +461,10 @@ Cancellation and truncation retain their warnings.
 Two reading presets are offered in the preferences: `Compact` (main text
 13 px, secondary mentions 11 px, data rows 24 px) and `Comfortable` (14 px,
 12 px and 28 px). The choice is independent of the theme and of the window
-width threshold; it re-runs no query. The result bar also allows changing the
-text size. The choice is saved in the workspace with the theme and the panel
+width threshold; it re-runs no query. Text size is changed in Appearance or
+`View ▸ Text size`; result bars keep only result actions. The summary and preview
+pagination bars share 40 px minimum height, horizontal insets and small controls;
+controls wrap on reduced widths. The choice is saved in the workspace with the theme and the panel
 preferences, according to [ADR-0013](adr/0013-preferences-workspace.md). A save
 error leaves the setting applied locally and shows an explicit retry action; it
 never announces a successful save.
@@ -563,7 +565,7 @@ What these entries do is written elsewhere, and the menu adds nothing to it:
   ("Scope of Run in a SQL console", "Explain", "Cancellation"): greyed out in
   the same cases as their buttons;
 - `Text size` chooses one of the presets of "Readability and grid height", the
-  same choice as the preferences and the result bar, saved the same way;
+  same choice as the preferences, saved the same way;
   `Theme` likewise chooses between `Light`, `Dark` and `System`, and the bar
   checks the choice in effect;
 - `Settings…` is on Windows and Linux in `File`, just above `Exit` (decided on

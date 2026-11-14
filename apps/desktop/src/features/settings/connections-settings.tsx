@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
@@ -264,7 +265,10 @@ export function ConnectionsSettings({
     return (
       <div ref={formRef} className="flex min-h-0 flex-1 flex-col gap-4">
         <h3 className="shrink-0 truncate font-medium">
-          Edit <bdi title={editing.name}>{editing.name}</bdi>
+          Edit{" "}
+          <ContentHint content={editing.name}>
+            <bdi>{editing.name}</bdi>
+          </ContentHint>
         </h3>
         {failure ? (
           <BackendErrorAlert

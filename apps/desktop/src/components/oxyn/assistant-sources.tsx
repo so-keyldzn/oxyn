@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -188,20 +189,22 @@ export function AssistantSources({
       <CollapsibleContent className="overflow-hidden">
         {/* Vertical only: a long qualified name wraps rather than pushing a
             horizontal scrollbar across a 320 px panel. */}
-        <ul
-          aria-label="Objects Oxyn read for this answer"
-          tabIndex={0}
-          className="mt-1.5 flex max-h-64 min-w-0 flex-col gap-2 overflow-x-hidden overflow-y-auto border-l-2 pl-3 text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {sources.map((source) => (
-            <SourceRow
-              key={source.key}
-              source={source}
-              tier={tier}
-              onOpenObject={onOpenObject}
-            />
-          ))}
-        </ul>
+        <ScrollArea className="mt-1.5 min-w-0 border-l-2 [&>[data-slot=scroll-area-viewport]]:max-h-64">
+          <ul
+            aria-label="Objects Oxyn read for this answer"
+            tabIndex={0}
+            className="flex min-w-0 flex-col gap-2 pl-3 text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {sources.map((source) => (
+              <SourceRow
+                key={source.key}
+                source={source}
+                tier={tier}
+                onOpenObject={onOpenObject}
+              />
+            ))}
+          </ul>
+        </ScrollArea>
       </CollapsibleContent>
     </Collapsible>
   )

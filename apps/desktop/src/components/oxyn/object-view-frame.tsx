@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -176,13 +177,11 @@ export function ObjectViewFrame({
     >
       <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-1">
         <div className="flex min-w-0 items-baseline gap-2">
-          <h2
-            dir="auto"
-            title={name}
-            className="max-w-72 truncate text-sm font-medium"
-          >
-            {name}
-          </h2>
+          <ContentHint content={name}>
+            <h2 dir="auto" className="max-w-72 truncate text-sm font-medium">
+              {name}
+            </h2>
+          </ContentHint>
           <span className="shrink-0 text-xs text-muted-foreground">
             {objectKindLabel(kind)}
           </span>

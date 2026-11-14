@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 // Area, bar, line and scatter drawings of an agent's result. Each starts from
 // the matching block of shadcn's chart gallery (named on each function) and
 // keeps its structure: no vertical grid, no axis line, no tick line.
@@ -223,49 +224,50 @@ function HorizontalBars({ data }: { data: ChartData }) {
   const height = Math.max(224, data.rows.length * BAND + 48)
   const scrolls = height > 320
   return (
-    <div
-      className="max-h-80 overflow-y-auto"
-      // A region that scrolls must be reachable from the keyboard.
-      tabIndex={scrolls ? 0 : undefined}
-      role={scrolls ? "group" : undefined}
-      aria-label={scrolls ? "Chart, scrollable" : undefined}
-    >
-      <ChartContainer
-        config={seriesConfig(data)}
-        className="aspect-auto w-full"
-        style={{ height }}
+    <ScrollArea className="max-h-80 min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-80">
+      <div
+        // A region that scrolls must be reachable from the keyboard.
+        tabIndex={scrolls ? 0 : undefined}
+        role={scrolls ? "group" : undefined}
+        aria-label={scrolls ? "Chart, scrollable" : undefined}
       >
-        <BarChart
-          accessibilityLayer
-          data={data.rows}
-          layout="vertical"
-          margin={{ left: 0, right: 12 }}
+        <ChartContainer
+          config={seriesConfig(data)}
+          className="aspect-auto w-full"
+          style={{ height }}
         >
-          <XAxis type="number" tickLine={false} axisLine={false} />
-          <YAxis
-            dataKey="axis"
-            type="category"
-            tickLine={false}
-            tickMargin={10}
-            axisLine={false}
-            width={120}
-            interval={0}
-            tickFormatter={shortLabel}
-          />
-          <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-          {legend(data)}
-          {data.series.map((series) => (
-            <Bar
-              key={series.key}
-              dataKey={series.key}
-              fill={`var(--color-${series.key})`}
-              radius={5}
-              isAnimationActive={false}
+          <BarChart
+            accessibilityLayer
+            data={data.rows}
+            layout="vertical"
+            margin={{ left: 0, right: 12 }}
+          >
+            <XAxis type="number" tickLine={false} axisLine={false} />
+            <YAxis
+              dataKey="axis"
+              type="category"
+              tickLine={false}
+              tickMargin={10}
+              axisLine={false}
+              width={120}
+              interval={0}
+              tickFormatter={shortLabel}
             />
-          ))}
-        </BarChart>
-      </ChartContainer>
-    </div>
+            <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+            {legend(data)}
+            {data.series.map((series) => (
+              <Bar
+                key={series.key}
+                dataKey={series.key}
+                fill={`var(--color-${series.key})`}
+                radius={5}
+                isAnimationActive={false}
+              />
+            ))}
+          </BarChart>
+        </ChartContainer>
+      </div>
+    </ScrollArea>
   )
 }
 

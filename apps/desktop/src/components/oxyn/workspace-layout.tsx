@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { createPortal } from "react-dom"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -309,16 +310,15 @@ export function WorkspaceLayout({
   const main = (
     <div className="relative flex h-full min-h-0 flex-col">
       {notice ? (
-        <p
-          role="status"
-          dir="auto"
-          // Truncated on one line so it never steals height from the work
-          // area; the whole sentence stays readable on hover.
-          title={notice}
-          className="shrink-0 truncate border-b px-3 py-1 text-[length:var(--reading-caption)] text-muted-foreground"
-        >
-          {notice}
-        </p>
+        <ContentHint content={notice}>
+          <p
+            role="status"
+            dir="auto"
+            className="shrink-0 truncate border-b px-3 py-1 text-[length:var(--reading-caption)] text-muted-foreground"
+          >
+            {notice}
+          </p>
+        </ContentHint>
       ) : null}
       <div className="relative min-h-0 flex-1">{children}</div>
       {aside !== null && compact ? (
@@ -379,13 +379,14 @@ export function WorkspaceLayout({
             </ToggleGroup>
             <Separator orientation="vertical" className="h-4" />
             <div className="flex max-w-64 min-w-0 shrink items-center gap-2">
-              <span
-                dir="auto"
-                title={connectionName}
-                className="min-w-0 truncate text-sm font-medium"
-              >
-                {connectionName}
-              </span>
+              <ContentHint content={connectionName}>
+                <span
+                  dir="auto"
+                  className="min-w-0 truncate text-sm font-medium"
+                >
+                  {connectionName}
+                </span>
+              </ContentHint>
               <EnvironmentBadge environment={environment} />
               {readOnly ? <ReadOnlyBadge /> : null}
             </div>

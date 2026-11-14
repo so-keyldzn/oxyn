@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, Copy01Icon } from "@hugeicons/core-free-icons"
 import * as React from "react"
@@ -75,7 +76,7 @@ export function ValuePageDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-40 flex-1 overflow-auto rounded-md border bg-card">
+        <ScrollArea className="min-h-40 flex-1 rounded-md border bg-card">
           {state.status === "loading" ? (
             <p
               role="status"
@@ -119,7 +120,7 @@ export function ValuePageDialog({
               {page?.text}
             </pre>
           )}
-        </div>
+        </ScrollArea>
 
         <p className="text-xs text-muted-foreground">
           {page ? `${renderedBytes(page)} · ` : ""}

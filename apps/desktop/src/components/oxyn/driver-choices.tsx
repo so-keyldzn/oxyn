@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button"
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { GridViewIcon } from "@hugeicons/core-free-icons"
@@ -139,12 +141,11 @@ function DriverSearch({
                 <DriverLogo driver={driver.id} className="size-4" />
                 <span className="truncate">{driver.displayName}</span>
                 {driver.aliases.length > 0 ? (
-                  <span
-                    className="truncate text-xs text-muted-foreground"
-                    title={driver.aliases.join(", ")}
-                  >
-                    {driver.aliases.join(", ")}
-                  </span>
+                  <ContentHint content={driver.aliases.join(", ")}>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {driver.aliases.join(", ")}
+                    </span>
+                  </ContentHint>
                 ) : null}
                 <CommandShortcut className="tracking-normal tabular-nums">
                   {reach(driver)}
@@ -251,8 +252,9 @@ export function DriverChoices({
             <Item
               variant="outline"
               render={
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  className="h-auto justify-start whitespace-normal"
                   disabled={disabled}
                   onClick={() => onChoose(driver)}
                 />
@@ -270,9 +272,9 @@ export function DriverChoices({
               </ButtonItemMedia>
               <ButtonItemContent className="w-full min-w-0 gap-0.5">
                 <ButtonItemTitle className="w-full min-w-0">
-                  <span className="truncate" title={driver.displayName}>
-                    {driver.displayName}
-                  </span>
+                  <ContentHint content={driver.displayName}>
+                    <span className="truncate">{driver.displayName}</span>
+                  </ContentHint>
                 </ButtonItemTitle>
                 <ButtonItemDescription className="truncate text-xs tabular-nums">
                   {driver.aliases.length > 0
@@ -289,8 +291,9 @@ export function DriverChoices({
             <Item
               variant="outline"
               render={
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  className="h-auto justify-start whitespace-normal"
                   disabled={disabled}
                   onClick={() => setBrowsing(true)}
                   aria-haspopup="dialog"

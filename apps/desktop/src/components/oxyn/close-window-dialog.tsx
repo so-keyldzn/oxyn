@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import {
@@ -105,23 +106,25 @@ export function CloseWindowDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {rows && rows.length > 0 ? (
-          <ul
-            aria-label="Consoles that would lose work"
-            className="flex max-h-64 flex-col gap-2 overflow-y-auto"
-          >
-            {rows.map((row) => (
-              <li
-                key={row.key}
-                className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
-              >
-                <span className="font-medium wrap-anywhere">{row.title}</span>
-                <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                  <span className="wrap-anywhere">{row.connection}</span>
-                  <span>{costs(row)}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+          <ScrollArea className="max-h-64 min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-64">
+            <ul
+              aria-label="Consoles that would lose work"
+              className="flex flex-col gap-2"
+            >
+              {rows.map((row) => (
+                <li
+                  key={row.key}
+                  className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
+                >
+                  <span className="font-medium wrap-anywhere">{row.title}</span>
+                  <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                    <span className="wrap-anywhere">{row.connection}</span>
+                    <span>{costs(row)}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
         ) : null}
         {error ? (
           <Alert variant="destructive">

@@ -70,8 +70,13 @@ function ProviderRowButton({
       variant="outline"
       className="flex-nowrap text-left hover:bg-muted/50"
       data-row-id={row.id}
-      // A native button: Enter and Space open it, and it takes the focus.
-      render={<button type="button" />}
+      render={
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-auto justify-start whitespace-normal"
+        />
+      }
       aria-label={`${row.title}, ${row.status.label}`}
       aria-describedby={lineId}
       onClick={onOpen}

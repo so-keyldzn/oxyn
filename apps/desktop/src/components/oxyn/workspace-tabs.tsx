@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import type { IconSvgElement } from "@hugeicons/react"
@@ -210,11 +211,6 @@ export function WorkspaceTabs({
                     .filter(Boolean)
                     .join(" ") || undefined
                 }
-                title={
-                  closable
-                    ? title
-                    : `${title} — finish or cancel the export to close`
-                }
                 onKeyDown={(event) => {
                   if (event.key === "Delete" || event.key === "Backspace") {
                     event.preventDefault()
@@ -245,9 +241,17 @@ export function WorkspaceTabs({
                 )}
               >
                 <HugeiconsIcon icon={iconOf(tab)} strokeWidth={2} />
-                <span dir="auto" className="min-w-0 truncate">
-                  {title}
-                </span>
+                <ContentHint
+                  content={
+                    closable
+                      ? title
+                      : `${title} — finish or cancel the export to close`
+                  }
+                >
+                  <span dir="auto" className="min-w-0 truncate">
+                    {title}
+                  </span>
+                </ContentHint>
                 {state ? (
                   <span className="shrink-0 text-[length:var(--reading-caption)] font-normal text-muted-foreground">
                     · {STATE_LABEL[state]}

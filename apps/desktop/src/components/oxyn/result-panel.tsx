@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -13,7 +14,6 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { ColumnsMenu, ColumnsSubmenu } from "@/components/oxyn/columns-menu"
-import { DensityMenu } from "@/components/oxyn/density-menu"
 import { ResultFooter } from "@/components/oxyn/result-footer"
 import { ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
@@ -40,7 +40,6 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import { actionKeys } from "@/lib/actions/manifest"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
-import type { DensityChoice } from "@/lib/ipc/settings"
 
 /**
  * The five states of a view that depends on a remote operation
@@ -121,11 +120,6 @@ interface ResultPanelProps {
    * carries only what cannot wait in a menu, such as an export's progress.
    */
   compactActions?: React.ReactNode
-  /** The text size, saved with the preferences; absent, no control is drawn. */
-  density?: {
-    value: DensityChoice
-    onChange: (density: DensityChoice) => void
-  }
   /** A quieter statement in the footer: « Total count not requested ». */
   footerNote?: React.ReactNode
   /** The connection and statement an error is about. */
@@ -181,7 +175,6 @@ export const ResultPanel = React.memo(function ResultPanel({
   toolbar,
   footerActions,
   compactActions,
-  density,
   footerNote,
   context,
   onEditQuery,
@@ -228,23 +221,19 @@ export const ResultPanel = React.memo(function ResultPanel({
     onHiddenChange: (next: ReadonlySet<number>) =>
       setHidden({ result: resultKey, columns: next }),
   })
-  // Offered where rows are drawn: it changes their height and text.
-  const densityMenu = density ? <DensityMenu {...density} /> : null
   // What the footer offers besides its own statement: `columns` is null where
-  // no grid is drawn, so that hiding a column or resizing text changes nothing.
+  // no grid is drawn, so that hiding a column changes nothing.
   const barActions = (columns: Array<ResultColumn> | null) =>
     compactActions === undefined ? (
       <>
-        {columns ? densityMenu : null}
         {columns ? <ColumnsMenu {...columnsChoice(columns)} /> : null}
         {footerActions}
       </>
     ) : (
       <>
-        {columns ? densityMenu : null}
         {footerActions}
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
+          <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
             <HugeiconsIcon
               icon={MoreHorizontalIcon}
               strokeWidth={2}
@@ -312,10 +301,7 @@ export const ResultPanel = React.memo(function ResultPanel({
               actions={
                 // At wide width a running result offers no export yet.
                 compactActions === undefined ? (
-                  <>
-                    {densityMenu}
-                    <ColumnsMenu {...columnsChoice(state.columns)} />
-                  </>
+                  <ColumnsMenu {...columnsChoice(state.columns)} />
                 ) : (
                   barActions(state.columns)
                 )
@@ -446,81 +432,85 @@ export const ResultPanel = React.memo(function ResultPanel({
 
     case "error":
       return (
-        <div className="flex h-full min-h-0 flex-col overflow-auto p-4">
-          <Alert className="gap-1.5 px-3 py-3">
-            <HugeiconsIcon
-              icon={Alert02Icon}
-              strokeWidth={2}
-              className="text-destructive"
-            />
-            <AlertTitle className="text-destructive">
-              The statement failed
-            </AlertTitle>
-            <AlertDescription className="flex min-w-0 flex-col gap-2 text-balance">
-              {context ? (
-                <p className="min-w-0 truncate text-xs">
-                  on{" "}
-                  <span className="font-medium text-foreground">
-                    {context.connectionName}
-                  </span>
-                  {context.statement ? (
-                    <>
-                      {" · "}
-                      <code className="font-mono">
-                        {statementPreview(context.statement)}
-                      </code>
-                    </>
-                  ) : null}
+        <ScrollArea className="h-full min-h-0">
+          <div className="flex flex-col p-4">
+            <Alert className="gap-1.5 px-3 py-3">
+              <HugeiconsIcon
+                icon={Alert02Icon}
+                strokeWidth={2}
+                className="text-destructive"
+              />
+              <AlertTitle className="text-destructive">
+                The statement failed
+              </AlertTitle>
+              <AlertDescription className="flex min-w-0 flex-col gap-2 text-balance">
+                {context ? (
+                  <p className="min-w-0 truncate text-xs">
+                    on{" "}
+                    <span className="font-medium text-foreground">
+                      {context.connectionName}
+                    </span>
+                    {context.statement ? (
+                      <>
+                        {" · "}
+                        <code className="font-mono">
+                          {statementPreview(context.statement)}
+                        </code>
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                {/* The server's words, code included — never a paraphrase. */}
+                <ScrollArea className="max-h-64 w-full min-w-0 [&>[data-slot=scroll-area-viewport]]:max-h-64">
+                  <pre
+                    data-selectable
+                    tabIndex={0}
+                    aria-label="Server message"
+                    // `wrap-anywhere`: a long identifier must not widen the
+                    // Alert's grid column past the panel.
+                    className="rounded-md border bg-muted/40 p-2.5 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {state.message}
+                  </pre>
+                </ScrollArea>
+                <p className="text-xs">
+                  {state.retryable
+                    ? "This error is transient: running it again may succeed."
+                    : "Running it again as is will fail the same way."}
                 </p>
-              ) : null}
-              {/* The server's words, code included — never a paraphrase. */}
-              <pre
-                data-selectable
-                tabIndex={0}
-                aria-label="Server message"
-                // `wrap-anywhere`: a long identifier must not widen the
-                // Alert's grid column past the panel.
-                className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2.5 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {state.message}
-              </pre>
-              <p className="text-xs">
-                {state.retryable
-                  ? "This error is transient: running it again may succeed."
-                  : "Running it again as is will fail the same way."}
-              </p>
-              {(state.retryable && onRetry) || onEditQuery ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {state.retryable && onRetry ? (
-                    <Button size="sm" variant="outline" onClick={onRetry}>
-                      <HugeiconsIcon
-                        icon={RepeatIcon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Run again
-                    </Button>
-                  ) : null}
-                  {onEditQuery ? (
-                    <Button size="sm" variant="outline" onClick={onEditQuery}>
-                      <HugeiconsIcon
-                        icon={PencilEdit02Icon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Edit query
-                      <KbdGroup className="ml-1">
-                        {actionKeys("console.focus").map((key) => (
-                          <Kbd key={key}>{key}</Kbd>
-                        ))}
-                      </KbdGroup>
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-            </AlertDescription>
-          </Alert>
-        </div>
+                {(state.retryable && onRetry) || onEditQuery ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {state.retryable && onRetry ? (
+                      <Button size="sm" variant="outline" onClick={onRetry}>
+                        <HugeiconsIcon
+                          icon={RepeatIcon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Run again
+                      </Button>
+                    ) : null}
+                    {onEditQuery ? (
+                      <Button size="sm" variant="outline" onClick={onEditQuery}>
+                        <HugeiconsIcon
+                          icon={PencilEdit02Icon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Edit query
+                        <KbdGroup className="ml-1">
+                          {actionKeys("console.focus").map((key) => (
+                            <Kbd key={key}>{key}</Kbd>
+                          ))}
+                        </KbdGroup>
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          </div>
+        </ScrollArea>
       )
   }
 })

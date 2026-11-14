@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -48,47 +49,50 @@ export function CellValue({
   const nullText = React.useContext(NullTextContext)
   if (cell === null) {
     return (
-      <span
-        className={cn("min-w-0 truncate text-null select-none", className)}
-        title={title}
-        data-null
-      >
-        {nullText}
-      </span>
+      <ContentHint content={title}>
+        <span
+          className={cn("min-w-0 truncate text-null select-none", className)}
+          data-null
+        >
+          {nullText}
+        </span>
+      </ContentHint>
     )
   }
   if (typeof cell === "string") {
     return (
-      <span className={cn("min-w-0 truncate", className)} title={title}>
-        {cell}
-      </span>
+      <ContentHint content={title}>
+        <span className={cn("min-w-0 truncate", className)}>{cell}</span>
+      </ContentHint>
     )
   }
   if ("text" in cell) {
     const full = `Truncated · ${formatBytes(cell.fullBytes)} in full`
     return (
-      <span
-        className={cn("flex min-w-0 items-center gap-1", className)}
-        title={full}
-        data-truncated
-      >
-        <span className="min-w-0 truncate">{cell.text}</span>
-        <Badge
-          variant="secondary"
-          className="h-4 px-1 font-sans text-[length:var(--reading-caption)] tabular-nums"
+      <ContentHint content={full}>
+        <span
+          className={cn("flex min-w-0 items-center gap-1", className)}
+          data-truncated
         >
-          {formatBytes(cell.fullBytes)}
-        </Badge>
-      </span>
+          <span className="min-w-0 truncate">{cell.text}</span>
+          <Badge
+            variant="secondary"
+            className="h-4 px-1 font-sans text-[length:var(--reading-caption)] tabular-nums"
+          >
+            {formatBytes(cell.fullBytes)}
+          </Badge>
+        </span>
+      </ContentHint>
     )
   }
   return (
-    <span
-      className={cn("min-w-0 truncate text-warning", className)}
-      title={cell.unrenderable}
-      data-unrenderable
-    >
-      ⟨unrenderable⟩
-    </span>
+    <ContentHint content={cell.unrenderable}>
+      <span
+        className={cn("min-w-0 truncate text-warning", className)}
+        data-unrenderable
+      >
+        ⟨unrenderable⟩
+      </span>
+    </ContentHint>
   )
 }

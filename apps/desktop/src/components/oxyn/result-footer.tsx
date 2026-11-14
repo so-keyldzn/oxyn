@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CancelCircleIcon } from "@hugeicons/core-free-icons"
@@ -105,7 +106,7 @@ export function ResultFooter({
     <div
       data-slot="result-footer"
       className={cn(
-        "flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t bg-card px-2 py-1 text-xs",
+        "flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t bg-card px-3 py-1 text-xs",
         className
       )}
     >
@@ -130,24 +131,25 @@ export function ResultFooter({
             </span>
           </>
         ) : (
-          <span
-            role="status"
-            // « Truncated · … not the whole result » must stay readable when
-            // the bar is too narrow for it.
-            title={summary.text}
-            className={cn(
-              "truncate tabular-nums",
-              summary.warning ? "text-warning" : "text-foreground"
-            )}
-          >
-            {summary.text}
-          </span>
+          <ContentHint content={summary.text}>
+            <span
+              role="status"
+              // « Truncated · … not the whole result » must stay readable when
+              // the bar is too narrow for it.
+              className={cn(
+                "truncate tabular-nums",
+                summary.warning ? "text-warning" : "text-foreground"
+              )}
+            >
+              {summary.text}
+            </span>
+          </ContentHint>
         )}
       </span>
       {note ? (
         <span className="min-w-0 truncate text-muted-foreground">{note}</span>
       ) : null}
-      <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+      <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
         {running && !state.serverCancel ? (
           // The reserve goes with the button at every width: hidden on a
           // narrow window, Cancel would promise what this session cannot do
@@ -157,7 +159,7 @@ export function ResultFooter({
           </span>
         ) : null}
         {running && onCancel ? (
-          <Button size="xs" variant="outline" onClick={onCancel}>
+          <Button size="sm" variant="outline" onClick={onCancel}>
             <HugeiconsIcon
               icon={CancelCircleIcon}
               strokeWidth={2}

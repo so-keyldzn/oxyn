@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import {
@@ -57,26 +58,28 @@ export function CloseTabsDialog({
             new copies.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <ul
-          tabIndex={0}
-          aria-label="Tabs to close"
-          className="flex max-h-64 flex-col gap-3 overflow-auto rounded-md border p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {review?.tabs.map((tab) => (
-            <li
-              key={tab.key}
-              className="flex flex-col gap-1 text-sm wrap-anywhere"
-            >
-              <span className="font-medium">{tab.title}</span>
-              <p className="text-xs text-muted-foreground">
-                {tab.blocked ??
-                  (tab.reasons
-                    ? closeMessage(tab.reasons)
-                    : "Closing this tab does not change database data.")}
-              </p>
-            </li>
-          ))}
-        </ul>
+        <ScrollArea className="max-h-64 min-h-0 rounded-md border [&>[data-slot=scroll-area-viewport]]:max-h-64">
+          <ul
+            tabIndex={0}
+            aria-label="Tabs to close"
+            className="flex flex-col gap-3 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {review?.tabs.map((tab) => (
+              <li
+                key={tab.key}
+                className="flex flex-col gap-1 text-sm wrap-anywhere"
+              >
+                <span className="font-medium">{tab.title}</span>
+                <p className="text-xs text-muted-foreground">
+                  {tab.blocked ??
+                    (tab.reasons
+                      ? closeMessage(tab.reasons)
+                      : "Closing this tab does not change database data.")}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </ScrollArea>
         {review?.notice ? (
           <Alert variant="destructive">
             <AlertDescription className="whitespace-pre-wrap">

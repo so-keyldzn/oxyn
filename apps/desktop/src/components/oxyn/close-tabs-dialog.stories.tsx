@@ -3,7 +3,7 @@ import { expect, fn, screen, userEvent, waitFor, within } from "storybook/test"
 
 import { CloseTabsDialog } from "./close-tabs-dialog"
 
-const tabs = ["orders.sql", "invoices.sql"].map((title, index) => ({
+const reviewTab = (title: string, index: number) => ({
   key: String(index),
   title,
   blocked: null,
@@ -16,7 +16,8 @@ const tabs = ["orders.sql", "invoices.sql"].map((title, index) => ({
     transaction: index === 0 ? ("open" as const) : null,
     hasSavedCopy: true,
   },
-}))
+})
+const tabs = ["orders.sql", "invoices.sql"].map(reviewTab)
 const meta = {
   title: "Oxyn/CloseTabsDialog",
   component: CloseTabsDialog,
@@ -29,6 +30,45 @@ const meta = {
 } satisfies Meta<typeof CloseTabsDialog>
 export default meta
 type Story = StoryObj<typeof meta>
+
+/** A large collective review keeps the decision buttons outside its scroller. */
+export const LongReviewStaysBounded: Story = {
+  args: {
+    review: {
+      tabs: Array.from({ length: 32 }, (_, index) => ({
+        ...reviewTab(`query-${index + 1}.sql`, index),
+        key: `review-${index}`,
+        title: `query-${index + 1}.sql`,
+      })),
+      busy: false,
+      notice: null,
+    },
+  },
+  play: async () => {
+    const dialog = await screen.findByRole("alertdialog")
+    const list = within(dialog).getByRole("list", { name: "Tabs to close" })
+    const viewport = list.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) throw new Error("Missing collective review viewport")
+    await waitFor(() => {
+      expect(viewport.clientHeight).toBeLessThanOrEqual(256)
+      expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight)
+    })
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" })
+    const top = cancel.getBoundingClientRect().top
+    viewport.scrollTop = viewport.scrollHeight
+    await waitFor(() => {
+      const last = within(list)
+        .getByText("query-32.sql")
+        .getBoundingClientRect()
+      expect(last.bottom).toBeLessThanOrEqual(
+        viewport.getBoundingClientRect().bottom
+      )
+      expect(cancel.getBoundingClientRect().top).toBe(top)
+    })
+  },
+}
 
 export const CollectiveReview: Story = {
   play: async ({ args }) => {

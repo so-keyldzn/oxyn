@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
@@ -361,17 +362,18 @@ function Actions({
       if (state.reason === "user") buttons = checkNow
       else if (state.reason === "admin")
         buttons = (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            focusableWhenDisabled
-            aria-describedby={reasonId}
-            className="data-disabled:opacity-50"
-            title={disabledReasonText(state.reason) ?? undefined}
-          >
-            Check now
-          </Button>
+          <ContentHint content={disabledReasonText(state.reason) ?? undefined}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled
+              focusableWhenDisabled
+              aria-describedby={reasonId}
+              className="data-disabled:opacity-50"
+            >
+              Check now
+            </Button>
+          </ContentHint>
         )
       break
   }

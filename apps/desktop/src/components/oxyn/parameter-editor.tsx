@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -88,112 +89,114 @@ export function ParameterEditor({
     onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)))
 
   return (
-    <section
-      aria-label="Bound parameters"
-      className="flex max-h-[300px] flex-col gap-2 overflow-auto border-b bg-card px-3 py-2"
-    >
-      <p className="text-xs text-muted-foreground">
-        Values are bound by the driver. They are never inserted into the SQL
-        text, saved with the query, or written to the history.
-      </p>
-      {refusal ? (
-        <Alert id={alertId} variant="destructive">
-          <AlertDescription>{refusal.message}</AlertDescription>
-        </Alert>
-      ) : null}
-      {rows.length === 0 ? (
+    <ScrollArea className="max-h-[300px] min-h-0 border-b bg-card [&>[data-slot=scroll-area-viewport]]:max-h-[299px]">
+      <section
+        aria-label="Bound parameters"
+        className="flex flex-col gap-2 px-3 py-2"
+      >
         <p className="text-xs text-muted-foreground">
-          No parameter. Add one per placeholder, in order.
+          Values are bound by the driver. They are never inserted into the SQL
+          text, saved with the query, or written to the history.
         </p>
-      ) : (
-        <ol className="flex flex-col gap-1.5">
-          {rows.map((row, index) => {
-            const position = index + 1
-            const faulty = position === faultyPosition
-            return (
-              // Wraps instead of pushing the row past the panel: at 420 px the
-              // type, the value and the remove button all stay reachable.
-              <li key={row.id} className="flex flex-wrap items-center gap-2">
-                <span className="w-6 text-right font-mono text-xs text-muted-foreground tabular-nums">
-                  {position}
-                </span>
-                <Select
-                  items={PARAMETER_KINDS.map((kind) => ({
-                    value: kind.kind,
-                    label: kind.label,
-                  }))}
-                  value={row.type}
-                  onValueChange={(type) => {
-                    if (type !== null) update(row.id, { type })
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label={`Parameter ${position} type`}
-                    className="w-44 shrink-0"
+        {refusal ? (
+          <Alert id={alertId} variant="destructive">
+            <AlertDescription>{refusal.message}</AlertDescription>
+          </Alert>
+        ) : null}
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No parameter. Add one per placeholder, in order.
+          </p>
+        ) : (
+          <ol className="flex flex-col gap-1.5">
+            {rows.map((row, index) => {
+              const position = index + 1
+              const faulty = position === faultyPosition
+              return (
+                // Wraps instead of pushing the row past the panel: at 420 px the
+                // type, the value and the remove button all stay reachable.
+                <li key={row.id} className="flex flex-wrap items-center gap-2">
+                  <span className="w-6 text-right font-mono text-xs text-muted-foreground tabular-nums">
+                    {position}
+                  </span>
+                  <Select
+                    items={PARAMETER_KINDS.map((kind) => ({
+                      value: kind.kind,
+                      label: kind.label,
+                    }))}
+                    value={row.type}
+                    onValueChange={(type) => {
+                      if (type !== null) update(row.id, { type })
+                    }}
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    <SelectGroup>
-                      {PARAMETER_KINDS.map((kind) => (
-                        <SelectItem key={kind.kind} value={kind.kind}>
-                          {kind.label}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <TextInput
-                  ref={faulty ? faultyRef : undefined}
-                  aria-label={`Parameter ${position} value`}
-                  aria-invalid={faulty}
-                  aria-describedby={faulty ? alertId : undefined}
-                  value={row.text}
-                  // NULL binds no text: the field stays read-only until a type
-                  // is chosen.
-                  readOnly={row.type === "null"}
-                  placeholder={row.type === "null" ? "NULL" : undefined}
-                  autoComplete="off"
-                  onChange={(event) =>
-                    update(row.id, { text: event.target.value })
-                  }
-                  onCopy={refuseExtraction}
-                  onCut={refuseExtraction}
-                  onDragStart={refuseExtraction}
-                  onContextMenu={refuseExtraction}
-                  data-select="none"
-                  className="h-8 w-64 min-w-40 flex-1 font-mono"
-                />
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Remove parameter ${position}`}
-                  onClick={() =>
-                    onChange(rows.filter((item) => item.id !== row.id))
-                  }
-                >
-                  <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                </Button>
-              </li>
-            )
-          })}
-        </ol>
-      )}
-      <div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={rows.length >= MAX_PARAMETERS}
-          onClick={() => onChange([...rows, newParameterRow()])}
-        >
-          <HugeiconsIcon
-            icon={Add01Icon}
-            strokeWidth={2}
-            data-icon="inline-start"
-          />
-          Add parameter
-        </Button>
-      </div>
-    </section>
+                    <SelectTrigger
+                      aria-label={`Parameter ${position} type`}
+                      className="w-44 shrink-0"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        {PARAMETER_KINDS.map((kind) => (
+                          <SelectItem key={kind.kind} value={kind.kind}>
+                            {kind.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <TextInput
+                    ref={faulty ? faultyRef : undefined}
+                    aria-label={`Parameter ${position} value`}
+                    aria-invalid={faulty}
+                    aria-describedby={faulty ? alertId : undefined}
+                    value={row.text}
+                    // NULL binds no text: the field stays read-only until a type
+                    // is chosen.
+                    readOnly={row.type === "null"}
+                    placeholder={row.type === "null" ? "NULL" : undefined}
+                    autoComplete="off"
+                    onChange={(event) =>
+                      update(row.id, { text: event.target.value })
+                    }
+                    onCopy={refuseExtraction}
+                    onCut={refuseExtraction}
+                    onDragStart={refuseExtraction}
+                    onContextMenu={refuseExtraction}
+                    data-select="none"
+                    className="h-8 w-64 min-w-40 flex-1 font-mono"
+                  />
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={`Remove parameter ${position}`}
+                    onClick={() =>
+                      onChange(rows.filter((item) => item.id !== row.id))
+                    }
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                  </Button>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={rows.length >= MAX_PARAMETERS}
+            onClick={() => onChange([...rows, newParameterRow()])}
+          >
+            <HugeiconsIcon
+              icon={Add01Icon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Add parameter
+          </Button>
+        </div>
+      </section>
+    </ScrollArea>
   )
 }

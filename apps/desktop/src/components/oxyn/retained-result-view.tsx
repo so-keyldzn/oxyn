@@ -75,7 +75,6 @@ export function RetainedResultView({
   onRetry,
   onOpenCopy,
   destination,
-  density,
   footerActions,
   gridMenu,
 }: {
@@ -87,8 +86,6 @@ export function RetainedResultView({
   onOpenCopy?: () => void
   /** The connection that console opens on, named before the click. */
   destination: string
-  /** The text size control of the result bar. */
-  density?: React.ComponentProps<typeof ResultPanel>["density"]
   /** The export of these rows, shown under the grid. */
   footerActions?: React.ReactNode
   /** The context menus of the grid: a retained result is a query's rows. */
@@ -182,7 +179,6 @@ export function RetainedResultView({
                 cancelled: false,
               }}
               fetchPage={fetchPage}
-              density={density}
               footerActions={footerActions}
               gridMenu={gridMenu}
             />

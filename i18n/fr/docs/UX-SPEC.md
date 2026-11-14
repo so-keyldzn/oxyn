@@ -1,4 +1,5 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="09e18f05236a" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="bc707af0092a" -->
+
 
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
@@ -497,8 +498,11 @@ ne définit pas une limite du viewport de l'application.
 Deux préréglages de lecture sont proposés dans les préférences : `Compact`
 (texte principal 13 px, mentions secondaires 11 px, lignes de données 24 px)
 et `Comfortable` (14 px, 12 px et 28 px). Le choix est indépendant du thème
-et du seuil de largeur de fenêtre ; il ne relance aucune requête. La barre
-de résultat permet également de changer la taille du texte. Le choix est
+et du seuil de largeur de fenêtre ; il ne relance aucune requête. La taille du
+texte se règle dans Apparence ou `View ▸ Text size` ; les barres de résultats
+gardent uniquement les actions sur les résultats. Le résumé et la pagination
+partagent une hauteur minimale de 40 px, les marges horizontales et de petits
+contrôles ; ceux-ci reviennent à la ligne lorsque la largeur diminue. Le choix est
 sauvegardé dans le workspace avec le thème et les préférences de panneaux,
 selon [ADR-0013](adr/0013-preferences-workspace.md). Une erreur de sauvegarde
 laisse le réglage appliqué localement et affiche une action de reprise
@@ -604,7 +608,7 @@ Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
   (« Portée de Run dans une console SQL », « Explain », « Annulation ») : grisés
   dans les mêmes cas que leurs boutons ;
 - `Text size` choisit l'un des préréglages de « Lisibilité et hauteur de
-  grille », le même choix que les préférences et la barre de résultat,
+  grille », le même choix que les préférences,
   sauvegardé de la même façon ; `Theme` choisit de même entre `Light`, `Dark`
   et `System`, et la barre coche le choix en vigueur ;
 - `Settings…` est sous Windows et Linux dans `File`, juste au-dessus d'`Exit`

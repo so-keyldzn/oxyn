@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
@@ -136,24 +137,25 @@ export function ExitTransactionsDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {nothing ? null : (
-          <ul
-            aria-label="Open transactions"
-            className="flex max-h-64 flex-col gap-2 overflow-y-auto"
-          >
-            {rows?.map((row) => (
-              <li
-                key={row.session}
-                className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
-              >
-                <span className="font-medium wrap-anywhere">{row.console}</span>
-                <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                  <span className="wrap-anywhere">{row.connectionName}</span>
-                  <EnvironmentBadge environment={row.environment} />
-                  <span>{STATE_LABEL[row.state]}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+          <ScrollArea className="max-h-64 min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-64">
+            <ul aria-label="Open transactions" className="flex flex-col gap-2">
+              {rows?.map((row) => (
+                <li
+                  key={row.session}
+                  className="flex flex-col gap-1 rounded-md border px-3 py-2 text-sm"
+                >
+                  <span className="font-medium wrap-anywhere">
+                    {row.console}
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                    <span className="wrap-anywhere">{row.connectionName}</span>
+                    <EnvironmentBadge environment={row.environment} />
+                    <span>{STATE_LABEL[row.state]}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
         )}
         {error ? (
           <Alert variant="destructive">

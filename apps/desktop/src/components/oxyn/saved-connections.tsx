@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -226,8 +227,9 @@ export function SavedConnections({
                 <Item
                   variant="outline"
                   render={
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      className="h-auto justify-start whitespace-normal"
                       data-connection-button
                       disabled={opening !== null}
                       aria-busy={isOpening || undefined}
@@ -241,9 +243,9 @@ export function SavedConnections({
                   </ButtonItemMedia>
                   <ButtonItemContent className="min-w-0">
                     <ButtonItemTitle className="w-full min-w-0">
-                      <bdi className="truncate" title={connection.name}>
-                        {connection.name}
-                      </bdi>
+                      <ContentHint content={connection.name}>
+                        <bdi className="truncate">{connection.name}</bdi>
+                      </ContentHint>
                       {connection.readOnly ? (
                         <HugeiconsIcon
                           icon={LockIcon}
@@ -253,24 +255,23 @@ export function SavedConnections({
                         />
                       ) : null}
                     </ButtonItemTitle>
-                    {/* The title sits on the line that is cut, so hovering any
-                    part of it — driver included — reads the whole line. */}
-                    <ButtonItemDescription
-                      className="truncate"
-                      title={
+                    <ContentHint
+                      content={
                         connection.location
                           ? `${connection.driverName} · ${connection.location}`
                           : connection.driverName
                       }
                     >
-                      {connection.driverName}
-                      {connection.location ? (
-                        <>
-                          {" · "}
-                          <bdi>{connection.location}</bdi>
-                        </>
-                      ) : null}
-                    </ButtonItemDescription>
+                      <ButtonItemDescription className="truncate">
+                        {connection.driverName}
+                        {connection.location ? (
+                          <>
+                            {" · "}
+                            <bdi>{connection.location}</bdi>
+                          </>
+                        ) : null}
+                      </ButtonItemDescription>
+                    </ContentHint>
                     {isOpen && pending ? (
                       <ButtonItemDescription
                         data-slot="pending-transaction"

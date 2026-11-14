@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -119,19 +120,22 @@ function Statement({
     <div className="flex min-w-0 flex-col items-start">
       {/* Wrapped at spaces only: a word of a statement is never cut in two,
           and a longer token scrolls sideways within the block. */}
-      <pre
-        id={id}
-        data-selectable
-        data-folded={folded || undefined}
-        tabIndex={0}
-        aria-label="Statement the agent submitted"
-        className={cn(
-          "w-full overflow-auto px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          folded ? "line-clamp-3" : "max-h-48"
-        )}
-      >
-        {statement}
-      </pre>
+      <ScrollArea className="w-full min-w-0 [&>[data-slot=scroll-area-viewport]]:max-h-48">
+        <pre
+          id={id}
+          data-selectable
+          data-folded={folded || undefined}
+          tabIndex={0}
+          aria-label="Statement the agent submitted"
+          className={cn(
+            "w-full px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            folded && "line-clamp-3"
+          )}
+        >
+          {statement}
+        </pre>
+        <ScrollBar orientation="horizontal" />
+      </ScrollArea>
       {long ? (
         <Button
           type="button"

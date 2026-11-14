@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 
 import { HEADER_HEIGHT, ROW_HEIGHT } from "@/components/oxyn/result-grid"
@@ -15,8 +16,8 @@ import {
  */
 export const MIN_VISIBLE_LINES = 3
 
-/** `ResultFooter` is `min-h-8`, border included. */
-const RESULT_FOOTER_HEIGHT = 32
+/** `ResultFooter` is `min-h-10`, border included. */
+const RESULT_FOOTER_HEIGHT = 40
 /** CodeMirror's base theme sets `.cm-scroller { line-height: 1.4 }`. */
 const EDITOR_LINE_HEIGHT = 1.4
 /** `sql-editor.tsx` pads `.cm-content` with 8 px above and below. */
@@ -114,14 +115,11 @@ export function ConsoleView({
       {/* Wraps rather than hides: « unsaved » is the one word a narrow window
           must not drop (docs/UX-SPEC.md, « Draft autosave »). */}
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 border-b px-3 py-1 text-xs text-muted-foreground">
-        <span
-          role="status"
-          dir="auto"
-          title={notice ?? undefined}
-          className="min-w-0 flex-1 truncate"
-        >
-          {notice}
-        </span>
+        <ContentHint content={notice}>
+          <span role="status" dir="auto" className="min-w-0 flex-1 truncate">
+            {notice}
+          </span>
+        </ContentHint>
         <span className="shrink-0">{draftNotice}</span>
       </div>
       {parameters}

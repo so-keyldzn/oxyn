@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -89,12 +90,11 @@ export function SessionContextPicker({
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-1.5 text-xs">
-        <bdi
-          title={connectionName}
-          className="min-w-0 truncate text-muted-foreground"
-        >
-          {connectionName}
-        </bdi>
+        <ContentHint content={connectionName}>
+          <bdi className="min-w-0 truncate text-muted-foreground">
+            {connectionName}
+          </bdi>
+        </ContentHint>
         <span aria-hidden className="text-muted-foreground">
           /
         </span>

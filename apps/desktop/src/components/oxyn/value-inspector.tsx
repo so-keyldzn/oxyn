@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
@@ -150,48 +151,50 @@ export function ValueInspector({
           Inspect full value
         </Button>
       </div>
-      <div
-        ref={listRef}
-        role="listbox"
-        aria-label={`Fields of row ${target.row + 1}`}
-        aria-busy={target.state.status === "loading"}
-        // The box keeps the focus while the arrows move the selection: without
-        // this, a screen reader is never told which field is selected.
-        aria-activedescendant={column === null ? undefined : fieldId(column)}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      >
-        {target.columns.map((field, index) => (
-          <div
-            key={`${index}:${field.name}`}
-            id={fieldId(index)}
-            role="option"
-            aria-selected={column === index}
-            data-column={index}
-            onClick={() => onSelectColumn(index)}
-            onDoubleClick={() => onInspect(index)}
-            className={cn(
-              "flex flex-col gap-0.5 border-b px-3 py-2",
-              column === index && "bg-accent"
-            )}
-          >
-            <span className="truncate text-xs text-muted-foreground">
-              <span dir="auto" className="font-medium text-foreground">
-                {field.name}
-              </span>{" "}
-              · <span className="font-mono">{field.dataType}</span>
-            </span>
-            <span className="min-w-0 font-mono text-xs">
-              {cells ? (
-                <CellValue cell={cells[index] ?? null} />
-              ) : (
-                <Skeleton className="h-3 w-2/3" />
+      <ScrollArea className="min-h-0 flex-1">
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label={`Fields of row ${target.row + 1}`}
+          aria-busy={target.state.status === "loading"}
+          // The box keeps the focus while the arrows move the selection: without
+          // this, a screen reader is never told which field is selected.
+          aria-activedescendant={column === null ? undefined : fieldId(column)}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          className="outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        >
+          {target.columns.map((field, index) => (
+            <div
+              key={`${index}:${field.name}`}
+              id={fieldId(index)}
+              role="option"
+              aria-selected={column === index}
+              data-column={index}
+              onClick={() => onSelectColumn(index)}
+              onDoubleClick={() => onInspect(index)}
+              className={cn(
+                "flex flex-col gap-0.5 border-b px-3 py-2",
+                column === index && "bg-accent"
               )}
-            </span>
-          </div>
-        ))}
-      </div>
+            >
+              <span className="truncate text-xs text-muted-foreground">
+                <span dir="auto" className="font-medium text-foreground">
+                  {field.name}
+                </span>{" "}
+                · <span className="font-mono">{field.dataType}</span>
+              </span>
+              <span className="min-w-0 font-mono text-xs">
+                {cells ? (
+                  <CellValue cell={cells[index] ?? null} />
+                ) : (
+                  <Skeleton className="h-3 w-2/3" />
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
     </div>
   )
 }

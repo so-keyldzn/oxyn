@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -212,15 +213,18 @@ export function AgentPresets({
                 </div>
               </div>
 
-              <code
-                data-selectable
-                tabIndex={0}
-                role="region"
-                aria-label={`Command for ${preset.label}`}
-                className="overflow-x-auto rounded-md bg-muted/40 px-2 py-1.5 font-mono whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {commandLine(found)}
-              </code>
+              <ScrollArea className="min-w-0">
+                <code
+                  data-selectable
+                  tabIndex={0}
+                  role="region"
+                  aria-label={`Command for ${preset.label}`}
+                  className="rounded-md bg-muted/40 px-2 py-1.5 font-mono whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {commandLine(found)}
+                </code>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
 
               {state.status === "ready" ? (
                 <div className="flex flex-col gap-1 text-muted-foreground">

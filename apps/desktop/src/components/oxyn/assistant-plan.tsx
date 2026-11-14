@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -218,17 +219,19 @@ export function AssistantPlan({
         {/* Vertical only: a long step wraps, it never pushes a scrollbar
             across a 320 px panel. `tabIndex` because a region that scrolls
             and holds no control is unreachable from the keyboard otherwise. */}
-        <ol
-          aria-label="Plan steps"
-          tabIndex={0}
-          className="mt-1.5 flex max-h-64 min-w-0 flex-col gap-1.5 overflow-x-hidden overflow-y-auto border-l-2 pl-3 text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {entries.map((entry, index) => (
-            // The index is the key on purpose: a v1 entry has no identifier,
-            // and its position is what identifies it.
-            <Step key={index} entry={entry} position={index + 1} />
-          ))}
-        </ol>
+        <ScrollArea className="mt-1.5 min-w-0 border-l-2 [&>[data-slot=scroll-area-viewport]]:max-h-64">
+          <ol
+            aria-label="Plan steps"
+            tabIndex={0}
+            className="flex min-w-0 flex-col gap-1.5 pl-3 text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {entries.map((entry, index) => (
+              // The index is the key on purpose: a v1 entry has no identifier,
+              // and its position is what identifies it.
+              <Step key={index} entry={entry} position={index + 1} />
+            ))}
+          </ol>
+        </ScrollArea>
       </CollapsibleContent>
     </Collapsible>
   )

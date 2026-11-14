@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -118,15 +119,18 @@ export function AssistantSignIn({
             {entry.name} · run this in a terminal, then ask again
           </p>
           <div className="flex min-w-0 items-center gap-1 rounded-md border bg-muted/40 pl-2">
-            <code
-              data-selectable
-              tabIndex={0}
-              role="region"
-              aria-label={`Command to sign in: ${entry.name}`}
-              className="min-w-0 flex-1 overflow-x-auto py-1.5 font-mono whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {entry.command}
-            </code>
+            <ScrollArea className="min-w-0 flex-1">
+              <code
+                data-selectable
+                tabIndex={0}
+                role="region"
+                aria-label={`Command to sign in: ${entry.name}`}
+                className="min-w-0 py-1.5 font-mono whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {entry.command}
+              </code>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
             <AssistantCopyButton
               text={entry.command}
               label="Copy command"

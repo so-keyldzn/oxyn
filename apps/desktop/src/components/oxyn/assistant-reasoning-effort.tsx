@@ -74,7 +74,7 @@ export function AssistantReasoningEffort({
     >
       {/* A disabled control takes no pointer event: the reason sits on a
           wrapper that is always there, so nothing remounts when it appears. */}
-      <Tooltip disabled={!disabled}>
+      <Tooltip>
         <TooltipTrigger render={<span className="inline-flex min-w-0" />}>
           <Select
             value={current}
@@ -87,7 +87,6 @@ export function AssistantReasoningEffort({
               size="sm"
               aria-label={`Reasoning effort: ${label}`}
               aria-describedby={disabled ? reasonId : undefined}
-              title={`Reasoning effort: ${label}`}
               className={cn("max-w-36 min-w-0", chip && COMPOSER_CHIP)}
             >
               {chip ? (
@@ -127,9 +126,9 @@ export function AssistantReasoningEffort({
             </SelectContent>
           </Select>
         </TooltipTrigger>
-        {disabled ? (
-          <TooltipContent className="max-w-72">{disabledReason}</TooltipContent>
-        ) : null}
+        <TooltipContent className="max-w-72">
+          {disabledReason ?? `Reasoning effort: ${label}`}
+        </TooltipContent>
       </Tooltip>
       {disabled ? (
         <span id={reasonId} className="sr-only">

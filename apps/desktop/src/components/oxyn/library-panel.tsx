@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -454,10 +455,7 @@ export function LibraryPanel({
       <ContextMenu>
         <ContextMenuTrigger
           render={
-            <div
-              className="min-h-0 flex-1 overflow-y-auto"
-              onContextMenu={pickTarget}
-            />
+            <ScrollArea className="min-h-0 flex-1" onContextMenu={pickTarget} />
           }
         >
           {state.status === "loading" ? (

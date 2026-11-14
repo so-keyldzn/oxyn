@@ -9,6 +9,8 @@ import {
 
 import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { Button } from "@/components/ui/button"
+import { ContentHint } from "./content-hint"
 import type { Mention } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
@@ -98,7 +100,12 @@ export function MentionChip({
   const word = MENTION_KIND_WORD[kind]
   const content = (
     <>
-      <HugeiconsIcon icon={mentionIcon(kind)} strokeWidth={2} aria-hidden />
+      <HugeiconsIcon
+        icon={mentionIcon(kind)}
+        strokeWidth={2}
+        className="size-[1em]"
+        aria-hidden
+      />
       <span data-slot="assistant-mention-name" className={NAME}>
         @{label}
       </span>
@@ -112,19 +119,20 @@ export function MentionChip({
 
   if (missing)
     return (
-      <span
-        data-slot="assistant-mention"
-        data-missing=""
-        title={`${word} ${label} no longer exists`}
-        // Dimmed by colour and outline, not by opacity: the name must stay
-        // readable at the contrast the theme guarantees.
-        className={cn(
-          CHIP,
-          "border-dashed border-border bg-transparent text-muted-foreground"
-        )}
-      >
-        {content}
-      </span>
+      <ContentHint content={`${word} ${label} no longer exists`}>
+        <span
+          data-slot="assistant-mention"
+          data-missing=""
+          // Dimmed by colour and outline, not by opacity: the name must stay
+          // readable at the contrast the theme guarantees.
+          className={cn(
+            CHIP,
+            "border-dashed border-border bg-transparent text-muted-foreground"
+          )}
+        >
+          {content}
+        </span>
+      </ContentHint>
     )
 
   if (onOpen)
@@ -134,13 +142,17 @@ export function MentionChip({
       <ContextMenu>
         <ContextMenuTrigger
           render={
-            <button
+            <Button
+              variant="ghost"
               type="button"
               data-slot="assistant-mention"
               aria-label={`Open ${word.toLowerCase()} ${label}`}
               className={cn(
+                // A font size resets an earlier leading in class merging.
+                // Apply the chip's inline line height after the inherited size.
+                "text-[length:inherit]",
                 CHIP,
-                "cursor-pointer outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                "h-auto min-w-0 cursor-pointer hover:bg-accent hover:text-accent-foreground"
               )}
               onClick={onOpen}
             />
@@ -161,12 +173,10 @@ export function MentionChip({
     )
 
   return (
-    <span
-      data-slot="assistant-mention"
-      title={`${word} ${label}`}
-      className={CHIP}
-    >
-      {content}
-    </span>
+    <ContentHint content={`${word} ${label}`}>
+      <span data-slot="assistant-mention" className={CHIP}>
+        {content}
+      </span>
+    </ContentHint>
   )
 }

@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 // Pie, radar and radial drawings of an agent's result, each from the matching
 // block of shadcn's chart gallery (named on each function), and a legend on
 // every one: a category known only by hovering its slice is not written down.
@@ -73,9 +74,9 @@ function SliceLegend({ slices }: { slices: Array<Slice> }) {
               backgroundColor: CHART_COLORS[index % CHART_COLORS.length],
             }}
           />
-          <span title={slice.label} className="line-clamp-2 break-words">
-            {slice.label}
-          </span>
+          <ContentHint content={slice.label}>
+            <span className="line-clamp-2 break-words">{slice.label}</span>
+          </ContentHint>
         </li>
       ))}
     </ul>

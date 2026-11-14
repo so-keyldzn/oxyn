@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -68,15 +69,17 @@ export function RouteFailure({
           </EmptyDescription>
         </EmptyHeader>
         {message ? (
-          <pre
-            // Scrollable, so reachable by keyboard.
-            tabIndex={0}
-            aria-label="Error message"
-            dir="auto"
-            className="max-h-40 w-full overflow-auto rounded-md border bg-muted px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground"
-          >
-            {message}
-          </pre>
+          <ScrollArea className="max-h-40 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-40">
+            <pre
+              // Scrollable, so reachable by keyboard.
+              tabIndex={0}
+              aria-label="Error message"
+              dir="auto"
+              className="w-full rounded-md border bg-muted px-3 py-2 text-left font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground"
+            >
+              {message}
+            </pre>
+          </ScrollArea>
         ) : null}
         <EmptyContent className="flex-row justify-center gap-2">
           {onReload ? (

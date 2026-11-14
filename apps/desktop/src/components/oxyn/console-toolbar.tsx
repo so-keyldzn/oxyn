@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -369,19 +370,18 @@ export function ConsoleToolbar({
             {closing ? "Cancel close" : "Cancel save"}
           </Button>
         ) : null}
-        <span
-          id={noticeId}
-          role="status"
-          // Truncated on a narrow window, so the whole sentence stays reachable
-          // by pointer as well as by the field that describes it.
-          title={notice}
-          className={cn(
-            "min-w-0 truncate text-xs",
-            noticeWarns ? "text-warning" : "text-muted-foreground"
-          )}
-        >
-          {notice}
-        </span>
+        <ContentHint content={notice}>
+          <span
+            id={noticeId}
+            role="status"
+            className={cn(
+              "min-w-0 truncate text-xs",
+              noticeWarns ? "text-warning" : "text-muted-foreground"
+            )}
+          >
+            {notice}
+          </span>
+        </ContentHint>
       </div>
     </div>
   )

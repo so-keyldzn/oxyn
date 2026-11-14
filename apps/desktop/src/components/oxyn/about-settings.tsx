@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -67,9 +68,11 @@ function NoticeRow({ notice }: { notice: ThirdPartyNotice }) {
             </li>
           ))}
         </ul>
-        <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-          {notice.text}
-        </pre>
+        <ScrollArea className="max-h-64 rounded-md bg-muted [&>[data-slot=scroll-area-viewport]]:max-h-64">
+          <pre className="p-3 font-mono text-xs whitespace-pre-wrap">
+            {notice.text}
+          </pre>
+        </ScrollArea>
       </CollapsibleContent>
     </Collapsible>
   )

@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -185,18 +186,17 @@ export function ResultFindBar({
           <Kbd>↵</Kbd>
         </TooltipContent>
       </Tooltip>
-      <p
-        role="status"
-        // « batches not searched: they spilled to disk » is the part a narrow
-        // bar cuts first; it stays reachable rather than disappearing.
-        title={status}
-        className={cn(
-          "min-w-0 truncate text-xs",
-          error || summary?.partial ? "text-warning" : "text-muted-foreground"
-        )}
-      >
-        {status}
-      </p>
+      <ContentHint content={status}>
+        <p
+          role="status"
+          className={cn(
+            "min-w-0 truncate text-xs",
+            error || summary?.partial ? "text-warning" : "text-muted-foreground"
+          )}
+        >
+          {status}
+        </p>
+      </ContentHint>
     </div>
   )
 }

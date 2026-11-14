@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, waitFor } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { NullTextContext } from "./cell-value"
@@ -482,7 +482,15 @@ export const OversizedNullMarker: Story = {
       expect(canvasElement.querySelector("[data-null]")).not.toBeNull()
     )
     const absent = canvasElement.querySelector("[data-null]")
-    await expect(absent).toHaveAttribute("title", OVERSIZED_MARKER)
+    if (!(absent instanceof HTMLElement)) throw new Error("Missing null marker")
+    await expect(absent).not.toHaveAttribute("title")
+    await userEvent.hover(absent)
+    const tooltip = await within(document.body).findByText(OVERSIZED_MARKER, {
+      selector: '[data-slot="tooltip-content"]',
+    })
+    await expect(tooltip).toHaveTextContent(OVERSIZED_MARKER)
+    await userEvent.unhover(absent)
+    await waitFor(() => expect(tooltip).not.toBeVisible())
   },
 }
 

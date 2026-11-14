@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -352,169 +353,166 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
 
       {/* Browsing scrolls as a page. A form gets a bounded card so its footer
           never covers a field or its help text. */}
-      <main
-        className={cn(
-          "min-h-0 flex-1 px-4 sm:px-6",
-          driver ? "overflow-hidden" : "overflow-y-auto"
-        )}
-      >
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-3xl flex-col",
-            driver ? "h-full min-h-0 py-4" : "min-h-full py-8"
-          )}
-        >
+      <main className="min-h-0 flex-1 overflow-hidden px-4 sm:px-6">
+        <ScrollArea className="h-full">
           <div
             className={cn(
-              "flex flex-col",
-              driver ? "min-h-0 flex-1 gap-3" : "my-auto gap-8"
+              "mx-auto flex w-full max-w-3xl flex-col",
+              driver ? "h-full min-h-0 py-4" : "min-h-full py-8"
             )}
           >
-            {driver ? (
-              <Card
-                aria-labelledby="new-connection-title"
-                className="min-h-0 flex-1"
-                role="region"
-              >
-                <CardHeader className="shrink-0">
-                  <CardTitle id="new-connection-title">
-                    New {driver.displayName} connection
-                  </CardTitle>
-                  <CardDescription>
-                    {duplicate ? (
-                      <>
-                        A copy of <bdi>{duplicate.of}</bdi>. Its secrets are not
-                        copied: type them again. Nothing is saved until you
-                        connect.
-                      </>
-                    ) : (
-                      "Choose where to connect and how this connection may be used."
-                    )}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
-                  <div className="shrink-0">
-                    <DraftStatusBar
-                      name={draftName}
-                      saving={submitting}
+            <div
+              className={cn(
+                "flex flex-col",
+                driver ? "min-h-0 flex-1 gap-3" : "my-auto gap-8"
+              )}
+            >
+              {driver ? (
+                <Card
+                  aria-labelledby="new-connection-title"
+                  className="min-h-0 flex-1"
+                  role="region"
+                >
+                  <CardHeader className="shrink-0">
+                    <CardTitle id="new-connection-title">
+                      New {driver.displayName} connection
+                    </CardTitle>
+                    <CardDescription>
+                      {duplicate ? (
+                        <>
+                          A copy of <bdi>{duplicate.of}</bdi>. Its secrets are
+                          not copied: type them again. Nothing is saved until
+                          you connect.
+                        </>
+                      ) : (
+                        "Choose where to connect and how this connection may be used."
+                      )}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+                    <div className="shrink-0">
+                      <DraftStatusBar
+                        name={draftName}
+                        saving={submitting}
+                        testing={testing}
+                        result={testResult}
+                        error={testError ?? null}
+                      />
+                    </div>
+                    <ConnectionForm
+                      key={`${driver.id}:${prefill?.key ?? ""}`}
+                      driver={driver}
+                      prefill={duplicate?.prefill}
+                      dropped={prefill?.values}
+                      submitting={submitting}
                       testing={testing}
-                      result={testResult}
-                      error={testError ?? null}
+                      aborting={cancelling}
+                      error={formError}
+                      saved={saved}
+                      onSubmit={onSubmit}
+                      onTest={onTest}
+                      onBrowse={onBrowse}
+                      onCancel={goBack}
+                      onAbort={onCancelOpening}
+                      onDirtyChange={setFormDirty}
+                      onValuesChange={onValuesChange}
                     />
+                  </CardContent>
+                </Card>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <h2 className="text-2xl font-semibold tracking-tight">
+                      {firstLaunch
+                        ? "Connect your first database"
+                        : "Open a connection"}
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      {firstLaunch
+                        ? "Choose its type: Oxyn asks only for what that driver needs."
+                        : "Pick up a saved connection, or connect to another database."}
+                    </p>
                   </div>
-                  <ConnectionForm
-                    key={`${driver.id}:${prefill?.key ?? ""}`}
-                    driver={driver}
-                    prefill={duplicate?.prefill}
-                    dropped={prefill?.values}
-                    submitting={submitting}
-                    testing={testing}
-                    aborting={cancelling}
-                    error={formError}
-                    saved={saved}
-                    onSubmit={onSubmit}
-                    onTest={onTest}
-                    onBrowse={onBrowse}
-                    onCancel={goBack}
-                    onAbort={onCancelOpening}
-                    onDirtyChange={setFormDirty}
-                    onValuesChange={onValuesChange}
-                  />
-                </CardContent>
-              </Card>
-            ) : (
-              <>
-                <div className="flex flex-col gap-1.5">
-                  <h2 className="text-2xl font-semibold tracking-tight">
-                    {firstLaunch
-                      ? "Connect your first database"
-                      : "Open a connection"}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {firstLaunch
-                      ? "Choose its type: Oxyn asks only for what that driver needs."
-                      : "Pick up a saved connection, or connect to another database."}
-                  </p>
-                </div>
 
-                {/* The empty list is not drawn: on a first launch the
+                  {/* The empty list is not drawn: on a first launch the
                     database types are the whole screen, not a box saying
                     there is nothing here. */}
-                {firstLaunch ? null : (
+                  {firstLaunch ? null : (
+                    <section
+                      aria-labelledby="saved-connections-title"
+                      className="flex flex-col gap-3"
+                    >
+                      <h3
+                        id="saved-connections-title"
+                        className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
+                      >
+                        Saved connections
+                      </h3>
+                      <SavedConnections
+                        connections={connections}
+                        error={connectionsError}
+                        onRetry={onRetryConnections}
+                        opening={submitting ? "" : opening}
+                        cancelling={cancelling}
+                        openIds={openIds}
+                        pendingTransactions={pendingTransactions}
+                        onOpen={onOpen}
+                        onCancelOpening={onCancelOpening}
+                        menuActions={connectionMenu}
+                      />
+                    </section>
+                  )}
+                  {openRefusal ? (
+                    <BackendErrorAlert
+                      title="Cannot open another connection"
+                      error={{ message: openRefusal, retryable: false }}
+                      nextStep="Nothing was opened. Open connections stay as they are."
+                    />
+                  ) : null}
+                  {openError && opening === null ? (
+                    <BackendErrorAlert
+                      title="Connection failed"
+                      error={openError}
+                      onRetry={onRetryOpen}
+                      nextStep="Edit the connection in Settings, then open it again."
+                    />
+                  ) : null}
+
                   <section
-                    aria-labelledby="saved-connections-title"
+                    aria-labelledby="new-connection-title"
                     className="flex flex-col gap-3"
                   >
                     <h3
-                      id="saved-connections-title"
+                      id="new-connection-title"
                       className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
                     >
-                      Saved connections
+                      {firstLaunch ? "Database type" : "New connection"}
                     </h3>
-                    <SavedConnections
-                      connections={connections}
-                      error={connectionsError}
-                      onRetry={onRetryConnections}
-                      opening={submitting ? "" : opening}
-                      cancelling={cancelling}
-                      openIds={openIds}
-                      pendingTransactions={pendingTransactions}
-                      onOpen={onOpen}
-                      onCancelOpening={onCancelOpening}
-                      menuActions={connectionMenu}
+                    <DriverChoices
+                      drivers={drivers}
+                      used={usedDrivers}
+                      error={driversError}
+                      onRetry={onRetryDrivers}
+                      disabled={busy}
+                      prominent={firstLaunch}
+                      onChoose={onChooseDriver}
                     />
                   </section>
-                )}
-                {openRefusal ? (
-                  <BackendErrorAlert
-                    title="Cannot open another connection"
-                    error={{ message: openRefusal, retryable: false }}
-                    nextStep="Nothing was opened. Open connections stay as they are."
-                  />
-                ) : null}
-                {openError && opening === null ? (
-                  <BackendErrorAlert
-                    title="Connection failed"
-                    error={openError}
-                    onRetry={onRetryOpen}
-                    nextStep="Edit the connection in Settings, then open it again."
-                  />
-                ) : null}
+                </>
+              )}
 
-                <section
-                  aria-labelledby="new-connection-title"
-                  className="flex flex-col gap-3"
-                >
-                  <h3
-                    id="new-connection-title"
-                    className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
-                  >
-                    {firstLaunch ? "Database type" : "New connection"}
-                  </h3>
-                  <DriverChoices
-                    drivers={drivers}
-                    used={usedDrivers}
-                    error={driversError}
-                    onRetry={onRetryDrivers}
-                    disabled={busy}
-                    prominent={firstLaunch}
-                    onChoose={onChooseDriver}
-                  />
-                </section>
-              </>
-            )}
-
-            <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-              <HugeiconsIcon
-                icon={LockIcon}
-                strokeWidth={2}
-                className="size-3.5 shrink-0"
-              />
-              Secrets are stored in the system keyring, never in the workspace
-              file.
-            </p>
+              <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                <HugeiconsIcon
+                  icon={LockIcon}
+                  strokeWidth={2}
+                  className="size-3.5 shrink-0"
+                />
+                Secrets are stored in the system keyring, never in the workspace
+                file.
+              </p>
+            </div>
           </div>
-        </div>
+        </ScrollArea>
       </main>
 
       <DiscardChangesDialog

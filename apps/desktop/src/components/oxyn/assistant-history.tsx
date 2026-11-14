@@ -1,3 +1,5 @@
+import { ContentHint } from "./content-hint"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -138,28 +140,36 @@ function Row({
         current && "bg-muted"
       )}
     >
-      <Item
-        size="xs"
-        render={<button type="button" />}
-        aria-current={current ? "true" : undefined}
-        className="min-w-0 flex-1 flex-col items-start gap-0.5 px-2 py-1.5 text-left"
-        onClick={onOpen}
-      >
-        <span className="flex w-full min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-sm" dir="auto" title={label}>
-            {label}
+      <ContentHint content={label}>
+        <Item
+          size="xs"
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-auto justify-start"
+            />
+          }
+          aria-current={current ? "true" : undefined}
+          className="min-w-0 flex-1 flex-col items-start gap-0.5 px-2 py-1.5 text-left"
+          onClick={onOpen}
+        >
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm" dir="auto">
+              {label}
+            </span>
+            {item.running ? (
+              <Badge variant="outline" className="shrink-0">
+                <Spinner data-icon="inline-start" aria-hidden />
+                Answering
+              </Badge>
+            ) : null}
           </span>
-          {item.running ? (
-            <Badge variant="outline" className="shrink-0">
-              <Spinner data-icon="inline-start" aria-hidden />
-              Answering
-            </Badge>
-          ) : null}
-        </span>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {when(item.updatedAtMs)} · {item.exchanges} exchange(s)
-        </span>
-      </Item>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {when(item.updatedAtMs)} · {item.exchanges} exchange(s)
+          </span>
+        </Item>
+      </ContentHint>
       <Button
         size="icon-xs"
         variant="ghost"
@@ -285,22 +295,24 @@ export function AssistantHistory({
       ) : null}
 
       {items.length > 0 ? (
-        <ul className="-mx-1 flex min-h-0 flex-col gap-0.5 overflow-y-auto px-1">
-          {items.map((item) => (
-            <Row
-              key={item.id}
-              item={item}
-              current={item.id === currentId}
-              onOpen={() => onOpen(item.id)}
-              onRename={(title) => onRename(item.id, title)}
-              onDelete={() => {
-                setDeleteError(null)
-                setRemoving(item)
-                setRemovalOpen(true)
-              }}
-            />
-          ))}
-        </ul>
+        <ScrollArea className="-mx-1 min-h-0 min-w-0">
+          <ul className="flex flex-col gap-0.5 px-1">
+            {items.map((item) => (
+              <Row
+                key={item.id}
+                item={item}
+                current={item.id === currentId}
+                onOpen={() => onOpen(item.id)}
+                onRename={(title) => onRename(item.id, title)}
+                onDelete={() => {
+                  setDeleteError(null)
+                  setRemoving(item)
+                  setRemovalOpen(true)
+                }}
+              />
+            ))}
+          </ul>
+        </ScrollArea>
       ) : null}
 
       <div className="mt-auto flex flex-col gap-2">

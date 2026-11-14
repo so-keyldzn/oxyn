@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import type { ContextWindow, Usage } from "@/features/assistant/transcript"
 import type { ModelCost } from "@/lib/ipc/ai"
 
@@ -108,14 +109,16 @@ export function AssistantUsage({
     >
       <span className="sr-only">Usage: </span>
       {parts.map((part, index) => (
-        <span key={part.key} title={part.title} className="cursor-help">
-          {index > 0 ? (
-            <span aria-hidden className="mr-1.5">
-              ·
-            </span>
-          ) : null}
-          {part.text}
-        </span>
+        <ContentHint key={part.key} content={part.title}>
+          <span className="cursor-help">
+            {index > 0 ? (
+              <span aria-hidden className="mr-1.5">
+                ·
+              </span>
+            ) : null}
+            {part.text}
+          </span>
+        </ContentHint>
       ))}
     </p>
   )

@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { useQueries } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
@@ -812,7 +813,6 @@ export const ResultGrid = React.memo(function ResultGrid({
                   role="columnheader"
                   aria-colindex={virtual.index + 2}
                   data-column={index}
-                  title={`${column.name} · ${column.dataType}`}
                   data-dragging={
                     reorder.drag?.from === virtual.index || undefined
                   }
@@ -825,9 +825,11 @@ export const ResultGrid = React.memo(function ResultGrid({
                   )}
                   style={{ left: virtual.start, width: virtual.size }}
                 >
-                  <span className="max-w-full truncate text-[length:var(--reading-text)] font-medium text-foreground">
-                    {column.name}
-                  </span>
+                  <ContentHint content={`${column.name} · ${column.dataType}`}>
+                    <span className="max-w-full truncate text-[length:var(--reading-text)] font-medium text-foreground">
+                      {column.name}
+                    </span>
+                  </ContentHint>
                   <span className="max-w-full truncate font-mono text-[length:var(--reading-caption)] text-muted-foreground">
                     {column.dataType}
                   </span>

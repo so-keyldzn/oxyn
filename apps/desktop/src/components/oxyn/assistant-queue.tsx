@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Cancel01Icon, Clock01Icon, SentIcon } from "@hugeicons/core-free-icons"
 
@@ -60,9 +61,11 @@ export function AssistantQueue({
             <ItemMedia className="w-4 text-xs text-muted-foreground tabular-nums">
               {index + 1}
             </ItemMedia>
-            <ItemContent className="min-w-0" dir="auto" title={message.text}>
-              <span className="truncate">{message.text}</span>
-            </ItemContent>
+            <ContentHint content={message.text}>
+              <ItemContent className="min-w-0" dir="auto">
+                <span className="truncate">{message.text}</span>
+              </ItemContent>
+            </ContentHint>
             <ItemActions className="gap-1">
               {held ? (
                 <Button

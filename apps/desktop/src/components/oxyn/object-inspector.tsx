@@ -1,3 +1,5 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { ContentHint } from "./content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Copy01Icon, InformationCircleIcon } from "@hugeicons/core-free-icons"
 
@@ -64,101 +66,102 @@ export function ObjectInspector({
   const primaryKey = detail?.fields.filter((field) => field.primaryKey) ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3 text-sm">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <span
-            dir="auto"
-            title={facets.address.relation ?? undefined}
-            className="min-w-0 truncate font-medium"
-          >
-            {facets.address.relation}
-          </span>
-          {facets.kind ? (
-            <Badge variant="secondary">{facets.kind}</Badge>
-          ) : null}
-          <Badge variant="outline" className="ml-auto">
-            {freshnessLabel(facets.detail.freshness)}
-          </Badge>
-        </div>
-        <div className="flex min-w-0 items-center gap-1">
-          <code
-            data-selectable
-            className="truncate font-mono text-xs text-muted-foreground"
-            title={facets.qualifiedName}
-          >
-            {facets.qualifiedName}
-          </code>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Copy qualified name"
-            onClick={() => onCopyName(facets.qualifiedName)}
-          >
-            <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
-          </Button>
-        </div>
-      </div>
-
-      {detail === null ? (
-        loading ? (
-          <div
-            role="status"
-            aria-label="Loading properties"
-            className="flex flex-col gap-2"
-          >
-            <Skeleton className="h-4 w-2/3" />
-            <Skeleton className="h-4 w-1/2" />
-            <Skeleton className="h-4 w-3/4" />
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col gap-3 p-3 text-sm">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <ContentHint content={facets.address.relation}>
+              <span dir="auto" className="min-w-0 truncate font-medium">
+                {facets.address.relation}
+              </span>
+            </ContentHint>
+            {facets.kind ? (
+              <Badge variant="secondary">{facets.kind}</Badge>
+            ) : null}
+            <Badge variant="outline" className="ml-auto">
+              {freshnessLabel(facets.detail.freshness)}
+            </Badge>
           </div>
+          <div className="flex min-w-0 items-center gap-1">
+            <ContentHint content={facets.qualifiedName}>
+              <code
+                data-selectable
+                className="truncate font-mono text-xs text-muted-foreground"
+              >
+                {facets.qualifiedName}
+              </code>
+            </ContentHint>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Copy qualified name"
+              onClick={() => onCopyName(facets.qualifiedName)}
+            >
+              <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
+            </Button>
+          </div>
+        </div>
+
+        {detail === null ? (
+          loading ? (
+            <div
+              role="status"
+              aria-label="Loading properties"
+              className="flex flex-col gap-2"
+            >
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              The description of this object has not been read yet. Open its
+              Structure to load it.
+            </p>
+          )
         ) : (
-          <p className="text-xs text-muted-foreground">
-            The description of this object has not been read yet. Open its
-            Structure to load it.
-          </p>
-        )
-      ) : (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
-          <dt className="text-muted-foreground">Rows</dt>
-          <dd>
-            {detail.estimatedRows !== null
-              ? `~${detail.estimatedRows.toLocaleString("en-US")} (estimate)`
-              : "Not reported"}
-          </dd>
-          <dt className="text-muted-foreground">Size</dt>
-          <dd>
-            {detail.sizeBytes !== null
-              ? sizeLabel(detail.sizeBytes)
-              : "Not reported"}
-          </dd>
-          <dt className="text-muted-foreground">Columns</dt>
-          <dd>{detail.fields.length.toLocaleString("en-US")}</dd>
-          <dt className="text-muted-foreground">Primary key</dt>
-          <dd dir="auto" className="font-mono break-words">
-            {primaryKey.length > 0
-              ? primaryKey.map((field) => field.name).join(", ")
-              : "None declared"}
-          </dd>
-          {facets.indexes !== null ? (
-            <>
-              <dt className="text-muted-foreground">Indexes</dt>
-              <dd>{facets.indexes.length.toLocaleString("en-US")}</dd>
-            </>
-          ) : null}
-          {facets.foreignKeys !== null ? (
-            <>
-              <dt className="text-muted-foreground">Foreign keys</dt>
-              <dd>{facets.foreignKeys.length.toLocaleString("en-US")}</dd>
-            </>
-          ) : null}
-          <dt className="text-muted-foreground">Comment</dt>
-          <dd data-selectable className="break-words">
-            {detail.comment ?? (
-              <span className="text-muted-foreground">None</span>
-            )}
-          </dd>
-        </dl>
-      )}
-    </div>
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+            <dt className="text-muted-foreground">Rows</dt>
+            <dd>
+              {detail.estimatedRows !== null
+                ? `~${detail.estimatedRows.toLocaleString("en-US")} (estimate)`
+                : "Not reported"}
+            </dd>
+            <dt className="text-muted-foreground">Size</dt>
+            <dd>
+              {detail.sizeBytes !== null
+                ? sizeLabel(detail.sizeBytes)
+                : "Not reported"}
+            </dd>
+            <dt className="text-muted-foreground">Columns</dt>
+            <dd>{detail.fields.length.toLocaleString("en-US")}</dd>
+            <dt className="text-muted-foreground">Primary key</dt>
+            <dd dir="auto" className="font-mono break-words">
+              {primaryKey.length > 0
+                ? primaryKey.map((field) => field.name).join(", ")
+                : "None declared"}
+            </dd>
+            {facets.indexes !== null ? (
+              <>
+                <dt className="text-muted-foreground">Indexes</dt>
+                <dd>{facets.indexes.length.toLocaleString("en-US")}</dd>
+              </>
+            ) : null}
+            {facets.foreignKeys !== null ? (
+              <>
+                <dt className="text-muted-foreground">Foreign keys</dt>
+                <dd>{facets.foreignKeys.length.toLocaleString("en-US")}</dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">Comment</dt>
+            <dd data-selectable className="break-words">
+              {detail.comment ?? (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </dd>
+          </dl>
+        )}
+      </div>
+    </ScrollArea>
   )
 }

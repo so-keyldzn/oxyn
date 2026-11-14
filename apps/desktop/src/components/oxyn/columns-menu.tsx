@@ -38,9 +38,7 @@ export function columnsSummary(total: number, hidden: number) {
 export function ColumnsMenu(props: ColumnsMenuProps) {
   return (
     <DropdownMenu>
-      {/* `xs`, as Cancel beside it: a taller button grows the footer and
-          takes a row from the grid over the console's splitter floor. */}
-      <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
+      <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
         <ColumnsLabel {...props} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-96 w-72">

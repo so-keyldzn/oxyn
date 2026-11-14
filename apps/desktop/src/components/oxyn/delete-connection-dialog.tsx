@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
@@ -139,21 +140,22 @@ export function DeleteConnectionDialog<
           <AlertDialogCancel ref={cancelRef} disabled={deleting}>
             Cancel
           </AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={!matches || deleting}
-            onClick={() => {
-              if (connection && matches) onConfirm(connection)
-            }}
-            // The name is whatever the user typed: bounded here, in full above.
-            title={`Delete ${name}`}
-            className="min-w-0 shrink"
-          >
-            {deleting ? <Spinner data-icon="inline-start" /> : null}
-            <span className="min-w-0 truncate">
-              Delete <bdi>{name}</bdi>
-            </span>
-          </Button>
+          <ContentHint content={`Delete ${name}`}>
+            <Button
+              variant="destructive"
+              disabled={!matches || deleting}
+              onClick={() => {
+                if (connection && matches) onConfirm(connection)
+              }}
+              // The name is whatever the user typed: bounded here, in full above.
+              className="min-w-0 shrink"
+            >
+              {deleting ? <Spinner data-icon="inline-start" /> : null}
+              <span className="min-w-0 truncate">
+                Delete <bdi>{name}</bdi>
+              </span>
+            </Button>
+          </ContentHint>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

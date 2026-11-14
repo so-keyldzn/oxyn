@@ -84,7 +84,7 @@ export function PreviewPagination({
 
   return (
     <div
-      className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-t bg-card px-3 py-2 text-xs"
+      className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t bg-card px-3 py-1 text-xs"
       data-slot="preview-pagination"
     >
       {error ? (
@@ -103,9 +103,9 @@ export function PreviewPagination({
         {pageable ? ` · Page ${page.toLocaleString("en-US")}` : ""}
       </span>
       {reason ? <span className="text-muted-foreground">{reason}</span> : null}
-      <div className="ms-auto flex flex-wrap items-center gap-3">
+      <div className="ms-auto flex flex-wrap items-center justify-end gap-1.5">
         <div className="flex items-center gap-2">
-          <Label htmlFor={pageSizeId}>
+          <Label htmlFor={pageSizeId} className="text-xs text-muted-foreground">
             {pageable ? "Rows per page" : "Preview rows"}
           </Label>
           <Select

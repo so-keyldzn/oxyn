@@ -84,9 +84,9 @@ export const LongName: Story = {
   },
   decorators: [
     (Story) => (
-      <div className="w-[240px]">
+      <span className="inline-block w-[240px]">
         <Story />
-      </div>
+      </span>
     ),
   ],
   play: async ({ canvasElement }) => {

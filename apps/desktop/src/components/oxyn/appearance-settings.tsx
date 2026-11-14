@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CheckmarkCircle02Icon } from "@hugeicons/core-free-icons"
 
@@ -188,13 +189,15 @@ export function PreferencesSaveStatus({
             className="size-3.5 text-warning"
             aria-hidden
           />
-          <span
-            data-selectable
-            tabIndex={0}
-            className="max-h-24 min-w-0 flex-1 basis-40 overflow-auto wrap-anywhere text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Applied here but not saved: {save.message}
-          </span>
+          <ScrollArea className="max-h-24 min-w-0 flex-1 basis-40 [&>[data-slot=scroll-area-viewport]]:max-h-24">
+            <span
+              data-selectable
+              tabIndex={0}
+              className="wrap-anywhere text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Applied here but not saved: {save.message}
+            </span>
+          </ScrollArea>
           <Button variant="outline" size="xs" onClick={onRetry}>
             Save again
           </Button>

@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, SourceCodeIcon } from "@hugeicons/core-free-icons"
@@ -205,15 +206,18 @@ export function AssistantErd({
         </Button>
       </figcaption>
       {showSource ? (
-        <pre
-          id={sourceId}
-          data-selectable
-          tabIndex={0}
-          aria-label="Diagram source"
-          className="overflow-x-auto border-b p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <code>{source}</code>
-        </pre>
+        <ScrollArea className="min-w-0 border-b">
+          <pre
+            id={sourceId}
+            data-selectable
+            tabIndex={0}
+            aria-label="Diagram source"
+            className="p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <code>{source}</code>
+          </pre>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
       ) : null}
       <Body
         state={state}

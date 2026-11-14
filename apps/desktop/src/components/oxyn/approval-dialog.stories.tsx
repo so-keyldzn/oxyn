@@ -119,10 +119,7 @@ export const HostileConnectionName: Story = {
       const room = action.parentElement?.getBoundingClientRect().width ?? 0
       expect(action.getBoundingClientRect().width).toBeLessThanOrEqual(room + 1)
     })
-    await expect(action).toHaveAttribute(
-      "title",
-      expect.stringContaining("Run on prod")
-    )
+    await expect(action).toHaveAccessibleDescription(/^Run on prod/)
   },
 }
 
@@ -180,6 +177,9 @@ export const LongStatement: Story = {
     // The whole statement is reviewable from the keyboard.
     preview.focus()
     await userEvent.keyboard("{PageDown}")
-    await waitFor(() => expect(preview.scrollTop).toBeGreaterThan(0))
+    const viewport = preview.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    await waitFor(() => expect(viewport?.scrollTop).toBeGreaterThan(0))
   },
 }

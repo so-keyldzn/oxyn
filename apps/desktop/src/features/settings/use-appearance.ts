@@ -68,7 +68,7 @@ export function useAppearance() {
   }, [])
 
   // `View ▸ Text size` and `View ▸ Theme`: the same choice as the settings
-  // and the result bar, saved the same way (UX-SPEC, « Menu bar »).
+  // saved the same way (UX-SPEC, « Menu bar »).
   useActionSource(
     "appearance",
     { theme, density },
