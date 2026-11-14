@@ -81,14 +81,12 @@ function setup() {
 describe("independent child connection recovery", () => {
   it("keeps the saved identity after an authentication failure and never resubmits creation", async () => {
     const { hook, reconnect } = setup()
-    const save = vi
-      .spyOn(serverProfiles, "open")
-      .mockResolvedValue({
-        type: "saved",
-        connection: { ...savedConnections[0]!, id: "saved-child" },
-        message: "Synthetic authentication failure",
-        retryable: false,
-      })
+    const save = vi.spyOn(serverProfiles, "open").mockResolvedValue({
+      type: "saved",
+      connection: { ...savedConnections[0]!, id: "saved-child" },
+      message: "Synthetic authentication failure",
+      retryable: false,
+    })
     await act(() =>
       hook.result.current.choose(group, source, "child", postgresDriver, true)
     )
