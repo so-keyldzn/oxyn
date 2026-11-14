@@ -10,6 +10,8 @@ import {
   tabTitle,
 } from "@/features/consoles/console-model"
 import { publishConsoleLabels } from "@/features/consoles/console-labels"
+import { closeConsoleBatch } from "@/features/consoles/close-console-batch"
+import type { ClosedConsole } from "@/features/consoles/close-console-batch"
 import type { CloseReasons } from "@/features/consoles/console-model"
 import type {
   ConsoleHandle,
@@ -113,14 +115,6 @@ export function firstConsoleText(
         ? null
         : `Copied from ${draft.from}, which keeps its console. Nothing was executed.`,
   }
-}
-
-/** A closed console as ⌘⇧T brings it back: its text, never its run. */
-interface ClosedConsole {
-  title: string
-  text: string
-  /** Kept: a reopened agent's text stays marked as one (ADR-0023). */
-  fromAgent: boolean
 }
 
 /** Closed consoles kept for ⌘⇧T, the oldest forgotten first. */
@@ -326,38 +320,47 @@ export function useConsoles({
     setNotice("Opening the console was cancelled.")
   }
 
-  const finishClose = async (key: string, discard: boolean) => {
-    const handle = handles.current.get(key)
-    const entry = entriesRef.current.find((item) => item.key === key)
-    if (!handle || !entry) return false
-    // Read before closing: the text is what ⌘⇧T brings back, discarded
-    // text included — the reopening is how a hasty Discard is undone.
-    const shown = metaRef.current[key]
-    const reopenable: ClosedConsole = {
-      title: shown?.title ?? entry.seed.title,
-      text: handle.text(),
-      fromAgent: shown?.fromAgent ?? entry.seed.fromAgent,
+  const finishCloseMany = async (
+    keys: ReadonlyArray<string>,
+    discard: boolean,
+    signal?: AbortSignal
+  ) => {
+    const wanted = new Set(keys)
+    const closed = await closeConsoleBatch(
+      entriesRef.current.filter((entry) => wanted.has(entry.key)),
+      handles.current,
+      metaRef.current,
+      discard,
+      signal
+    )
+    if (closed.length === 0) return []
+    setClosedConsoles((all) =>
+      [...all, ...closed.map((item) => item.reopenable)].slice(-MAX_REOPENABLE)
+    )
+    const gone = new Set(closed.map(({ entry }) => entry.key))
+    for (const { entry } of closed) {
+      // Each console releases only its own session.
+      if (entry.session) {
+        previews.closeSessions([entry.session.session])
+        void consoles
+          .close(open.connection, entry.session.session)
+          .catch(() => undefined)
+        forgetSession(entry.session.session)
+      }
     }
-    const closed = await handle.close(discard)
-    if (!closed) return false
-    setClosedConsoles((all) => [...all, reopenable].slice(-MAX_REOPENABLE))
-    // The session goes with the console; siblings and the catalog keep theirs.
-    if (entry.session) {
-      previews.closeSessions([entry.session.session])
-      void consoles
-        .close(open.connection, entry.session.session)
-        .catch(() => undefined)
-      forgetSession(entry.session.session)
-    }
-    const rest = entriesRef.current.filter((item) => item.key !== key)
-    // Now rather than at the next render: a series of closes reads it.
+    const rest = entriesRef.current.filter((item) => !gone.has(item.key))
     entriesRef.current = rest
     setEntries(rest)
-    setMeta(({ [key]: _gone, ...others }) => others)
+    setMeta((all) =>
+      Object.fromEntries(Object.entries(all).filter(([key]) => !gone.has(key)))
+    )
     const last = rest[rest.length - 1]
     if (last) onActivate(last.key)
-    return true
+    return [...gone]
   }
+
+  const finishClose = async (key: string, discard: boolean) =>
+    (await finishCloseMany([key], discard)).includes(key)
 
   // Resolves the close the dialog is deciding: `true` once the console is
   // gone, `false` on Cancel — which ends a series of closes there.
@@ -376,6 +379,11 @@ export function useConsoles({
   const requestClose = (key: string): Promise<boolean> => {
     const handle = handles.current.get(key)
     if (!handle) return Promise.resolve(false)
+    const blocked = handle.closeBlocked?.()
+    if (blocked) {
+      setNotice(blocked)
+      return Promise.resolve(false)
+    }
     const reasons = handle.closeReasons()
     const activity = metaRef.current[key]?.activity
     if (activity === "saving" || activity === "closing") {
@@ -421,21 +429,19 @@ export function useConsoles({
    * confirmed: the window's dialog was the decision, so none asks again.
    * Unsaved text is discarded; a running statement is cancelled as `⌘W`
    * would, and a write whose outcome turns unknown stays flagged, never
-   * replayed (I-13). The window's Cancel stops the series: the console
-   * closing is cancelled as its own dialog's Cancel would — a close the store
-   * already committed still goes — and the next ones are not started.
+   * replayed (I-13). All closes start together; Cancel reaches every pending
+   * write, while a close the store already committed still goes.
    */
   const closeAll = async (signal: AbortSignal) => {
-    for (const entry of [...entriesRef.current]) {
-      if (signal.aborted) return
-      const cancel = () => handles.current.get(entry.key)?.cancelWrite()
-      signal.addEventListener("abort", cancel)
-      try {
-        await finishClose(entry.key, true).catch(() => false)
-      } finally {
-        signal.removeEventListener("abort", cancel)
-      }
-    }
+    const keys = entriesRef.current.map((entry) => entry.key)
+    const closed = await finishCloseMany(keys, true, signal)
+    // A console opened while the writes were pending was not reviewed: keep
+    // the window rather than silently destroying that new work.
+    return (
+      !signal.aborted &&
+      closed.length === keys.length &&
+      entriesRef.current.length === 0
+    )
   }
 
   // Bumped by every decision: an answer to a decision since cancelled neither
@@ -755,6 +761,7 @@ export function useConsoles({
     attach,
     cancelOpening,
     requestClose,
+    finishCloseMany,
     decideClose,
     windowCloseCosts,
     closeAll,

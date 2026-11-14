@@ -1,5 +1,13 @@
+import { ContentHint } from "./content-hint"
 import { Button } from "@/components/ui/button"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import type { SessionPlace } from "@/lib/ipc/consoles"
 
@@ -82,34 +90,43 @@ export function SessionContextPicker({
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-1.5 text-xs">
-        <bdi
-          title={connectionName}
-          className="min-w-0 truncate text-muted-foreground"
-        >
-          {connectionName}
-        </bdi>
+        <ContentHint content={connectionName}>
+          <bdi className="min-w-0 truncate text-muted-foreground">
+            {connectionName}
+          </bdi>
+        </ContentHint>
         <span aria-hidden className="text-muted-foreground">
           /
         </span>
-        <NativeSelect
-          size="sm"
-          aria-label={`Session ${level}`}
+        <Select
+          items={options.map((option) => ({
+            value: key(option),
+            label: label(option),
+          }))}
           value={key(current)}
           disabled={state.status === "changing"}
-          onChange={(event) => {
-            const chosen = options.find(
-              (option) => key(option) === event.target.value
-            )
+          onValueChange={(value) => {
+            const chosen = options.find((option) => key(option) === value)
             if (chosen && key(chosen) !== key(current)) onChoose(chosen)
           }}
-          className="w-44"
         >
-          {options.map((option) => (
-            <NativeSelectOption key={key(option)} value={key(option)}>
-              {label(option)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          <SelectTrigger
+            size="sm"
+            aria-label={`Session ${level}`}
+            className="w-44"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectGroup>
+              {options.map((option) => (
+                <SelectItem key={key(option)} value={key(option)}>
+                  {label(option)}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {state.status === "changing" ? (
           <Button size="xs" variant="ghost" onClick={onCancel}>
             <Spinner data-icon="inline-start" />

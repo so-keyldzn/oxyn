@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AiBrain01Icon, ArrowDown01Icon } from "@hugeicons/core-free-icons"
@@ -97,20 +98,22 @@ export function AssistantThinking({ entry }: { entry: ThinkingEntry }) {
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden">
-        <div
-          data-selectable
-          tabIndex={0}
-          role="region"
-          aria-label="Model reasoning"
-          className="mt-1.5 max-h-72 overflow-auto border-l-2 pl-3 text-xs leading-5 whitespace-pre-wrap text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {entry.text}
-          {entry.redacted ? (
-            <p className="mt-2 italic">
-              Part of this reasoning was hidden by the provider.
-            </p>
-          ) : null}
-        </div>
+        <ScrollArea className="mt-1.5 min-w-0 border-l-2 [&>[data-slot=scroll-area-viewport]]:max-h-72">
+          <div
+            data-selectable
+            tabIndex={0}
+            role="region"
+            aria-label="Model reasoning"
+            className="pl-3 text-xs leading-5 whitespace-pre-wrap text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {entry.text}
+            {entry.redacted ? (
+              <p className="mt-2 italic">
+                Part of this reasoning was hidden by the provider.
+              </p>
+            ) : null}
+          </div>
+        </ScrollArea>
       </CollapsibleContent>
     </Collapsible>
   )

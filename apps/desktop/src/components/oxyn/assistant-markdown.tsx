@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import { CodeBlock } from "@/components/oxyn/assistant-code-block"
@@ -14,6 +15,14 @@ import type {
 } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import type { QueryLanguageName } from "@/lib/query-language"
 import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { cn } from "@/lib/utils"
@@ -201,39 +210,38 @@ function Blocks({
             return <Separator key={index} />
           case "table":
             return (
-              <div
-                key={index}
-                tabIndex={0}
-                role="region"
-                aria-label="Table"
-                className="overflow-x-auto rounded-lg border outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <table className="w-full text-xs">
-                  <thead className="bg-muted/50">
-                    <tr>
-                      {block.header.map((cell, cellIndex) => (
-                        <th
-                          key={cellIndex}
-                          className="px-2 py-1.5 text-left font-medium"
-                        >
-                          <InlineContent nodes={cell} />
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {block.rows.map((row, rowIndex) => (
-                      <tr key={rowIndex} className="border-t">
-                        {row.map((cell, cellIndex) => (
-                          <td key={cellIndex} className="px-2 py-1.5 align-top">
+              <ScrollArea key={index} className="min-w-0 rounded-lg border">
+                <div
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Table"
+                  className="outline-none focus-visible:ring-2 focus-visible:ring-ring [&>[data-slot=table-container]]:overflow-visible"
+                >
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {block.header.map((cell, cellIndex) => (
+                          <TableHead key={cellIndex}>
                             <InlineContent nodes={cell} />
-                          </td>
+                          </TableHead>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {block.rows.map((row, rowIndex) => (
+                        <TableRow key={rowIndex}>
+                          {row.map((cell, cellIndex) => (
+                            <TableCell key={cellIndex} className="align-top">
+                              <InlineContent nodes={cell} />
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
             )
         }
       })}

@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Copy01Icon, SourceCodeIcon } from "@hugeicons/core-free-icons"
 
@@ -101,20 +102,25 @@ export function RelationDefinition({
         ) : null}
       </div>
       {definition.notes.length > 0 ? (
-        <ul className="flex max-h-24 flex-col gap-0.5 overflow-auto text-xs text-muted-foreground">
-          {definition.notes.map((note, index) => (
-            <li key={index}>{note}</li>
-          ))}
-        </ul>
+        <ScrollArea className="max-h-24 [&>[data-slot=scroll-area-viewport]]:max-h-24">
+          <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            {definition.notes.map((note, index) => (
+              <li key={index}>{note}</li>
+            ))}
+          </ul>
+        </ScrollArea>
       ) : null}
-      <pre
-        data-selectable
-        aria-label="Object definition"
-        tabIndex={0}
-        className="overflow-auto rounded-md border bg-card p-3 font-mono text-xs whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {definition.sql}
-      </pre>
+      <ScrollArea className="min-w-0">
+        <pre
+          data-selectable
+          aria-label="Object definition"
+          tabIndex={0}
+          className="rounded-md border bg-card p-3 font-mono text-xs whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {definition.sql}
+        </pre>
+        <ScrollBar orientation="horizontal" />
+      </ScrollArea>
     </div>
   )
 }

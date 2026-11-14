@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -38,7 +39,15 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { Item, ItemContent, ItemFooter } from "@/components/ui/item"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
@@ -240,6 +249,18 @@ export function LibraryPanel({
   const cancelRef = React.useRef<HTMLButtonElement>(null)
   const keepRef = React.useRef<HTMLButtonElement>(null)
   const [menu, setMenu] = React.useState<MenuTarget | null>(null)
+  const connectionItems = [
+    { value: "", label: "All connections" },
+    ...connections,
+    ...(filters.connection !== "" &&
+    !connections.some((option) => option.value === filters.connection)
+      ? [{ value: filters.connection, label: "Connection unavailable" }]
+      : []),
+  ]
+  const periodValue = filters.days === null ? "all" : String(filters.days)
+  const periodItems = PERIODS.some((period) => period.value === periodValue)
+    ? PERIODS
+    : [...PERIODS, { value: periodValue, label: `Last ${periodValue} days` }]
 
   // The entry under the pointer, or the focused one for ⇧F10, by its
   // position in the list shown; between two entries there is no target.
@@ -336,59 +357,88 @@ export function LibraryPanel({
 
       {view !== "saved" ? (
         <div className="flex flex-col gap-1.5">
-          <NativeSelect
-            size="sm"
-            aria-label="Connection"
+          <Select
+            items={connectionItems}
             value={filters.connection}
-            onChange={(event) =>
-              onFiltersChange({ ...filters, connection: event.target.value })
-            }
+            onValueChange={(connection) => {
+              if (connection !== null)
+                onFiltersChange({ ...filters, connection })
+            }}
           >
-            <NativeSelectOption value="">All connections</NativeSelectOption>
-            {connections.map((option) => (
-              <NativeSelectOption key={option.value} value={option.value}>
-                {option.label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+            <SelectTrigger
+              size="sm"
+              aria-label="Connection"
+              className="w-full min-w-0"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {connectionItems.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <div className="flex gap-1.5">
-            <NativeSelect
-              size="sm"
-              aria-label="Period"
-              value={filters.days === null ? "all" : String(filters.days)}
-              onChange={(event) =>
+            <Select
+              items={periodItems}
+              value={periodValue}
+              onValueChange={(value) => {
+                if (value === null) return
                 onFiltersChange({
                   ...filters,
-                  days:
-                    event.target.value === "all"
-                      ? null
-                      : Number(event.target.value),
+                  days: value === "all" ? null : Number(value),
                 })
-              }
+              }}
             >
-              {PERIODS.map((period) => (
-                <NativeSelectOption key={period.value} value={period.value}>
-                  {period.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <NativeSelect
-              size="sm"
-              aria-label="Status"
+              <SelectTrigger
+                size="sm"
+                aria-label="Period"
+                className="min-w-0 flex-1"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {periodItems.map((period) => (
+                    <SelectItem key={period.value} value={period.value}>
+                      {period.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              items={STATUSES}
               value={filters.status}
-              onChange={(event) =>
+              onValueChange={(status) => {
+                if (status === null) return
                 onFiltersChange({
                   ...filters,
-                  status: event.target.value as HistoryStatusChoice,
+                  status,
                 })
-              }
+              }}
             >
-              {STATUSES.map((status) => (
-                <NativeSelectOption key={status.value} value={status.value}>
-                  {status.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                size="sm"
+                aria-label="Status"
+                className="min-w-0 flex-1"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {STATUSES.map((status) => (
+                    <SelectItem key={status.value} value={status.value}>
+                      {status.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
           <p className="text-xs text-muted-foreground">
             {view === "results"
@@ -405,10 +455,7 @@ export function LibraryPanel({
       <ContextMenu>
         <ContextMenuTrigger
           render={
-            <div
-              className="min-h-0 flex-1 overflow-y-auto"
-              onContextMenu={pickTarget}
-            />
+            <ScrollArea className="min-h-0 flex-1" onContextMenu={pickTarget} />
           }
         >
           {state.status === "loading" ? (
@@ -449,38 +496,43 @@ export function LibraryPanel({
           ) : state.status === "history" ? (
             <ul className="flex flex-col gap-1">
               {state.entries.map((row, index) => (
-                <li
+                <Item
                   key={row.id}
+                  render={<li />}
+                  variant="outline"
+                  size="xs"
                   data-library-entry={index}
-                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                  className="flex-col items-stretch gap-1 p-2 text-xs"
                 >
-                  {/* Selecting the entry reads its full text, read only; the
+                  <ItemContent className="min-w-0">
+                    {/* Selecting the entry reads its full text, read only; the
                     preview is cut at 256 characters. */}
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="h-auto justify-start p-1 text-left font-normal whitespace-normal"
-                    onClick={() => onInspectHistory(row)}
-                  >
-                    <code className="line-clamp-2 font-mono break-all">
-                      {row.preview}
-                    </code>
-                  </Button>
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    {row.fromAgent ? (
-                      <span className="shrink-0">AI ·</span>
-                    ) : null}
-                    <span dir="auto" className="min-w-0 truncate">
-                      {row.connectionName ?? "Connection unavailable"}
-                    </span>
-                    <span>·</span>
-                    <span className="shrink-0 tabular-nums">
-                      {when(row.at)}
-                    </span>
-                  </div>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-auto justify-start p-1 text-left font-normal whitespace-normal"
+                      onClick={() => onInspectHistory(row)}
+                    >
+                      <code className="line-clamp-2 font-mono break-all">
+                        {row.preview}
+                      </code>
+                    </Button>
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      {row.fromAgent ? (
+                        <span className="shrink-0">AI ·</span>
+                      ) : null}
+                      <span dir="auto" className="min-w-0 truncate">
+                        {row.connectionName ?? "Connection unavailable"}
+                      </span>
+                      <span>·</span>
+                      <span className="shrink-0 tabular-nums">
+                        {when(row.at)}
+                      </span>
+                    </div>
+                  </ItemContent>
                   {/* Wraps: the panel is 280 px wide in the sidebar, and two
                     actions beside a badge do not fit on one line there. */}
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  <ItemFooter className="basis-auto flex-wrap justify-start gap-1.5">
                     {row.needsInspection ? (
                       <Badge variant="destructive">
                         <HugeiconsIcon
@@ -552,37 +604,44 @@ export function LibraryPanel({
                         onClick={() => onOpenHistory(row)}
                       />
                     )}
-                  </div>
-                </li>
+                  </ItemFooter>
+                </Item>
               ))}
             </ul>
           ) : (
             <ul className="flex flex-col gap-1">
               {state.entries.map((entry, index) => (
-                <li
+                <Item
                   key={entry.id}
+                  render={<li />}
+                  variant="outline"
+                  size="xs"
                   data-library-entry={index}
-                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                  className="flex-col items-stretch gap-1 p-2 text-xs"
                 >
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="h-auto min-w-0 justify-start p-1 text-left"
-                    onClick={() => onInspectSaved(entry)}
-                  >
-                    <span dir="auto" className="truncate font-medium">
-                      {entry.fromAgent ? "AI · " : ""}
-                      {entry.title === "" ? "Untitled query" : entry.title}
-                    </span>
-                  </Button>
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <span dir="auto" className="min-w-0 truncate">
-                      {entry.connectionName ?? "No connection"}
-                    </span>
-                    <span>·</span>
-                    <span>{entry.hasChanges ? "Draft changed" : "Saved"}</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1">
+                  <ItemContent className="min-w-0">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-auto min-w-0 justify-start p-1 text-left"
+                      onClick={() => onInspectSaved(entry)}
+                    >
+                      <span dir="auto" className="truncate font-medium">
+                        {entry.fromAgent ? "AI · " : ""}
+                        {entry.title === "" ? "Untitled query" : entry.title}
+                      </span>
+                    </Button>
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <span dir="auto" className="min-w-0 truncate">
+                        {entry.connectionName ?? "No connection"}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        {entry.hasChanges ? "Draft changed" : "Saved"}
+                      </span>
+                    </div>
+                  </ItemContent>
+                  <ItemFooter className="basis-auto flex-wrap justify-start gap-1">
                     <OpenCopyButton
                       destination={currentConnectionName}
                       onClick={() => onOpenSaved(entry)}
@@ -610,8 +669,8 @@ export function LibraryPanel({
                     >
                       <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
                     </Button>
-                  </div>
-                </li>
+                  </ItemFooter>
+                </Item>
               ))}
             </ul>
           )}

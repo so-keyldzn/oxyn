@@ -33,7 +33,7 @@ export const PreviewPage: Story = {
   args: {
     note: "Total count not requested",
     actions: (
-      <Button size="xs" variant="outline">
+      <Button size="sm" variant="outline">
         Export preview…
       </Button>
     ),
@@ -124,7 +124,7 @@ export const Narrow: Story = {
     },
     note: "Total count not requested",
     actions: (
-      <Button size="xs" variant="outline">
+      <Button size="sm" variant="outline">
         Export…
       </Button>
     ),

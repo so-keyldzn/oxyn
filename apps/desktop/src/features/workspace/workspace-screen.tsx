@@ -15,6 +15,8 @@ import {
 } from "@/components/oxyn/loaded-node"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { CloseConsoleDialog } from "@/components/oxyn/close-console-dialog"
+import { CloseTabsDialog } from "@/components/oxyn/close-tabs-dialog"
+import { useCloseTabs } from "@/features/workspace/use-close-tabs"
 import { DEFINITION_WIDTH } from "@/components/oxyn/definition-beside"
 import { StatusBar } from "@/components/oxyn/status-bar"
 import { WorkspaceAside } from "@/components/oxyn/workspace-aside"
@@ -209,14 +211,17 @@ export function WorkspaceScreen({
   const { sidebarOpen, setSidebarOpen, asideOpen, setAsideOpen } =
     usePanelPreferences(compact)
   const [leftView, setLeftView] = React.useState<LeftView>("catalog")
-  const [asideActive, setAsideActive] = React.useState(aside[0]?.id ?? "")
+  const inspectors = aside.filter((item) => item.id !== "assistant")
+  const assistant = aside.find((item) => item.id === "assistant") ?? null
+  const [asideActive, setAsideActive] = React.useState(inspectors[0]?.id ?? "")
+  const [assistantOpen, setAssistantOpen] = React.useState(false)
   const inspectorWidth = useSelector(
     preferencesStore,
     (state) => state.preferences.inspectorWidth
   )
   // `Ask AI` exists only when the assistant panel does: the column composes
   // itself from what is declared (docs/UX-SPEC.md).
-  const hasAssistant = aside.some((item) => item.id === "assistant")
+  const hasAssistant = assistant !== null
   const assistantEntry = useAssistantAvailable(open)
   // The destination the panel would send to: the tier label says where it
   // resolved, never where a provider is supposed to be.
@@ -335,7 +340,8 @@ export function WorkspaceScreen({
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
 
-  const asideItem = aside.find((item) => item.id === asideActive) ?? aside[0]
+  const asideItem =
+    inspectors.find((item) => item.id === asideActive) ?? inspectors[0]
 
   const openObject = (
     opened: CatalogNode,
@@ -481,20 +487,6 @@ export function WorkspaceScreen({
     else setActive(null)
     activeRef.current = fallback
     return true
-  }
-
-  // `Close others`, `Close to the right`, `Close all`: one tab at a time,
-  // each console asking as it would alone; Cancel ends the series there
-  // (UX-SPEC, « Context menus », Onglet). One series at a time.
-  const closing = React.useRef(false)
-  const closeSeries = async (keys: ReadonlyArray<string>) => {
-    if (closing.current) return
-    closing.current = true
-    try {
-      for (const key of keys) if (!(await closeTab(key))) return
-    } finally {
-      closing.current = false
-    }
   }
 
   // The console whose name `Rename…` is changing.
@@ -649,7 +641,7 @@ export function WorkspaceScreen({
           consoleCount: work.entries.length,
           objectActive:
             active !== null && objects.some((tab) => tab.key === active),
-          hasAside: aside.length > 0,
+          hasAside: inspectors.length > 0,
           hasAssistant,
           reopenable: work.reopenable,
         }
@@ -671,11 +663,10 @@ export function WorkspaceScreen({
       focusConsole,
       toggleSidebar: () => toggleSidebar.current?.(),
       toggleAside: () => {
-        if (aside.length > 0) setAsideOpen(!asideOpen)
+        if (inspectors.length > 0) setAsideOpen(!asideOpen)
       },
       openAssistant: () => {
-        setAsideActive("assistant")
-        setAsideOpen(true)
+        setAssistantOpen(true)
         setFocusAssistant((count) => count + 1)
       },
       switchConnection: onSwitchConnection,
@@ -769,6 +760,54 @@ export function WorkspaceScreen({
     return "blocked" in carried ? carried.blocked : null
   }
 
+  const closeTabs = useCloseTabs({
+    targets: () =>
+      tabs.map((tab) => {
+        const handle = work.handles.current.get(tab.key)
+        const activity = work.meta[tab.key]?.activity
+        return {
+          key: tab.key,
+          title: tab.title,
+          reasons: handle?.closeReasons() ?? null,
+          blocked:
+            handle?.closeBlocked?.() ??
+            (exporting.has(tab.key)
+              ? "Finish or cancel the export before closing this tab."
+              : activity === "saving" || activity === "closing"
+                ? "Wait for the current save or close, or cancel it."
+                : null),
+        }
+      }),
+    save: (key) =>
+      work.handles.current.get(key)?.save() ?? Promise.resolve(false),
+    cancelWrite: (key) => work.handles.current.get(key)?.cancelWrite(),
+    close: async (keys, discard, signal) => {
+      const closed = await work.finishCloseMany(
+        keys.filter((key) => key.startsWith("console:")),
+        discard,
+        signal
+      )
+      if (signal.aborted) return closed
+      const plain = keys.filter(
+        (key) => !key.startsWith("console:") && !exporting.has(key)
+      )
+      const gone = new Set([...closed, ...plain])
+      const remaining = objectsRef.current.filter((tab) => !gone.has(tab.key))
+      objectsRef.current = remaining
+      for (const key of plain) sections.current.delete(key)
+      keepPlace(remaining[remaining.length - 1])
+      setObjects((all) => all.filter((tab) => !gone.has(tab.key)))
+      setRetained((all) => all.filter((tab) => !gone.has(tab.key)))
+      if (activeRef.current !== null && gone.has(activeRef.current)) {
+        const next = tabs.find((tab) => !gone.has(tab.key))?.key ?? null
+        activeRef.current = next
+        if (next) activate(next)
+        else setActive(null)
+      }
+      return [...gone]
+    },
+  })
+
   // The target of a tab's context menu: the same functions as the tab's
   // cross, ⌘W, the console's « Query name » field and the library switch
   // (I-01).
@@ -789,9 +828,9 @@ export function WorkspaceScreen({
       },
       actions: {
         close: () => void closeTab(key),
-        closeOthers: () => void closeSeries(others),
-        closeRight: () => void closeSeries(right),
-        closeAll: () => void closeSeries(tabs.map((tab) => tab.key)),
+        closeOthers: () => closeTabs.request(others),
+        closeRight: () => closeTabs.request(right),
+        closeAll: () => closeTabs.request(tabs.map((tab) => tab.key)),
         // Offered on every tab, so that an object's menu says why it
         // cannot: the registry greys them on `console`.
         duplicate: () => {
@@ -935,10 +974,9 @@ export function WorkspaceScreen({
               entry={assistantEntry}
               tier={open.privacyTier}
               reach={reach}
-              pressed={asideOpen && asideActive === "assistant"}
+              pressed={assistantOpen}
               onPressedChange={(pressed) => {
-                setAsideActive("assistant")
-                setAsideOpen(pressed)
+                setAssistantOpen(pressed)
                 if (pressed) setFocusAssistant((count) => count + 1)
               }}
             />
@@ -950,7 +988,7 @@ export function WorkspaceScreen({
         aside={
           asideItem ? (
             <WorkspaceAside
-              items={aside}
+              items={inspectors}
               active={asideItem.id}
               onActiveChange={setAsideActive}
               onClose={() => setAsideOpen(false)}
@@ -958,6 +996,9 @@ export function WorkspaceScreen({
           ) : null
         }
         asideOpen={asideOpen}
+        assistant={assistant?.content ?? null}
+        assistantOpen={assistantOpen}
+        onAssistantOpenChange={setAssistantOpen}
         onAsideOpenChange={setAsideOpen}
         asideWidth={inspectorWidth}
         onAsideWidthCommit={(width) =>
@@ -1125,6 +1166,12 @@ export function WorkspaceScreen({
         onCancel={() => void work.decideClose("cancel")}
         onSave={() => void work.decideClose("save")}
         onDiscard={() => void work.decideClose("discard")}
+      />
+      <CloseTabsDialog
+        review={visible ? closeTabs.review : null}
+        onCancel={closeTabs.cancel}
+        onSave={() => void closeTabs.decide("save")}
+        onDiscard={() => void closeTabs.decide("discard")}
       />
       <RenameConsoleDialog
         title={visible ? (renaming?.title ?? null) : null}

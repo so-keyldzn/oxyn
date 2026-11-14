@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
@@ -210,14 +211,16 @@ export function ObjectOperationReviewDialog({
         ) : null}
 
         {review && problem === null ? (
-          <pre
-            data-selectable
-            tabIndex={0}
-            aria-label="Statement to run"
-            className="max-h-40 overflow-auto rounded-md border bg-card p-3 font-mono text-xs leading-5 break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {review.sql}
-          </pre>
+          <ScrollArea className="max-h-40 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-40">
+            <pre
+              data-selectable
+              tabIndex={0}
+              aria-label="Statement to run"
+              className="rounded-md border bg-card p-3 font-mono text-xs leading-5 break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {review.sql}
+            </pre>
+          </ScrollArea>
         ) : null}
 
         {review ? (
@@ -371,13 +374,15 @@ function KeyList({ keys }: { keys: Array<IncomingKeyRow> }) {
         Referenced by{" "}
         {keys.length === 1 ? "one foreign key" : `${keys.length} foreign keys`}:
       </p>
-      <ul className="mt-1 flex max-h-24 flex-col gap-0.5 overflow-auto">
-        {keys.map((key, index) => (
-          <li key={index} className="font-mono wrap-anywhere text-foreground">
-            <bdi>{sourceLabel(key.source)}</bdi> ({key.key.fields.join(", ")})
-          </li>
-        ))}
-      </ul>
+      <ScrollArea className="mt-1 max-h-24 min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-24">
+        <ul className="flex flex-col gap-0.5">
+          {keys.map((key, index) => (
+            <li key={index} className="font-mono wrap-anywhere text-foreground">
+              <bdi>{sourceLabel(key.source)}</bdi> ({key.key.fields.join(", ")})
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
     </div>
   )
 }

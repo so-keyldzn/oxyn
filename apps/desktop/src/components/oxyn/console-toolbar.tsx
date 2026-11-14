@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -13,6 +14,8 @@ import { ReadOnlyBadge } from "@/components/oxyn/read-only-badge"
 import { TransactionBadge } from "@/components/oxyn/transaction-badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
+import { Label } from "@/components/ui/label"
+import { Toggle } from "@/components/ui/toggle"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -292,11 +295,10 @@ export function ConsoleToolbar({
               : `${actionShortcut("console.run")} executes: ${target === "selection" ? "selection" : "current statement"}`}
         </span>
         {parameterCount === null ? null : (
-          <Button
+          <Toggle
             size="sm"
-            variant={parametersOpen ? "secondary" : "ghost"}
-            aria-pressed={parametersOpen}
-            onClick={onToggleParameters}
+            pressed={parametersOpen}
+            onPressedChange={onToggleParameters}
           >
             <HugeiconsIcon
               icon={LeftToRightListBulletIcon}
@@ -305,7 +307,7 @@ export function ConsoleToolbar({
             />
             Parameters
             <span className="tabular-nums">· {parameterCount}</span>
-          </Button>
+          </Toggle>
         )}
         {readOnly ? <ReadOnlyBadge /> : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
@@ -314,9 +316,9 @@ export function ConsoleToolbar({
         </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <label htmlFor={titleId} className="text-xs text-muted-foreground">
+        <Label htmlFor={titleId} className="text-xs text-muted-foreground">
           Query name
-        </label>
+        </Label>
         <TextInput
           id={titleId}
           value={title}
@@ -368,19 +370,18 @@ export function ConsoleToolbar({
             {closing ? "Cancel close" : "Cancel save"}
           </Button>
         ) : null}
-        <span
-          id={noticeId}
-          role="status"
-          // Truncated on a narrow window, so the whole sentence stays reachable
-          // by pointer as well as by the field that describes it.
-          title={notice}
-          className={cn(
-            "min-w-0 truncate text-xs",
-            noticeWarns ? "text-warning" : "text-muted-foreground"
-          )}
-        >
-          {notice}
-        </span>
+        <ContentHint content={notice}>
+          <span
+            id={noticeId}
+            role="status"
+            className={cn(
+              "min-w-0 truncate text-xs",
+              noticeWarns ? "text-warning" : "text-muted-foreground"
+            )}
+          >
+            {notice}
+          </span>
+        </ContentHint>
       </div>
     </div>
   )

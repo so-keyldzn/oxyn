@@ -104,6 +104,11 @@ vi.mock("@/components/oxyn/assistant-view", () => ({
 }))
 
 // The side column and the resizable group measure themselves; jsdom cannot.
+// ScrollArea observes animations, but jsdom has no Web Animations API.
+Object.defineProperty(Element.prototype, "getAnimations", {
+  configurable: true,
+  value: () => [],
+})
 vi.stubGlobal(
   "ResizeObserver",
   class {

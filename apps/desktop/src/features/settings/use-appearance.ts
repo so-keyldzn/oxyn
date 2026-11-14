@@ -7,7 +7,11 @@ import {
   preferencesStore,
 } from "./preferences"
 import { useActionSource } from "@/lib/actions/context"
-import type { DensityChoice, ThemeChoice } from "@/lib/ipc/settings"
+import type {
+  DensityChoice,
+  ThemeChoice,
+  PaletteChoice,
+} from "@/lib/ipc/settings"
 
 const DARK_QUERY = "(prefers-color-scheme: dark)"
 
@@ -27,12 +31,17 @@ export function applyAppearance(
   root: HTMLElement,
   theme: ThemeChoice,
   density: DensityChoice,
-  systemDark: boolean
+  systemDark: boolean,
+  palettes: { lightPalette: PaletteChoice; darkPalette: PaletteChoice } = {
+    lightPalette: "oxyn",
+    darkPalette: "oxyn",
+  }
 ) {
   const dark = resolvesToDark(theme, systemDark)
   root.classList.toggle("dark", dark)
   root.style.colorScheme = dark ? "dark" : "light"
   root.dataset.density = density
+  root.dataset.palette = dark ? palettes.darkPalette : palettes.lightPalette
 }
 
 /** Reads the preferences at startup and keeps `<html>` in step with them. */
@@ -45,13 +54,21 @@ export function useAppearance() {
     preferencesStore,
     (state) => state.preferences.readingDensity
   )
+  const lightPalette = useSelector(
+    preferencesStore,
+    (state) => state.preferences.lightPalette
+  )
+  const darkPalette = useSelector(
+    preferencesStore,
+    (state) => state.preferences.darkPalette
+  )
 
   React.useEffect(() => {
     void loadPreferences()
   }, [])
 
   // `View ▸ Text size` and `View ▸ Theme`: the same choice as the settings
-  // and the result bar, saved the same way (UX-SPEC, « Menu bar »).
+  // saved the same way (UX-SPEC, « Menu bar »).
   useActionSource(
     "appearance",
     { theme, density },
@@ -65,11 +82,14 @@ export function useAppearance() {
   React.useEffect(() => {
     const media = window.matchMedia(DARK_QUERY)
     const apply = () =>
-      applyAppearance(document.documentElement, theme, density, media.matches)
+      applyAppearance(document.documentElement, theme, density, media.matches, {
+        lightPalette,
+        darkPalette,
+      })
     apply()
     // Only a `system` choice follows the operating system as it changes.
     if (theme !== "system") return
     media.addEventListener("change", apply)
     return () => media.removeEventListener("change", apply)
-  }, [theme, density])
+  }, [theme, density, lightPalette, darkPalette])
 }

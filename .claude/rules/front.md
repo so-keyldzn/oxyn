@@ -100,6 +100,16 @@ a **measured** decision — the comment carries the figures. Do not "simplify" i
 | `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#first-workspace-navigation) mandates Hugeicons |
 | `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` from `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` from `components/ui` — ESLint refuses them | macOS would replace `'` with `’` in a connection string ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8); any other field (CodeMirror, Lexical, `CommandInput`) receives `TEXT_FIELD_ATTRIBUTES` |
 | React text (`{value}`) | `dangerouslySetInnerHTML` on received data | a cell, an object name or a model response are hostile inputs ([SECURITY](../../docs/SECURITY.md#input-surface)) |
+| `Select`, `SelectTrigger`, `SelectValue`, `SelectContent`, `SelectGroup` and `SelectItem` for option lists | `NativeSelect` or a native `<select>` — ESLint refuses the component imports | an operating-system menu does not follow the workspace palette; keep keyboard navigation and name the trigger/listbox |
+
+Production JSX uses shadcn primitives for buttons, fields, option lists and
+popups, not raw native controls. ESLint also rejects direct Base UI imports
+outside generated `ui/` and native HTML `title` tooltips. Use `ContentHint` or
+`Tooltip` for hints; keep essential information in accessible labels and text.
+Virtualized grids and editor engines retain their specialized semantic markup.
+
+This applies to in-app option lists. Native file pickers and the host's critical
+confirmations retain their security role.
 
 `src/components/ui` is **generated**: it is neither formatted nor linted by the
 project, and a touch-up there is overwritten at the next

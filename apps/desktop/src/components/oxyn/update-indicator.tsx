@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, Download04Icon } from "@hugeicons/core-free-icons"
@@ -140,13 +141,15 @@ export function UpdateIndicator({
                 {failedTitle(pending.failure, pending.version)}
               </PopoverTitle>
             </PopoverHeader>
-            <pre
-              data-selectable
-              dir="auto"
-              className="max-h-40 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground"
-            >
-              {pending.message}
-            </pre>
+            <ScrollArea className="max-h-40 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-40">
+              <pre
+                data-selectable
+                dir="auto"
+                className="rounded-md border bg-muted/40 p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground"
+              >
+                {pending.message}
+              </pre>
+            </ScrollArea>
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 ref={settingsRef}

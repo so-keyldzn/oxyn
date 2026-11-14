@@ -29,7 +29,7 @@ import {
 } from "@/features/session"
 import { requestConnectionChange } from "@/features/settings/connections-settings"
 import type { ConnectionRequest } from "@/features/settings/connections-settings"
-import { openSettings } from "@/features/settings/settings-dialog"
+import { openSettings } from "@/features/settings/settings-dialog-state"
 import { usePendingTransactions } from "@/features/workspace/pending-transactions"
 import { actionSources } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"

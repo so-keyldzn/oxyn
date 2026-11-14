@@ -3,6 +3,7 @@ import { expect, fn, screen, userEvent, waitFor } from "storybook/test"
 
 import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { LibraryPanel } from "./library-panel"
+import { chooseSelectOption } from "./select-story"
 import type { DocumentEntry, HistoryRow } from "@/lib/ipc/library"
 
 const CURRENT = "018f0000-0000-7000-8000-000000000001"
@@ -120,6 +121,33 @@ export const History: Story = {
     // The agent's statement says so in the list, before any copy.
     await expect(canvas.getAllByText("AI ·")).toHaveLength(1)
     await expect(canvas.queryByText(new RegExp(CURRENT))).toBeNull()
+  },
+}
+
+export const FiltersUseTheAppPopup: Story = {
+  args: { filters: { connection: CURRENT, days: 7, status: "all" } },
+  play: async ({ canvas, args }) => {
+    await chooseSelectOption(
+      canvas.getByRole("combobox", { name: "Connection" }),
+      "All connections"
+    )
+    await expect(args.onFiltersChange).toHaveBeenCalledWith(
+      expect.objectContaining({ connection: "" })
+    )
+    await chooseSelectOption(
+      canvas.getByRole("combobox", { name: "Period" }),
+      "Last 30 days"
+    )
+    await expect(args.onFiltersChange).toHaveBeenCalledWith(
+      expect.objectContaining({ days: 30 })
+    )
+    await chooseSelectOption(
+      canvas.getByRole("combobox", { name: "Status" }),
+      "Failed"
+    )
+    await expect(args.onFiltersChange).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" })
+    )
   },
 }
 

@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import type { IconSvgElement } from "@hugeicons/react"
@@ -17,7 +18,8 @@ import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
-import { TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TabsTrigger } from "@/components/ui/tabs"
+import { ScrollableTabsList } from "@/components/oxyn/scrollable-tabs-list"
 import {
   Tooltip,
   TooltipContent,
@@ -172,17 +174,7 @@ export function WorkspaceTabs({
       >
         <ContextMenuTrigger
           render={
-            <TabsList
-              ref={strip}
-              variant="line"
-              aria-label="Workspace tabs"
-              // The strip fills the 48 px bar rather than sitting at the 32 px the
-              // list defaults to: `variant="line"` draws the active tab's underline
-              // 5 px *below* the trigger, and `overflow-x-auto` — which makes the
-              // vertical axis scrollable too — clips it out of sight otherwise.
-              // The default carries the `horizontal` variant, so the override must.
-              className="min-w-0 [scrollbar-width:none] justify-start overflow-x-auto group-data-horizontal/tabs:h-12"
-            />
+            <ScrollableTabsList ref={strip} aria-label="Workspace tabs" />
           }
         >
           {tabs.map((tab, index) => {
@@ -219,11 +211,6 @@ export function WorkspaceTabs({
                     .filter(Boolean)
                     .join(" ") || undefined
                 }
-                title={
-                  closable
-                    ? title
-                    : `${title} — finish or cancel the export to close`
-                }
                 onKeyDown={(event) => {
                   if (event.key === "Delete" || event.key === "Backspace") {
                     event.preventDefault()
@@ -254,9 +241,17 @@ export function WorkspaceTabs({
                 )}
               >
                 <HugeiconsIcon icon={iconOf(tab)} strokeWidth={2} />
-                <span dir="auto" className="min-w-0 truncate">
-                  {title}
-                </span>
+                <ContentHint
+                  content={
+                    closable
+                      ? title
+                      : `${title} — finish or cancel the export to close`
+                  }
+                >
+                  <span dir="auto" className="min-w-0 truncate">
+                    {title}
+                  </span>
+                </ContentHint>
                 {state ? (
                   <span className="shrink-0 text-[length:var(--reading-caption)] font-normal text-muted-foreground">
                     · {STATE_LABEL[state]}

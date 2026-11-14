@@ -1,6 +1,13 @@
 import { useId } from "react"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 /** A console's temporary objects remain attached to that console's session. */
 export function CatalogSource({
@@ -13,21 +20,33 @@ export function CatalogSource({
   onChange: (id: string) => void
 }) {
   const id = useId()
+  const items = [
+    { value: "", label: "Connection catalog" },
+    ...choices.map((choice) => ({ value: choice.id, label: choice.label })),
+  ]
   return (
     <Field className="p-3">
       <FieldLabel htmlFor={id}>Browse session</FieldLabel>
-      <NativeSelect
-        id={id}
+      <Select
+        items={items}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onValueChange={(next) => {
+          if (typeof next === "string") onChange(next)
+        }}
       >
-        <NativeSelectOption value="">Connection catalog</NativeSelectOption>
-        {choices.map((choice) => (
-          <NativeSelectOption key={choice.id} value={choice.id}>
-            {choice.label}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+        <SelectTrigger id={id} aria-label="Browse session" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectGroup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       {value !== "" && (
         <FieldDescription>
           Objects use this console’s session. If a data preview occupies it,

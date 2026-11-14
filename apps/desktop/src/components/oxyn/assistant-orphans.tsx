@@ -1,4 +1,6 @@
+import { ContentHint } from "./content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
 
 import {
@@ -65,9 +67,11 @@ export function AssistantOrphans({ state }: { state: OrphanThreadsState }) {
           their connection is gone, so they cannot be continued here.
         </p>
         {state.status === "error" ? (
-          <p role="alert" className="text-xs text-destructive" data-selectable>
-            They could not be listed: {state.message}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription data-selectable>
+              They could not be listed: {state.message}
+            </AlertDescription>
+          </Alert>
         ) : null}
         {state.status === "ready" ? (
           <ul
@@ -79,13 +83,11 @@ export function AssistantOrphans({ state }: { state: OrphanThreadsState }) {
                 key={item.id}
                 className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5"
               >
-                <span
-                  className="min-w-0 truncate text-sm"
-                  dir="auto"
-                  title={item.title || UNTITLED}
-                >
-                  {item.title || UNTITLED}
-                </span>
+                <ContentHint content={item.title || UNTITLED}>
+                  <span className="min-w-0 truncate text-sm" dir="auto">
+                    {item.title || UNTITLED}
+                  </span>
+                </ContentHint>
                 <span className="min-w-0 truncate text-xs text-muted-foreground">
                   on <bdi>{item.connectionName ?? UNNAMED}</bdi> ·{" "}
                   <span className="tabular-nums">

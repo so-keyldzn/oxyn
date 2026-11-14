@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
@@ -175,7 +176,7 @@ export function RecoveryScreen() {
         className="h-12 shrink-0"
         data-slot="recovery-title-bar"
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <ScrollArea className="min-h-0 flex-1">
         <RecoveryList
           // The backend's `abnormal` holds for the whole process: only the
           // opening that followed the launch may repeat it.
@@ -212,7 +213,7 @@ export function RecoveryScreen() {
           backLabel={hasWorkspace ? "Back to workspace" : "Back to connections"}
           onBack={back}
         />
-      </div>
+      </ScrollArea>
     </main>
   )
 }

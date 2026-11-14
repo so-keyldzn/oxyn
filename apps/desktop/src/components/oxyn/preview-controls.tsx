@@ -15,7 +15,14 @@ import {
   InputGroupButton,
   InputGroupText,
 } from "@/components/ui/input-group"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Popover,
   PopoverContent,
@@ -318,39 +325,60 @@ function SortComposer({
                     <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">
                       {index + 1}
                     </span>
-                    <NativeSelect
-                      size="sm"
-                      className="min-w-0 flex-1"
-                      aria-label={`Sort column ${index + 1}`}
+                    <Select
+                      items={[key.column, ...unused].map((column) => ({
+                        value: column,
+                        label: column,
+                      }))}
                       value={key.column}
-                      onChange={(event) =>
-                        update(index, { ...key, column: event.target.value })
-                      }
+                      onValueChange={(column) => {
+                        if (column !== null) update(index, { ...key, column })
+                      }}
                     >
-                      {[key.column, ...unused].map((column) => (
-                        <NativeSelectOption key={column} value={column}>
-                          {column}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                    <NativeSelect
-                      size="sm"
-                      aria-label={`Direction of sort column ${index + 1}`}
+                      <SelectTrigger
+                        size="sm"
+                        className="min-w-0 flex-1"
+                        aria-label={`Sort column ${index + 1}`}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {[key.column, ...unused].map((column) => (
+                            <SelectItem key={column} value={column}>
+                              {column}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      items={[
+                        { value: "asc", label: "Ascending" },
+                        { value: "desc", label: "Descending" },
+                      ]}
                       value={key.descending ? "desc" : "asc"}
-                      onChange={(event) =>
+                      onValueChange={(direction) => {
+                        if (direction === null) return
                         update(index, {
                           ...key,
-                          descending: event.target.value === "desc",
+                          descending: direction === "desc",
                         })
-                      }
+                      }}
                     >
-                      <NativeSelectOption value="asc">
-                        Ascending
-                      </NativeSelectOption>
-                      <NativeSelectOption value="desc">
-                        Descending
-                      </NativeSelectOption>
-                    </NativeSelect>
+                      <SelectTrigger
+                        size="sm"
+                        aria-label={`Direction of sort column ${index + 1}`}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value="asc">Ascending</SelectItem>
+                          <SelectItem value="desc">Descending</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                     <Button
                       size="icon-xs"
                       variant="ghost"

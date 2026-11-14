@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Copy01Icon } from "@hugeicons/core-free-icons"
 
@@ -98,13 +99,14 @@ export function RelationConstraints({
               <TableCell className="max-w-96">
                 {constraint.expression ? (
                   <span className="flex min-w-0 items-center gap-1">
-                    <code
-                      data-selectable
-                      className="truncate font-mono text-xs"
-                      title={constraint.expression}
-                    >
-                      {constraint.expression}
-                    </code>
+                    <ContentHint content={constraint.expression}>
+                      <code
+                        data-selectable
+                        className="truncate font-mono text-xs"
+                      >
+                        {constraint.expression}
+                      </code>
+                    </ContentHint>
                     <Button
                       size="icon-xs"
                       variant="ghost"

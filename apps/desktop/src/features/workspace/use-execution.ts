@@ -228,7 +228,8 @@ export function useExecution({
 
   const decide = (approved: boolean) => {
     // A double click must not send the decision twice.
-    if (!approval || deciding) return
+    if (!approval || deciding || pendingApproval.current !== approval.command)
+      return
     const command = approval.command
     pendingApproval.current = null
     // The decision is tracked under the pending command's own id: that is the
@@ -236,6 +237,9 @@ export function useExecution({
     current.current = command
     setDeciding(true)
     if (approved) {
+      // The decision awaits the execution itself. Keeping its modal open
+      // would trap focus away from Stop until the server finishes.
+      setApproval(null)
       // The approved command runs on the session its request named.
       watch(command, session.current)
       setRunning(command)

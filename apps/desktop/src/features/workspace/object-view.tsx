@@ -52,7 +52,6 @@ import {
   gridInspection,
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
-import { useResultDensity } from "@/features/settings/use-result-density"
 import { useResultExport } from "@/features/workspace/export-menu"
 import { useGridMenu } from "@/features/workspace/grid-menu"
 import { sectionOf, tabOf } from "@/features/workspace/object-location"
@@ -237,7 +236,7 @@ export function ObjectView({
 
   const { ensure } = facets
   React.useEffect(() => {
-    if (held) return
+    if (held || !active) return
     switch (tab) {
       // The rows are paged by the relation's key, which only its description
       // tells the backend (ADR-0068): described once, like the Structure tab.
@@ -263,7 +262,7 @@ export function ObjectView({
     // Asked once, like a tab: a window resized across 1200 px reads nothing.
     if (!compact && tab !== "data" && !unsupportedReason(open, "definition"))
       ensure("definition")
-  }, [held, tab, direction, compact, ensure])
+  }, [held, active, tab, direction, compact, ensure])
 
   const data = facets.facets
   const state = preview.state
@@ -348,7 +347,6 @@ export function ObjectView({
     data?.detail.freshness.state === "fetched" &&
     data.detail.value === null
 
-  const density = useResultDensity()
   const filterRef = React.useRef<HTMLInputElement>(null)
   const { applySort } = preview
   const sortable = open.capabilities.includes("PREVIEW_SORT")
@@ -520,7 +518,6 @@ export function ObjectView({
                       preview.pagination,
                       state.status === "populated" ? state.rows : 0
                     )}
-                    density={density}
                     gridMenu={gridMenu}
                     // Compact: the export sits in `Actions`, and the footer shows
                     // only a running export's progress and its Cancel.

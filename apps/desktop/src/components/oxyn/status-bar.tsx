@@ -1,3 +1,5 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { ContentHint } from "./content-hint"
 import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -186,9 +188,9 @@ export function StatusBar({
     >
       <span className="flex min-w-0 items-center gap-1.5 text-foreground">
         <DriverLogo driver={driver} className="size-3.5 shrink-0" />
-        <bdi className="truncate" title={connectionName}>
-          {connectionName}
-        </bdi>
+        <ContentHint content={connectionName}>
+          <bdi className="truncate">{connectionName}</bdi>
+        </ContentHint>
       </span>
       <span className="shrink-0 @max-2xl:hidden">{driver}</span>
       <EnvironmentBadge environment={environment} className="@max-md:hidden" />
@@ -248,14 +250,16 @@ export function StatusBar({
               <PopoverHeader>
                 <PopoverTitle>What the server answered</PopoverTitle>
               </PopoverHeader>
-              <pre
-                data-selectable
-                tabIndex={0}
-                aria-label="Server message"
-                className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {failure.message}
-              </pre>
+              <ScrollArea className="max-h-64 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-64">
+                <pre
+                  data-selectable
+                  tabIndex={0}
+                  aria-label="Server message"
+                  className="rounded-md border bg-muted/40 p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {failure.message}
+                </pre>
+              </ScrollArea>
             </PopoverContent>
           </Popover>
         ) : null}

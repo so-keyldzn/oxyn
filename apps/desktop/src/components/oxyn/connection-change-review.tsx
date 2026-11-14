@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
@@ -107,19 +108,20 @@ export function ConnectionChangeReview({
           <AlertDialogCancel ref={cancelRef} disabled={deciding}>
             Cancel
           </AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={deciding}
-            onClick={() => onDecide(true)}
-            // The name is whatever the user typed: bounded here, in full above.
-            title={`${action.verb} ${name}`}
-            className="min-w-0 shrink"
-          >
-            {deciding ? <Spinner data-icon="inline-start" /> : null}
-            <span className="min-w-0 truncate">
-              {action.verb} <bdi>{name}</bdi>
-            </span>
-          </Button>
+          <ContentHint content={`${action.verb} ${name}`}>
+            <Button
+              variant="destructive"
+              disabled={deciding}
+              onClick={() => onDecide(true)}
+              // The name is whatever the user typed: bounded here, in full above.
+              className="min-w-0 shrink"
+            >
+              {deciding ? <Spinner data-icon="inline-start" /> : null}
+              <span className="min-w-0 truncate">
+                {action.verb} <bdi>{name}</bdi>
+              </span>
+            </Button>
+          </ContentHint>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

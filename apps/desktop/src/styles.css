@@ -94,6 +94,7 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-palette-swatch: var(--palette-swatch);
 
   /* Oxyn-specific semantics shadcn has no token for. */
   --color-primary-text: var(--primary-text);
@@ -143,134 +144,368 @@
 }
 
 :root {
+  --palette-hue: 195;
+  --palette-chroma: 1;
   /* Match the official mark on each surface without duplicating the SVG. */
   --driver-mysql: #00546b;
   --driver-mongodb: #001e2b;
   --radius: 0.5rem;
 
   /* Surface ladder: shell (`--sidebar`) < panel < card < popover. */
-  --background: oklch(0.986 0.005 195);
-  --foreground: oklch(0.26 0.035 210);
+  --background: oklch(
+    0.986 calc(0.005 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.26 0.035 210);
+  --card-foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.26 0.035 210);
-  --primary: oklch(0.52 0.1 180);
+  --popover-foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --primary: oklch(
+    0.52 calc(0.1 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
   --primary-foreground: oklch(1 0 0);
   /* Secondary, accent and the sidebar's hover carry the verdigris, faintly:
      a hovered row reads as belonging to the brand, not as grey. */
-  --secondary: oklch(0.93 0.028 185);
-  --secondary-foreground: oklch(0.26 0.035 210);
-  --muted: oklch(0.953 0.01 195);
-  --muted-foreground: oklch(0.49 0.035 205);
-  --accent: oklch(0.932 0.03 185);
-  --accent-foreground: oklch(0.3 0.05 190);
+  --secondary: oklch(
+    0.93 calc(0.028 * var(--palette-chroma)) calc(var(--palette-hue) - 10)
+  );
+  --secondary-foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --muted: oklch(0.953 calc(0.01 * var(--palette-chroma)) var(--palette-hue));
+  --muted-foreground: oklch(
+    0.49 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
+  --accent: oklch(
+    0.932 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) - 10)
+  );
+  --accent-foreground: oklch(
+    0.3 calc(0.05 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
   --destructive: oklch(0.435 0.16 25);
-  --border: oklch(0.9 0.018 195);
+  --border: oklch(0.9 calc(0.018 * var(--palette-chroma)) var(--palette-hue));
   /* Draws the edge of every checkbox, radio and field: ≥ 3:1 on each surface,
      which `--border` is not meant to reach. */
-  --input: oklch(0.62 0.03 200);
+  --input: oklch(
+    0.62 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) + 5)
+  );
   /* Verdigris, but much deeper than the primary: `ring-ring/50` in ui/ must
      still reach 3:1, and a ring the colour of the button would vanish on it. */
-  --ring: oklch(0.25 0.05 185);
-  --chart-1: oklch(0.52 0.1 180);
-  --chart-2: oklch(0.6 0.09 200);
+  --ring: oklch(
+    0.25 calc(0.05 * var(--palette-chroma)) calc(var(--palette-hue) - 10)
+  );
+  --chart-1: oklch(
+    0.52 calc(0.1 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
+  --chart-2: oklch(
+    0.6 calc(0.09 * var(--palette-chroma)) calc(var(--palette-hue) + 5)
+  );
   --chart-3: oklch(0.62 0.12 75);
   --chart-4: oklch(0.55 0.1 145);
   --chart-5: oklch(0.55 0.12 30);
-  --sidebar: oklch(0.955 0.01 195);
-  --sidebar-foreground: oklch(0.26 0.035 210);
-  --sidebar-primary: oklch(0.52 0.1 180);
+  --sidebar: oklch(0.955 calc(0.01 * var(--palette-chroma)) var(--palette-hue));
+  --sidebar-foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --sidebar-primary: oklch(
+    0.52 calc(0.1 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.912 0.035 185);
-  --sidebar-accent-foreground: oklch(0.26 0.035 210);
-  --sidebar-border: oklch(0.9 0.018 195);
-  --sidebar-ring: oklch(0.25 0.05 185);
+  --sidebar-accent: oklch(
+    0.912 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) - 10)
+  );
+  --sidebar-accent-foreground: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --sidebar-border: oklch(
+    0.9 calc(0.018 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --sidebar-ring: oklch(
+    0.25 calc(0.05 * var(--palette-chroma)) calc(var(--palette-hue) - 10)
+  );
 
-  --shadow-2xs: 0 1px 0 oklch(0.3 0.04 210 / 5%);
-  --shadow-xs: 0 1px 2px oklch(0.3 0.04 210 / 7%);
+  --shadow-2xs: 0 1px 0
+    oklch(
+      0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) / 5%
+    );
+  --shadow-xs: 0 1px 2px
+    oklch(
+      0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) / 7%
+    );
   --shadow-sm:
-    0 1px 2px oklch(0.3 0.04 210 / 7%), 0 1px 3px oklch(0.3 0.04 210 / 9%);
+    0 1px 2px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          7%
+      ),
+    0 1px 3px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          9%
+      );
   --shadow-md:
-    0 2px 4px oklch(0.3 0.04 210 / 6%), 0 4px 10px oklch(0.3 0.04 210 / 10%);
+    0 2px 4px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          6%
+      ),
+    0 4px 10px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          10%
+      );
   --shadow-lg:
-    0 4px 8px oklch(0.3 0.04 210 / 6%), 0 12px 28px oklch(0.3 0.04 210 / 12%);
+    0 4px 8px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          6%
+      ),
+    0 12px 28px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          12%
+      );
   --shadow-xl:
-    0 8px 16px oklch(0.3 0.04 210 / 7%), 0 24px 48px oklch(0.3 0.04 210 / 14%);
+    0 8px 16px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          7%
+      ),
+    0 24px 48px
+      oklch(
+        0.3 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+          14%
+      );
 
   --success: oklch(0.44 0.1 145);
   --warning: oklch(0.44 0.095 70);
-  --grid-header: oklch(0.962 0.01 195);
-  --grid-stripe: oklch(0.26 0.035 210 / 2.5%);
-  --grid-line: oklch(0.915 0.014 195);
-  --null: oklch(0.49 0.035 205);
+  --grid-header: oklch(
+    0.962 calc(0.01 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --grid-stripe: oklch(
+    0.26 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 15) /
+      2.5%
+  );
+  --grid-line: oklch(
+    0.915 calc(0.014 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --null: oklch(
+    0.49 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
   --env-production: oklch(0.435 0.16 25);
   --env-staging: oklch(0.44 0.095 70);
   --env-development: oklch(0.44 0.1 145);
-  --env-local: oklch(0.49 0.035 205);
-  --primary-text: oklch(0.46 0.09 180);
+  --env-local: oklch(
+    0.49 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
+  --primary-text: oklch(
+    0.46 calc(0.09 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
 }
 
 .dark {
   --driver-mysql: #fff;
   --driver-mongodb: #00ed64;
-  --background: oklch(0.185 0.022 212);
-  --foreground: oklch(0.93 0.02 190);
-  --card: oklch(0.215 0.026 210);
-  --card-foreground: oklch(0.93 0.02 190);
-  --popover: oklch(0.235 0.028 210);
-  --popover-foreground: oklch(0.93 0.02 190);
+  --background: oklch(
+    0.185 calc(0.022 * var(--palette-chroma)) calc(var(--palette-hue) + 17)
+  );
+  --foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --card: oklch(
+    0.215 calc(0.026 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --card-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --popover: oklch(
+    0.235 calc(0.028 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --popover-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
   /* A light verdigris with dark text, as in tweakcn's night themes: a deep
      green under white text sinks into a dark background. */
-  --primary: oklch(0.78 0.11 178);
-  --primary-foreground: oklch(0.18 0.03 200);
-  --secondary: oklch(0.29 0.045 195);
-  --secondary-foreground: oklch(0.93 0.02 190);
-  --muted: oklch(0.255 0.03 205);
-  --muted-foreground: oklch(0.74 0.035 195);
-  --accent: oklch(0.305 0.05 190);
-  --accent-foreground: oklch(0.93 0.02 190);
+  --primary: oklch(
+    0.78 calc(0.11 * var(--palette-chroma)) calc(var(--palette-hue) - 17)
+  );
+  --primary-foreground: oklch(
+    0.18 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) + 5)
+  );
+  --secondary: oklch(
+    0.29 calc(0.045 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --secondary-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --muted: oklch(
+    0.255 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
+  --muted-foreground: oklch(
+    0.74 calc(0.035 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --accent: oklch(
+    0.305 calc(0.05 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --accent-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
   --destructive: oklch(0.86 0.08 20);
-  --border: oklch(0.31 0.035 205);
-  --input: oklch(0.57 0.04 200);
-  --ring: oklch(0.88 0.07 180);
-  --chart-1: oklch(0.78 0.11 178);
-  --chart-2: oklch(0.7 0.08 205);
+  --border: oklch(
+    0.31 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
+  --input: oklch(
+    0.57 calc(0.04 * var(--palette-chroma)) calc(var(--palette-hue) + 5)
+  );
+  --ring: oklch(
+    0.88 calc(0.07 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
+  --chart-1: oklch(
+    0.78 calc(0.11 * var(--palette-chroma)) calc(var(--palette-hue) - 17)
+  );
+  --chart-2: oklch(
+    0.7 calc(0.08 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
   --chart-3: oklch(0.82 0.12 80);
   --chart-4: oklch(0.78 0.12 145);
   --chart-5: oklch(0.74 0.12 30);
-  --sidebar: oklch(0.16 0.018 215);
-  --sidebar-foreground: oklch(0.93 0.02 190);
-  --sidebar-primary: oklch(0.78 0.11 178);
-  --sidebar-primary-foreground: oklch(0.18 0.03 200);
-  --sidebar-accent: oklch(0.27 0.04 195);
-  --sidebar-accent-foreground: oklch(0.93 0.02 190);
-  --sidebar-border: oklch(0.31 0.035 205);
-  --sidebar-ring: oklch(0.88 0.07 180);
+  --sidebar: oklch(
+    0.16 calc(0.018 * var(--palette-chroma)) calc(var(--palette-hue) + 20)
+  );
+  --sidebar-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --sidebar-primary: oklch(
+    0.78 calc(0.11 * var(--palette-chroma)) calc(var(--palette-hue) - 17)
+  );
+  --sidebar-primary-foreground: oklch(
+    0.18 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) + 5)
+  );
+  --sidebar-accent: oklch(
+    0.27 calc(0.04 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --sidebar-accent-foreground: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5)
+  );
+  --sidebar-border: oklch(
+    0.31 calc(0.035 * var(--palette-chroma)) calc(var(--palette-hue) + 10)
+  );
+  --sidebar-ring: oklch(
+    0.88 calc(0.07 * var(--palette-chroma)) calc(var(--palette-hue) - 15)
+  );
 
-  --shadow-2xs: 0 1px 0 oklch(0.08 0.02 215 / 30%);
-  --shadow-xs: 0 1px 2px oklch(0.08 0.02 215 / 35%);
+  --shadow-2xs: 0 1px 0
+    oklch(
+      0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+        30%
+    );
+  --shadow-xs: 0 1px 2px
+    oklch(
+      0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+        35%
+    );
   --shadow-sm:
-    0 1px 2px oklch(0.08 0.02 215 / 35%), 0 1px 3px oklch(0.08 0.02 215 / 40%);
+    0 1px 2px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          35%
+      ),
+    0 1px 3px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          40%
+      );
   --shadow-md:
-    0 2px 4px oklch(0.08 0.02 215 / 35%), 0 4px 10px oklch(0.08 0.02 215 / 45%);
+    0 2px 4px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          35%
+      ),
+    0 4px 10px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          45%
+      );
   --shadow-lg:
-    0 4px 8px oklch(0.08 0.02 215 / 35%), 0 12px 28px oklch(0.08 0.02 215 / 55%);
+    0 4px 8px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          35%
+      ),
+    0 12px 28px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          55%
+      );
   --shadow-xl:
-    0 8px 16px oklch(0.08 0.02 215 / 40%),
-    0 24px 48px oklch(0.08 0.02 215 / 60%);
+    0 8px 16px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          40%
+      ),
+    0 24px 48px
+      oklch(
+        0.08 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) + 20) /
+          60%
+      );
 
   --success: oklch(0.84 0.12 145);
   --warning: oklch(0.84 0.11 80);
-  --grid-header: oklch(0.22 0.027 210);
-  --grid-stripe: oklch(0.93 0.02 190 / 2%);
-  --grid-line: oklch(0.27 0.03 208);
-  --null: oklch(0.74 0.035 195);
+  --grid-header: oklch(
+    0.22 calc(0.027 * var(--palette-chroma)) calc(var(--palette-hue) + 15)
+  );
+  --grid-stripe: oklch(
+    0.93 calc(0.02 * var(--palette-chroma)) calc(var(--palette-hue) - 5) / 2%
+  );
+  --grid-line: oklch(
+    0.27 calc(0.03 * var(--palette-chroma)) calc(var(--palette-hue) + 13)
+  );
+  --null: oklch(0.74 calc(0.035 * var(--palette-chroma)) var(--palette-hue));
   --env-production: oklch(0.86 0.08 20);
   --env-staging: oklch(0.84 0.11 80);
   --env-development: oklch(0.84 0.12 145);
-  --env-local: oklch(0.74 0.035 195);
-  --primary-text: oklch(0.82 0.1 178);
+  --env-local: oklch(
+    0.74 calc(0.035 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --primary-text: oklch(
+    0.82 calc(0.1 * var(--palette-chroma)) calc(var(--palette-hue) - 17)
+  );
+}
+
+/* Palette families keep the surface luminance and semantic status colors.
+ * Mode selection and the two saved families are independent (UX-SPEC).
+ * Swatches use the same hue inputs as the application, never a JS color copy.
+ */
+[data-palette="oxyn"] {
+  --palette-hue: 195;
+  --palette-chroma: 1;
+}
+[data-palette="graphite"] {
+  --palette-hue: 195;
+  --palette-chroma: 0;
+}
+[data-palette="ocean"] {
+  --palette-hue: 255;
+  --palette-chroma: 1;
+}
+[data-palette="forest"] {
+  --palette-hue: 155;
+  --palette-chroma: 1;
+}
+[data-palette="plum"] {
+  --palette-hue: 315;
+  --palette-chroma: 1;
+}
+[data-palette] {
+  --palette-swatch: oklch(
+    0.65 calc(0.12 * var(--palette-chroma)) calc(var(--palette-hue) - 17)
+  );
 }
 
 /*

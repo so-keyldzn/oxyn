@@ -21,10 +21,7 @@ import { ProviderSettings } from "@/features/assistant/provider-settings"
 import { SemanticRankingSection } from "@/features/assistant/semantic-ranking-section"
 import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
 import { refreshConnection, session } from "@/features/session"
-import {
-  SettingsDialog,
-  openSettings,
-} from "@/features/settings/settings-dialog"
+import { SettingsDialog } from "@/features/settings/settings-dialog"
 import { PreferredNullText } from "@/features/settings/preferred-null-text"
 import { useAppearance } from "@/features/settings/use-appearance"
 import { useResultFormatRefresh } from "@/features/settings/use-result-format-refresh"
@@ -35,6 +32,7 @@ import { WorkspaceHost } from "@/features/workspace/workspace-host"
 import { CloseWindowHost } from "@/features/windows/close-window-host"
 import { subscribeToWindowSignals } from "@/features/windows/window-signals"
 import { platform } from "@/lib/actions/platform"
+import { invoke } from "@/lib/actions/registry"
 import { suppressBrowserDefaults } from "@/lib/browser-defaults"
 import { subscribeToBackendEvents } from "@/lib/ipc/events"
 import appCss from "../styles.css?url"
@@ -131,7 +129,9 @@ function RootComponent() {
                 {/* Above the routes: the start screen does not destroy them.
                   Inside the query provider: each workspace's panels ask the
                   backend which providers exist. */}
-                <WorkspaceHost onOpenSettings={() => openSettings()} />
+                <WorkspaceHost
+                  onOpenSettings={() => void invoke("app.settings", "button")}
+                />
               </div>
             </div>
             {/* Once, for every screen: ⌘, opens it from the start screen too.

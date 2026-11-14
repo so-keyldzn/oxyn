@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -92,9 +93,11 @@ function Pin({
         {/* One line with an end ellipsis: the full name stays readable in the
             attached sources and in the outgoing-context review
             (docs/UX-SPEC.md, « Readability and grid height »). */}
-        <AttachmentTitle title={pin.label}>
-          <bdi>{pin.label}</bdi>
-        </AttachmentTitle>
+        <ContentHint content={pin.label}>
+          <AttachmentTitle>
+            <bdi>{pin.label}</bdi>
+          </AttachmentTitle>
+        </ContentHint>
         <AttachmentDescription>
           {pin.shape ? `${kind.label} · ${pin.shape}` : kind.label}
         </AttachmentDescription>

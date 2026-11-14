@@ -1,3 +1,5 @@
+import { ContentHint } from "./content-hint"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import {
@@ -103,24 +105,27 @@ export function ApprovalDialog({
         </AlertDialogHeader>
 
         {approval?.preview ? (
-          // A native scroller: the keyboard scrolls it (arrows, Page, Home,
-          // End) without extra code, which the custom scroll area did not.
-          <pre
-            data-selectable
-            tabIndex={0}
-            aria-label="Statement to approve"
-            onKeyDown={(event) => {
-              const target = event.currentTarget
-              const page = PAGE_LINES * LINE_PX
-              if (event.key === "PageDown") target.scrollTop += page
-              else if (event.key === "PageUp") target.scrollTop -= page
-              else return
-              event.preventDefault()
-            }}
-            className="max-h-64 overflow-auto rounded-md border bg-card p-3 font-mono text-xs leading-5 break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {approval.preview.statement}
-          </pre>
+          <ScrollArea className="max-h-64 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-64">
+            <pre
+              data-selectable
+              tabIndex={0}
+              aria-label="Statement to approve"
+              onKeyDown={(event) => {
+                const target = event.currentTarget.closest<HTMLElement>(
+                  '[data-slot="scroll-area-viewport"]'
+                )
+                if (!target) return
+                const page = PAGE_LINES * LINE_PX
+                if (event.key === "PageDown") target.scrollTop += page
+                else if (event.key === "PageUp") target.scrollTop -= page
+                else return
+                event.preventDefault()
+              }}
+              className="rounded-md border bg-card p-3 font-mono text-xs leading-5 break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {approval.preview.statement}
+            </pre>
+          </ScrollArea>
         ) : null}
 
         <p className="text-xs text-muted-foreground">
@@ -135,21 +140,22 @@ export function ApprovalDialog({
           <AlertDialogCancel ref={cancelRef} disabled={deciding}>
             Cancel
           </AlertDialogCancel>
-          <Button
-            variant={destructive ? "destructive" : "default"}
-            disabled={deciding}
-            onClick={() => onDecide(true)}
-            // A connection name is whatever the user typed: without a bound it
-            // pushes the action past the dialog, and the label stops being
-            // readable at all. The description above carries it in full.
-            title={`Run on ${name}`}
-            className="min-w-0 shrink"
-          >
-            {deciding ? <Spinner data-icon="inline-start" /> : null}
-            <span className="min-w-0 truncate">
-              Run on <bdi>{name}</bdi>
-            </span>
-          </Button>
+          <ContentHint content={`Run on ${name}`}>
+            <Button
+              variant={destructive ? "destructive" : "default"}
+              disabled={deciding}
+              onClick={() => onDecide(true)}
+              // A connection name is whatever the user typed: without a bound it
+              // pushes the action past the dialog, and the label stops being
+              // readable at all. The description above carries it in full.
+              className="min-w-0 shrink"
+            >
+              {deciding ? <Spinner data-icon="inline-start" /> : null}
+              <span className="min-w-0 truncate">
+                Run on <bdi>{name}</bdi>
+              </span>
+            </Button>
+          </ContentHint>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect } from "storybook/test"
+import { expect, userEvent, waitFor, within } from "storybook/test"
 
 import { CellValue, cellText, formatBytes } from "./cell-value"
 
@@ -65,10 +65,16 @@ export const Truncated: Story = {
   },
   play: async ({ canvas, canvasElement }) => {
     const truncated = canvasElement.querySelector("[data-truncated]")
-    await expect(truncated).toHaveAttribute(
-      "title",
-      "Truncated · 3.0 MB in full"
+    if (!(truncated instanceof HTMLElement)) throw new Error("Missing value")
+    await expect(truncated).not.toHaveAttribute("title")
+    await userEvent.hover(truncated)
+    const tooltip = await within(document.body).findByText(
+      "Truncated · 3.0 MB in full",
+      { selector: '[data-slot="tooltip-content"]' }
     )
+    await expect(tooltip).toHaveTextContent("Truncated · 3.0 MB in full")
+    await userEvent.unhover(truncated)
+    await waitFor(() => expect(tooltip).not.toBeVisible())
     await expect(canvas.getByText("3.0 MB")).toBeVisible()
   },
 }
@@ -78,9 +84,17 @@ export const Unrenderable: Story = {
   args: { cell: { unrenderable: "unsupported type: Dictionary" } },
   play: async ({ canvas, canvasElement }) => {
     await expect(canvas.getByText("⟨unrenderable⟩")).toBeVisible()
-    await expect(
-      canvasElement.querySelector("[data-unrenderable]")
-    ).toHaveAttribute("title", "unsupported type: Dictionary")
+    const value = canvasElement.querySelector("[data-unrenderable]")
+    if (!(value instanceof HTMLElement)) throw new Error("Missing value")
+    await expect(value).not.toHaveAttribute("title")
+    await userEvent.hover(value)
+    const tooltip = await within(document.body).findByText(
+      "unsupported type: Dictionary",
+      { selector: '[data-slot="tooltip-content"]' }
+    )
+    await expect(tooltip).toHaveTextContent("unsupported type: Dictionary")
+    await userEvent.unhover(value)
+    await waitFor(() => expect(tooltip).not.toBeVisible())
     // Nothing is copied for a value that could not be formatted.
     await expect(cellText({ unrenderable: "x" })).toBe("")
   },

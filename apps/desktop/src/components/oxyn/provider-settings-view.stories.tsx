@@ -392,7 +392,9 @@ export const DeclaringAnAgentByHand: Story = {
     const canvas = within(canvasElement)
     await openRow(canvasElement, "Custom agent")
     const form = within(canvas.getByRole("form", { name: "Declare an agent" }))
-    await expect(form.getByLabelText("Kind")).toHaveValue("agent")
+    await expect(
+      form.getByRole("combobox", { name: "Kind" })
+    ).toHaveTextContent("External agent")
     await expect(form.getByLabelText("Program")).toBeVisible()
   },
 }
@@ -544,7 +546,9 @@ export const PickedModelSurvivesTheEdit: Story = {
     const model = () => page.getByRole("combobox", { name: "Default model" })
     await openRow(canvasElement, "OpenAI API")
     // The provider's page starts the form on its family.
-    await expect(canvas.getByLabelText("Kind")).toHaveValue("openai")
+    await expect(
+      canvas.getByRole("combobox", { name: "Kind" })
+    ).toHaveTextContent("OpenAI")
     await userEvent.type(canvas.getByLabelText("Name"), "Gateway")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),

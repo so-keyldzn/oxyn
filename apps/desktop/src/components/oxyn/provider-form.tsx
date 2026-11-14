@@ -29,7 +29,14 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import type {
@@ -280,6 +287,12 @@ export function ProviderForm({
   // What the model list depends on, read above the fields: a hook cannot run
   // inside a field's render.
   const listedKind = useSelector(form.store, (state) => state.values.kind)
+  const kindItems = [
+    ...KINDS.filter((entry) => entry.offered || entry.kind === listedKind).map(
+      (entry) => ({ value: entry.kind, label: entry.label })
+    ),
+    ...(editing ? [] : [{ value: "agent" as const, label: "External agent" }]),
+  ]
   const endpoint = useSelector(form.store, (state) => state.values.endpoint)
   const key = useSelector(form.store, (state) => state.values.key)
   const stored = React.useMemo(
@@ -318,27 +331,31 @@ export function ProviderForm({
           {(field) => (
             <Field>
               <FieldLabel htmlFor="provider-kind">Kind</FieldLabel>
-              <NativeSelect
-                id="provider-kind"
+              <Select
+                items={kindItems}
                 value={field.state.value}
                 disabled={target !== null}
-                onChange={(event) =>
-                  field.handleChange(event.target.value as FormKind)
-                }
+                onValueChange={(value) => {
+                  if (value !== null) field.handleChange(value)
+                }}
               >
-                {KINDS.filter(
-                  (entry) => entry.offered || entry.kind === field.state.value
-                ).map((entry) => (
-                  <NativeSelectOption key={entry.kind} value={entry.kind}>
-                    {entry.label}
-                  </NativeSelectOption>
-                ))}
-                {editing ? null : (
-                  <NativeSelectOption value="agent">
-                    External agent
-                  </NativeSelectOption>
-                )}
-              </NativeSelect>
+                <SelectTrigger
+                  id="provider-kind"
+                  aria-label="Kind"
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {kindItems.map((entry) => (
+                      <SelectItem key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </Field>
           )}
         </form.Field>

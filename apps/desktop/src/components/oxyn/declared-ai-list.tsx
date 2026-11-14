@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Delete02Icon,
@@ -179,16 +180,17 @@ export function DeclaredAgentItem({
         </ItemTitle>
         {/* One line: a launcher under a version manager is a long path, and
             the whole of it stays selectable to copy. */}
-        <ItemDescription
-          data-selectable
-          className="truncate font-mono text-xs"
-          title={agent.command}
-        >
-          {agent.command}
-          {agent.argCount > 0
-            ? ` · ${counted(agent.argCount, "argument", "arguments")}`
-            : ""}
-        </ItemDescription>
+        <ContentHint content={agent.command}>
+          <ItemDescription
+            data-selectable
+            className="truncate font-mono text-xs"
+          >
+            {agent.command}
+            {agent.argCount > 0
+              ? ` · ${counted(agent.argCount, "argument", "arguments")}`
+              : ""}
+          </ItemDescription>
+        </ContentHint>
         {agent.confined ? (
           <ItemDescription className="text-xs">
             Only Oxyn&apos;s tools, no shell or files, in its strictest mode

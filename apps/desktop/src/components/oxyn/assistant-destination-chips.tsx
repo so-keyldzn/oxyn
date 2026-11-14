@@ -1,4 +1,6 @@
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ContentHint } from "./content-hint"
 import {
   ArrowDown01Icon,
   CloudIcon,
@@ -73,7 +75,7 @@ function OptionContent({
     return (
       <span className="flex max-w-72 min-w-0 items-center gap-2">
         <DestinationMark option={option} />
-        <span className="min-w-0 truncate" title={option.label}>
+        <span className="min-w-0 wrap-anywhere whitespace-normal">
           {option.label}
         </span>
         {where ? (
@@ -88,9 +90,7 @@ function OptionContent({
     <span className="flex max-w-72 min-w-0 items-start gap-2">
       <DestinationMark option={option} className="mt-0.5" />
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="truncate" title={option.label}>
-          {option.label}
-        </span>
+        <span className="wrap-anywhere whitespace-normal">{option.label}</span>
         <span
           data-slot="destination-refused"
           className="text-xs wrap-anywhere whitespace-normal text-muted-foreground"
@@ -168,39 +168,42 @@ export function AssistantDestinationChips({
           if (typeof value === "string") onSelectDestination(value)
         }}
       >
-        <SelectTrigger
-          size="sm"
-          aria-label="Who answers"
-          // With a model beside it, the mark alone: the model is what the
-          // provider's chip reads as, and the name is said in the header.
-          title={selected ? `Who answers: ${selected.label}` : undefined}
-          className={cn(COMPOSER_CHIP, "max-w-48", withModel && "pr-0.5")}
+        <ContentHint
+          content={selected ? `Who answers: ${selected.label}` : "Who answers"}
         >
-          <SelectValue className="min-w-0">
-            {() =>
-              selected ? (
-                <>
-                  <DestinationMark option={selected} />
-                  {withModel ? null : (
-                    <span className={chipLabel()}>{selected.label}</span>
-                  )}
-                </>
-              ) : (
-                <span className="text-muted-foreground">
-                  Choose who answers
-                </span>
-              )
-            }
-          </SelectValue>
-          {withModel ? null : (
-            <HugeiconsIcon
-              icon={ArrowDown01Icon}
-              strokeWidth={2}
-              className={CHIP_CHEVRON}
-              aria-hidden
-            />
-          )}
-        </SelectTrigger>
+          <SelectTrigger
+            size="sm"
+            aria-label="Who answers"
+            // With a model beside it, the mark alone: the model is what the
+            // provider's chip reads as, and the name is said in the header.
+            className={cn(COMPOSER_CHIP, "max-w-48", withModel && "pr-0.5")}
+          >
+            <SelectValue className="min-w-0">
+              {() =>
+                selected ? (
+                  <>
+                    <DestinationMark option={selected} />
+                    {withModel ? null : (
+                      <span className={chipLabel()}>{selected.label}</span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Choose who answers
+                  </span>
+                )
+              }
+            </SelectValue>
+            {withModel ? null : (
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                strokeWidth={2}
+                className={CHIP_CHEVRON}
+                aria-hidden
+              />
+            )}
+          </SelectTrigger>
+        </ContentHint>
         <SelectContent alignItemWithTrigger={false} className={CHIP_LIST}>
           {providers.length > 0 ? (
             <SelectGroup>
@@ -248,27 +251,28 @@ export function AssistantDestinationChips({
             if (typeof value === "string") onSelectModel(value)
           }}
         >
-          <SelectTrigger
-            size="sm"
-            aria-label="Model"
-            title={`Model: ${model}`}
-            className={cn(COMPOSER_CHIP, "max-w-56 pl-0.5")}
-          >
-            <SelectValue className="min-w-0">
-              {() => <span className={chipLabel()}>{model}</span>}
-            </SelectValue>
-            <HugeiconsIcon
-              icon={ArrowDown01Icon}
-              strokeWidth={2}
-              className={CHIP_CHEVRON}
-              aria-hidden
-            />
-          </SelectTrigger>
+          <ContentHint content={`Model: ${model}`}>
+            <SelectTrigger
+              size="sm"
+              aria-label="Model"
+              className={cn(COMPOSER_CHIP, "max-w-56 pl-0.5")}
+            >
+              <SelectValue className="min-w-0">
+                {() => <span className={chipLabel()}>{model}</span>}
+              </SelectValue>
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                strokeWidth={2}
+                className={CHIP_CHEVRON}
+                aria-hidden
+              />
+            </SelectTrigger>
+          </ContentHint>
           <SelectContent alignItemWithTrigger={false} className={CHIP_LIST}>
             <SelectGroup>
               {modelIds.map((id) => (
                 <SelectItem key={id} value={id} className="font-mono">
-                  <span className="block max-w-72 truncate" title={id}>
+                  <span className="block max-w-72 wrap-anywhere whitespace-normal">
                     {id}
                   </span>
                 </SelectItem>
@@ -317,14 +321,11 @@ export function AssistantModelListNote({
     )
   if (modelList?.status === "error")
     return (
-      <span
-        role="alert"
-        data-slot="model-list"
-        data-selectable
-        className="text-xs text-destructive"
-      >
-        Models could not be listed: {modelList.message}
-      </span>
+      <Alert variant="destructive" data-slot="model-list">
+        <AlertDescription data-selectable>
+          Models could not be listed: {modelList.message}
+        </AlertDescription>
+      </Alert>
     )
   return null
 }

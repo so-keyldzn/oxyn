@@ -227,6 +227,7 @@ export function useConsoleDocument({
   }, [])
 
   const change = (next: { text?: string; title?: string }) => {
+    if (latest.current.closing) return
     if (next.text !== undefined) {
       setText(next.text)
       latest.current.text = next.text
@@ -365,6 +366,8 @@ export function useConsoleDocument({
     }
     if (current.conflict) {
       if (inFlight.current === request) inFlight.current = null
+      setClosing(true)
+      latest.current.closing = true
       void library.releaseDocument(current.document).catch(() => undefined)
       return true
     }
@@ -372,6 +375,7 @@ export function useConsoleDocument({
     setClosing(true)
     latest.current.closing = true
     setNotice("Closing the saved query…")
+    let committed = false
     try {
       const write = await library.closeDocument(
         request.id,
@@ -380,7 +384,10 @@ export function useConsoleDocument({
         discard || !hasSavedCopy
       )
       // Committed before the cancellation reached it: the console goes.
-      if (write.type === "closed") return true
+      if (write.type === "closed") {
+        committed = true
+        return true
+      }
       if (onConflict(write)) return false
       if (isCancelled(request) && write.type === "superseded") {
         setProblem(false)
@@ -395,8 +402,12 @@ export function useConsoleDocument({
       return false
     } finally {
       if (inFlight.current === request) inFlight.current = null
-      setClosing(false)
-      latest.current.closing = false
+      // A batch keeps tabs mounted until its other closes settle. A committed
+      // document must stay read-only during that wait, even after Cancel.
+      if (!committed) {
+        setClosing(false)
+        latest.current.closing = false
+      }
     }
   }
 

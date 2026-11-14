@@ -1,3 +1,5 @@
+import { ContentHint } from "./content-hint"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -337,27 +339,29 @@ function ApprovalBody({
             </FieldLegend>
             {/* Vertical only, and its own region: sixty columns scroll here
                 without the dialog ever scrolling sideways. */}
-            <ul
-              aria-labelledby={legendId}
-              tabIndex={0}
-              className="flex max-h-64 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto rounded-md border p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {fields.map((field) => (
-                <ColumnRow
-                  key={field.name}
-                  field={field}
-                  checked={ticked.includes(field.name)}
-                  disabled={deciding}
-                  onToggle={(checked) =>
-                    setTicked((current) =>
-                      checked
-                        ? [...current, field.name]
-                        : current.filter((name) => name !== field.name)
-                    )
-                  }
-                />
-              ))}
-            </ul>
+            <ScrollArea className="min-w-0 rounded-md border [&>[data-slot=scroll-area-viewport]]:max-h-64">
+              <ul
+                aria-labelledby={legendId}
+                tabIndex={0}
+                className="flex min-w-0 flex-col gap-0.5 p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {fields.map((field) => (
+                  <ColumnRow
+                    key={field.name}
+                    field={field}
+                    checked={ticked.includes(field.name)}
+                    disabled={deciding}
+                    onToggle={(checked) =>
+                      setTicked((current) =>
+                        checked
+                          ? [...current, field.name]
+                          : current.filter((name) => name !== field.name)
+                      )
+                    }
+                  />
+                ))}
+              </ul>
+            </ScrollArea>
           </FieldSet>
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {chosen.length === 0
@@ -374,29 +378,32 @@ function ApprovalBody({
           Cancel
         </AlertDialogCancel>
         {allowed && fields.length > 0 ? (
-          <Button
-            variant="default"
-            disabled={deciding || chosen.length === 0}
-            onClick={() => onDecide(chosen.map((field) => field.name))}
-            // The label says what leaves and where, because this is the last
-            // screen before it does: it wraps, and is never cut.
-            title={`Send ${request.rows} rows of ${chosen.length} columns to ${request.destination}, ${where.label}`}
-            className="h-auto min-h-8 min-w-0 shrink py-1.5 text-left whitespace-normal"
+          <ContentHint
+            content={`Send ${request.rows} rows of ${chosen.length} columns to ${request.destination}, ${where.label}`}
           >
-            {deciding ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <HugeiconsIcon
-                icon={where.icon}
-                strokeWidth={2}
-                data-icon="inline-start"
-              />
-            )}
-            <span className="min-w-0 wrap-anywhere">
-              Send {chosen.length} of {fields.length} columns to{" "}
-              <bdi>{request.destination}</bdi> · {where.label}
-            </span>
-          </Button>
+            <Button
+              variant="default"
+              disabled={deciding || chosen.length === 0}
+              onClick={() => onDecide(chosen.map((field) => field.name))}
+              // The label says what leaves and where, because this is the last
+              // screen before it does: it wraps, and is never cut.
+              className="h-auto min-h-8 min-w-0 shrink py-1.5 text-left whitespace-normal"
+            >
+              {deciding ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <HugeiconsIcon
+                  icon={where.icon}
+                  strokeWidth={2}
+                  data-icon="inline-start"
+                />
+              )}
+              <span className="min-w-0 wrap-anywhere">
+                Send {chosen.length} of {fields.length} columns to{" "}
+                <bdi>{request.destination}</bdi> · {where.label}
+              </span>
+            </Button>
+          </ContentHint>
         ) : null}
       </AlertDialogFooter>
     </>

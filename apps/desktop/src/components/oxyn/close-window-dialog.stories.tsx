@@ -36,6 +36,22 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+export const FailedClose: Story = {
+  args: {
+    rows: [],
+    error: "A console could not be closed. The window stays open.",
+  },
+  play: async ({ args }) => {
+    await expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The window stays open"
+    )
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Close window" })
+    )
+    await expect(args.onClose).toHaveBeenCalledOnce()
+  },
+}
+
 /**
  * One console would lose its text: the window is named by its connection,
  * the console and what it would lose are listed, and the reflex answer —

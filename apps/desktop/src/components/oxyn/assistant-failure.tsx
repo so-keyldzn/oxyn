@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
@@ -93,14 +94,16 @@ export function AgentExitDetails({ exit }: { exit: AgentExit }) {
         {exit.output !== "" ? (
           // `tabIndex`: a region that scrolls and holds no control is
           // unreachable from the keyboard otherwise.
-          <pre
-            data-selectable
-            tabIndex={0}
-            aria-label="The agent's last output"
-            className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {exit.output}
-          </pre>
+          <ScrollArea className="mt-1 min-w-0 rounded-md bg-muted [&>[data-slot=scroll-area-viewport]]:max-h-48">
+            <pre
+              data-selectable
+              tabIndex={0}
+              aria-label="The agent's last output"
+              className="p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {exit.output}
+            </pre>
+          </ScrollArea>
         ) : null}
       </CollapsibleContent>
     </Collapsible>

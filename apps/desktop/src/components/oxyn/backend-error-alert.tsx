@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
@@ -49,13 +50,15 @@ export function BackendErrorAlert({
         {/* `wrap-anywhere`, not `break-words`: only the former lowers the
             min-content width, and the Alert is a grid whose text column grows
             to it — a 300-character relation name widened the whole window. */}
-        <pre
-          data-selectable
-          dir="auto"
-          className="max-h-40 w-full overflow-auto font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground"
-        >
-          {error.message}
-        </pre>
+        <ScrollArea className="max-h-40 w-full min-w-0 [&>[data-slot=scroll-area-viewport]]:max-h-40">
+          <pre
+            data-selectable
+            dir="auto"
+            className="w-full font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground"
+          >
+            {error.message}
+          </pre>
+        </ScrollArea>
         <p className="text-xs text-muted-foreground">
           {error.retryable
             ? "This error is transient: trying again may succeed."

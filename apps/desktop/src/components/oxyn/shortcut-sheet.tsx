@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 
 import {
@@ -35,49 +36,51 @@ export function ShortcutSheet({
             one everywhere else.
           </DialogDescription>
         </DialogHeader>
-        <div
-          // Scrolled by the keyboard as well as by the pointer.
-          tabIndex={0}
-          role="region"
-          aria-label="Shortcuts by zone"
-          className="grid max-h-[60vh] gap-x-8 gap-y-4 overflow-y-auto rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-2"
-        >
-          {sections.map((section, index) => (
-            <section
-              key={section.title}
-              aria-labelledby={`${headingId}-${index}`}
-            >
-              <h3
-                id={`${headingId}-${index}`}
-                className="mb-1 text-xs font-medium text-muted-foreground"
+        <ScrollArea className="max-h-[60vh] min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-[60vh]">
+          <div
+            // Scrolled by the keyboard as well as by the pointer.
+            tabIndex={0}
+            role="region"
+            aria-label="Shortcuts by zone"
+            className="grid gap-x-8 gap-y-4 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-2"
+          >
+            {sections.map((section, index) => (
+              <section
+                key={section.title}
+                aria-labelledby={`${headingId}-${index}`}
               >
-                {section.title}
-              </h3>
-              <dl className="flex flex-col">
-                {section.rows.map((row) => (
-                  <div
-                    key={row.id}
-                    className="flex items-center justify-between gap-4 border-b border-border/50 py-1 last:border-0"
-                  >
-                    <dt className="min-w-0 truncate">{row.label}</dt>
-                    <dd className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                      {row.keys.map((keys, alternative) => (
-                        <React.Fragment key={keys.join("+")}>
-                          {alternative > 0 ? <span>or</span> : null}
-                          <KbdGroup>
-                            {keys.map((key) => (
-                              <Kbd key={key}>{key}</Kbd>
-                            ))}
-                          </KbdGroup>
-                        </React.Fragment>
-                      ))}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-          ))}
-        </div>
+                <h3
+                  id={`${headingId}-${index}`}
+                  className="mb-1 text-xs font-medium text-muted-foreground"
+                >
+                  {section.title}
+                </h3>
+                <dl className="flex flex-col">
+                  {section.rows.map((row) => (
+                    <div
+                      key={row.id}
+                      className="flex items-center justify-between gap-4 border-b border-border/50 py-1 last:border-0"
+                    >
+                      <dt className="min-w-0 truncate">{row.label}</dt>
+                      <dd className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                        {row.keys.map((keys, alternative) => (
+                          <React.Fragment key={keys.join("+")}>
+                            {alternative > 0 ? <span>or</span> : null}
+                            <KbdGroup>
+                              {keys.map((key) => (
+                                <Kbd key={key}>{key}</Kbd>
+                              ))}
+                            </KbdGroup>
+                          </React.Fragment>
+                        ))}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            ))}
+          </div>
+        </ScrollArea>
       </DialogContent>
     </Dialog>
   )

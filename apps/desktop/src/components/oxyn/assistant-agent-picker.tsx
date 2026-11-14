@@ -13,6 +13,7 @@ import {
   chipLabel,
 } from "@/components/oxyn/assistant-composer-chip"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ContentHint } from "./content-hint"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -181,38 +182,40 @@ export function AssistantAgentPicker(
           if (agent && agent.error === null) onSelect(id)
         }}
       >
-        <SelectTrigger
-          size="sm"
-          aria-label="Agent role"
-          aria-describedby={hintId}
-          title={chip ? hint.text : undefined}
-          className={cn(chip && cn(COMPOSER_CHIP, "max-w-40"))}
-        >
-          {chip ? (
-            <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} aria-hidden />
-          ) : null}
-          <SelectValue className="min-w-0">
-            <span className={chip ? chipLabel(true) : "truncate"}>
-              {selected?.name ?? (value ? "Recorded agent" : "Choose an agent")}
-            </span>
-            {selected?.origin === "user" ? (
-              <Badge
-                variant="outline"
-                className={cn(chip && "hidden @xs/composer:inline-flex")}
-              >
-                User
-              </Badge>
+        <ContentHint content={chip ? hint.text : null}>
+          <SelectTrigger
+            size="sm"
+            aria-label="Agent role"
+            aria-describedby={hintId}
+            className={cn(chip && cn(COMPOSER_CHIP, "max-w-40"))}
+          >
+            {chip ? (
+              <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} aria-hidden />
             ) : null}
-          </SelectValue>
-          {chip ? (
-            <HugeiconsIcon
-              icon={ArrowDown01Icon}
-              strokeWidth={2}
-              className={CHIP_CHEVRON}
-              aria-hidden
-            />
-          ) : null}
-        </SelectTrigger>
+            <SelectValue className="min-w-0">
+              <span className={chip ? chipLabel(true) : "truncate"}>
+                {selected?.name ??
+                  (value ? "Recorded agent" : "Choose an agent")}
+              </span>
+              {selected?.origin === "user" ? (
+                <Badge
+                  variant="outline"
+                  className={cn(chip && "hidden @xs/composer:inline-flex")}
+                >
+                  User
+                </Badge>
+              ) : null}
+            </SelectValue>
+            {chip ? (
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                strokeWidth={2}
+                className={CHIP_CHEVRON}
+                aria-hidden
+              />
+            ) : null}
+          </SelectTrigger>
+        </ContentHint>
         <SelectContent
           alignItemWithTrigger={false}
           className={cn(chip && CHIP_LIST)}

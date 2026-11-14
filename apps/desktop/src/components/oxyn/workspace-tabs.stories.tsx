@@ -114,10 +114,16 @@ export const ResultExporting: Story = {
   play: async ({ canvas, args }) => {
     const result = canvas.getByRole("tab", { name: /Result #42/ })
     await expect(result).toHaveTextContent("exporting")
-    await expect(result).toHaveAttribute(
-      "title",
-      expect.stringMatching(/finish or cancel the export/)
+    await expect(result).not.toHaveAttribute("title")
+    const label = within(result).getByText("Result #42")
+    await userEvent.hover(label)
+    const tooltip = await within(document.body).findByText(
+      /finish or cancel the export/,
+      { selector: '[data-slot="tooltip-content"]' }
     )
+    await expect(tooltip).toHaveTextContent(/finish or cancel the export/)
+    await userEvent.unhover(label)
+    await waitFor(() => expect(tooltip).not.toBeVisible())
     await expect(result.querySelector('[data-slot="tab-close"]')).toBeNull()
     result.focus()
     await userEvent.keyboard("{Delete}")
@@ -135,13 +141,19 @@ export const OneConsole: Story = {
   play: async ({ canvas }) => {
     const list = canvas.getByRole("tablist")
     const active = canvas.getByRole("tab", { selected: true })
-    const strip = list.getBoundingClientRect()
+    const viewport = list.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) throw new Error("No scrolling tab viewport")
+    const strip = viewport.getBoundingClientRect()
     await expect(active.getBoundingClientRect().bottom + 5 + 2).toBeLessThan(
       strip.bottom
     )
     // And the strip scrolls sideways only: a taller trigger than its box
     // would let the row slide up and down under the pointer.
-    await expect(list.scrollHeight).toBeLessThanOrEqual(list.clientHeight)
+    await expect(viewport.scrollHeight).toBeLessThanOrEqual(
+      viewport.clientHeight
+    )
   },
 }
 
@@ -184,11 +196,16 @@ export const ActiveTabIsBroughtIntoView: Story = {
     const list = canvas.getByRole("tablist")
     const active = canvas.getByRole("tab", { selected: true })
     await expect(active).toHaveAccessibleName(/console_12\.sql/)
+    const viewport = list.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) throw new Error("No scrolling tab viewport")
     await waitFor(() => {
-      const strip = list.getBoundingClientRect()
+      const strip = viewport.getBoundingClientRect()
       const tab = active.getBoundingClientRect()
       expect(tab.right).toBeLessThanOrEqual(strip.right + 1)
       expect(tab.left).toBeGreaterThanOrEqual(strip.left - 1)
+      expect(viewport.scrollLeft).toBeGreaterThan(0)
     })
   },
 }

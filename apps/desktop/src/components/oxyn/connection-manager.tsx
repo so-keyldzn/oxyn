@@ -1,3 +1,4 @@
+import { ContentHint } from "./content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -146,9 +147,9 @@ export function ConnectionManager({
                 than pushing them past a 420 px window. */}
                 <ItemContent className="min-w-0 basis-40">
                   <ItemTitle className="w-full min-w-0">
-                    <bdi className="truncate" title={connection.name}>
-                      {connection.name}
-                    </bdi>
+                    <ContentHint content={connection.name}>
+                      <bdi className="truncate">{connection.name}</bdi>
+                    </ContentHint>
                     {connection.readOnly ? (
                       <HugeiconsIcon
                         icon={LockIcon}
@@ -158,15 +159,17 @@ export function ConnectionManager({
                       />
                     ) : null}
                   </ItemTitle>
-                  <ItemDescription className="truncate" title={described}>
-                    {connection.driverName}
-                    {connection.location ? (
-                      <>
-                        {" · "}
-                        <bdi>{connection.location}</bdi>
-                      </>
-                    ) : null}
-                  </ItemDescription>
+                  <ContentHint content={described}>
+                    <ItemDescription className="truncate">
+                      {connection.driverName}
+                      {connection.location ? (
+                        <>
+                          {" · "}
+                          <bdi>{connection.location}</bdi>
+                        </>
+                      ) : null}
+                    </ItemDescription>
+                  </ContentHint>
                   {inUse ? (
                     // Its own line, never cut: it is the only reason given for a
                     // disabled Delete, and the button points at it.

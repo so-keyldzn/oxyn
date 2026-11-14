@@ -3,6 +3,7 @@ import * as React from "react"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { FieldDescription, FieldLegend, FieldSet } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Label } from "@/components/ui/label"
 import { ENVIRONMENTS } from "@/lib/ipc/types"
 import type { Environment } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
@@ -46,7 +47,10 @@ export function EnvironmentPicker({
   // the first group's radios.
   const group = React.useId()
   return (
-    <FieldSet data-slot="environment-picker">
+    <FieldSet
+      data-slot="environment-picker"
+      className="@container/environment-picker"
+    >
       <FieldLegend variant="label">Environment</FieldLegend>
       <FieldDescription>
         Writes on production always ask for a review that names the connection.
@@ -61,10 +65,10 @@ export function EnvironmentPicker({
         }}
         disabled={disabled}
         aria-label="Environment"
-        className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+        className="grid grid-cols-2 gap-2 @min-[37rem]/environment-picker:grid-cols-4"
       >
         {ENVIRONMENTS.map((environment) => (
-          <label
+          <Label
             key={environment}
             htmlFor={`${group}-${environment}`}
             className={cn(
@@ -86,7 +90,7 @@ export function EnvironmentPicker({
             >
               {DETAILS[environment]}
             </span>
-          </label>
+          </Label>
         ))}
       </RadioGroup>
     </FieldSet>

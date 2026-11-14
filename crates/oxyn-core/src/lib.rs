@@ -87,7 +87,7 @@ pub mod policy;
 pub mod preferences;
 pub mod preview;
 pub use preferences::{
-    Appearance, BinaryPreference, ObjectLocation, ObjectSection, PreferencesSnapshot,
+    Appearance, BinaryPreference, ColorPalette, ObjectLocation, ObjectSection, PreferencesSnapshot,
     ReadingDensity, WorkspacePreferences,
 };
 pub mod query;

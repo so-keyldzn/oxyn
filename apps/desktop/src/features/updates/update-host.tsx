@@ -7,7 +7,7 @@ import {
   readyToastTitle,
 } from "@/components/oxyn/update-model"
 import { toast } from "@/components/ui/toast"
-import { openSettings } from "@/features/settings/settings-dialog"
+import { openSettings } from "@/features/settings/settings-dialog-state"
 import { useActionSource } from "@/lib/actions/context"
 import { updates } from "@/lib/ipc/updates"
 import type { UpdateNotice } from "@/lib/ipc/updates"

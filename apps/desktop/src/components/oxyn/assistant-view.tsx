@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { SparklesIcon } from "@hugeicons/core-free-icons"
@@ -521,9 +522,11 @@ export function AssistantView(props: AssistantViewProps) {
           />
         ) : null}
         {state.askError ? (
-          <p role="alert" data-selectable className="text-xs text-destructive">
-            {state.askError}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription data-selectable>
+              {state.askError}
+            </AlertDescription>
+          </Alert>
         ) : null}
         {/* What the chips below cannot say in a word: a list still loading
             or failed, the agent a resumed conversation lost. */}

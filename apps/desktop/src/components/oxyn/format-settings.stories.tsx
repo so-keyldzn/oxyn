@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { FormatSettings } from "./format-settings"
 import { DEFAULT_PREFERENCES } from "@/features/settings/preferences"
+import { chooseSelectOption } from "./select-story"
 
 const meta = {
   title: "Oxyn/FormatSettings",
@@ -29,7 +30,10 @@ export const Defaults: Story = {
     await expect(args.onChange).toHaveBeenCalledWith({ groupThousands: true })
     await userEvent.click(canvas.getByRole("button", { name: "Size only" }))
     await expect(args.onChange).toHaveBeenCalledWith({ binaryDisplay: "size" })
-    await userEvent.selectOptions(canvas.getByLabelText("Cell length"), "2048")
+    await chooseSelectOption(
+      canvas.getByRole("combobox", { name: "Cell length" }),
+      "2,048 characters"
+    )
     await expect(args.onChange).toHaveBeenCalledWith({ cellMaxChars: 2048 })
   },
 }

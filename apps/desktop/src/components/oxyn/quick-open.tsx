@@ -1,6 +1,7 @@
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { addressKey, addressLabel } from "@/components/oxyn/catalog-tree"
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Command,
   CommandDialog,
@@ -82,13 +83,21 @@ export function QuickOpen({
           </div>
         ) : null}
         {results.status === "idle" ? (
-          <Status>Type part of a name.</Status>
+          <Empty role="status">
+            <EmptyHeader>
+              <EmptyTitle>Type part of a name.</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
         ) : null}
         {results.status === "searching" ? (
           <Status>Searching loaded objects…</Status>
         ) : null}
         {results.status === "done" && results.hits.length === 0 ? (
-          <Status>No loaded object matches.</Status>
+          <Empty role="status">
+            <EmptyHeader>
+              <EmptyTitle>No loaded object matches.</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
         ) : null}
         {/* Hidden when empty: the field names it in `aria-controls`, and an
             empty listbox is not a list. */}

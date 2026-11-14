@@ -19,10 +19,11 @@ export interface PreferencesStore {
   preferences: DisplayPreferences
   /** False until the backend answered the first read. */
   loaded: boolean
+  palettesAvailable: boolean
   loadError: BackendFailure | null
   save: SaveState
   /**
-   * Counts the saves that changed how the backend formats cells. Result pages
+   * Counts changes that may have affected how the backend formats cells. Pages
    * are formatted there and cached until invalidated: a new value says the
    * cached ones are formatted the old way.
    */
@@ -43,6 +44,8 @@ const FORMAT_FIELDS = [
  */
 export const DEFAULT_PREFERENCES: DisplayPreferences = {
   theme: "dark",
+  lightPalette: "oxyn",
+  darkPalette: "oxyn",
   readingDensity: "compact",
   sidebarCollapsed: false,
   inspectorOpen: true,
@@ -56,6 +59,7 @@ export const DEFAULT_PREFERENCES: DisplayPreferences = {
 export const preferencesStore = createStore<PreferencesStore>({
   preferences: DEFAULT_PREFERENCES,
   loaded: false,
+  palettesAvailable: false,
   loadError: null,
   save: { status: "idle" },
   formatRevision: 0,
@@ -78,6 +82,7 @@ export function loadPreferences(): Promise<void> {
         ...current,
         preferences: state.preferences,
         loaded: true,
+        palettesAvailable: state.palettesAvailable,
         loadError: null,
       }))
     })
@@ -121,6 +126,7 @@ export async function reloadPreferences(): Promise<void> {
       ...current,
       preferences: next,
       loaded: true,
+      palettesAvailable: state.palettesAvailable,
       loadError: null,
       formatRevision: current.formatRevision + (reformatted ? 1 : 0),
     }
@@ -153,13 +159,6 @@ export async function changePreferences(
   }))
   try {
     await settingsBackend.writePreferences(change)
-    // Before the superseded check: this write reached the backend whatever
-    // answers after it, so pages formatted before it are stale.
-    if (FORMAT_FIELDS.some((field) => field in change))
-      preferencesStore.setState((current) => ({
-        ...current,
-        formatRevision: current.formatRevision + 1,
-      }))
     if (request !== latest) return { status: "superseded" }
     preferencesStore.setState((current) => ({
       ...current,
@@ -174,6 +173,15 @@ export async function changePreferences(
       save: { status: "failed", message },
     }))
     return { status: "failed", message }
+  } finally {
+    // Rust applies formatting before persisting it: a disk failure may leave
+    // it changed. Re-read formatted pages even after failure or supersession;
+    // this never retries the write or executes the user's query again.
+    if (FORMAT_FIELDS.some((field) => field in change))
+      preferencesStore.setState((current) => ({
+        ...current,
+        formatRevision: current.formatRevision + 1,
+      }))
   }
 }
 

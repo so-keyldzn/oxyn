@@ -1,4 +1,6 @@
 import * as React from "react"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, MoreHorizontalIcon } from "@hugeicons/core-free-icons"
 
@@ -110,14 +112,13 @@ function ChoiceText({ choice }: { choice: AgentChoice }) {
     // `max-w-64` leaves room, inside a `max-w-80` list, for the item's own
     // padding and check mark: the item's text does not shrink below this.
     <span className="flex max-w-64 min-w-0 flex-col">
-      <span dir="auto" className="truncate" title={choice.name}>
+      <span dir="auto" className="wrap-anywhere whitespace-normal">
         {choice.name}
       </span>
       {choice.description ? (
         <span
           dir="auto"
-          className="truncate text-xs text-muted-foreground"
-          title={choice.description}
+          className="text-xs wrap-anywhere whitespace-normal text-muted-foreground"
         >
           {choice.description}
         </span>
@@ -169,7 +170,6 @@ function ChoiceSelect({
         aria-label={`${name}: ${label}`}
         aria-describedby={describedBy}
         aria-busy={pending || undefined}
-        title={`${name}: ${label}`}
         className={cn("max-w-40 min-w-0", chip && COMPOSER_CHIP)}
       >
         {pending ? <Spinner /> : null}
@@ -233,14 +233,13 @@ function OptionSwitch({
           if (next !== on) onToggle(next)
         }}
       />
-      <label
+      <Label
         htmlFor={id}
         dir="auto"
-        title={name}
         className="max-w-32 truncate text-muted-foreground"
       >
         {name}
-      </label>
+      </Label>
       {pending ? <Spinner className="size-3.5" /> : null}
     </span>
   )
@@ -348,7 +347,15 @@ export function AssistantAgentSettings({
       describedBy,
     }
     return (
-      <WithReason key={option.id} reason={reason}>
+      <WithReason
+        key={option.id}
+        reason={
+          reason ??
+          (option.value.type === "select"
+            ? `${option.name}: ${labelOf(option.value.choices, option.value.current)}`
+            : option.name)
+        }
+      >
         {option.value.type === "select" ? (
           <ChoiceSelect
             {...common}
@@ -383,7 +390,12 @@ export function AssistantAgentSettings({
   }
 
   const modesControl = hasModes ? (
-    <WithReason key="modes" reason={reason}>
+    <WithReason
+      key="modes"
+      reason={
+        reason ?? `Mode: ${labelOf(settings.modes, settings.currentMode)}`
+      }
+    >
       <ChoiceSelect
         disabled={locked}
         pending={pending?.kind === "mode"}
@@ -458,13 +470,9 @@ export function AssistantAgentSettings({
         </span>
       ) : null}
       {failure !== null ? (
-        <p
-          role="alert"
-          data-selectable
-          className="mt-1 text-xs wrap-break-word text-destructive"
-        >
-          {failure}
-        </p>
+        <Alert variant="destructive" className="mt-1">
+          <AlertDescription data-selectable>{failure}</AlertDescription>
+        </Alert>
       ) : null}
     </div>
   )
@@ -551,7 +559,10 @@ function MoreMenu({
                     })
                 }}
               >
-                <span dir="auto" className="truncate" title={option.name}>
+                <span
+                  dir="auto"
+                  className="min-w-0 wrap-anywhere whitespace-normal"
+                >
                   {option.name}
                 </span>
               </DropdownMenuCheckboxItem>
@@ -562,8 +573,7 @@ function MoreMenu({
               <DropdownMenuSubTrigger>
                 <span
                   dir="auto"
-                  className="min-w-0 flex-1 truncate"
-                  title={option.name}
+                  className="min-w-0 flex-1 wrap-anywhere whitespace-normal"
                 >
                   {option.name}
                 </span>

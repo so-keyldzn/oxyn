@@ -1,3 +1,5 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { createPortal } from "react-dom"
 import { useDebouncedValue } from "@tanstack/react-pacer"
@@ -16,6 +18,7 @@ import {
   ViewOffIcon,
 } from "@hugeicons/core-free-icons"
 
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
@@ -699,16 +702,17 @@ export function CatalogTree({
             {/* A fixed name and a pressed state: a name that flips as well
                 is announced « Show system objects, pressed » — the opposite
                 of what the tree shows. */}
-            <Toggle
-              size="sm"
-              pressed={hideSystem}
-              onPressedChange={setHideSystem}
-              aria-label="Hide system objects"
-              title="Hide system objects"
-              className="size-6 min-w-6 rounded-[calc(var(--radius)-3px)] px-0"
-            >
-              <HugeiconsIcon icon={ViewOffIcon} strokeWidth={2} />
-            </Toggle>
+            <ContentHint content="Hide system objects">
+              <Toggle
+                size="sm"
+                pressed={hideSystem}
+                onPressedChange={setHideSystem}
+                aria-label="Hide system objects"
+                className="size-6 min-w-6 rounded-[calc(var(--radius)-3px)] px-0"
+              >
+                <HugeiconsIcon icon={ViewOffIcon} strokeWidth={2} />
+              </Toggle>
+            </ContentHint>
           </InputGroupAddon>
         ) : null}
       </InputGroup>
@@ -982,44 +986,44 @@ function SearchHits({
     )
   }
   return (
-    <ul
-      aria-label="Matching objects"
-      className="flex min-h-0 flex-1 flex-col overflow-auto"
-    >
-      {hits.map((hit) => {
-        const key = addressKey(hit.address)
-        const parent = addressLabel({ ...hit.address, relation: null })
-        return (
-          <li key={key}>
-            <button
-              type="button"
-              onClick={() => onSelect(hit)}
-              aria-current={selected === key || undefined}
-              className={cn(
-                "flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[length:var(--reading-text)] outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
-                selected === key && "bg-sidebar-accent font-medium"
-              )}
-            >
-              <HugeiconsIcon
-                icon={iconFor(hit.kind)}
-                strokeWidth={1.8}
-                className="size-4 shrink-0 text-muted-foreground"
-              />
-              <span className="flex min-w-0 flex-col">
-                <span dir="auto" className="truncate">
-                  {hit.name}
+    <ScrollArea className="min-h-0 flex-1">
+      <ul aria-label="Matching objects" className="flex flex-col">
+        {hits.map((hit) => {
+          const key = addressKey(hit.address)
+          const parent = addressLabel({ ...hit.address, relation: null })
+          return (
+            <li key={key}>
+              <Button
+                variant="ghost"
+                onClick={() => onSelect(hit)}
+                aria-current={selected === key || undefined}
+                className={cn(
+                  "flex h-auto w-full min-w-0 items-center justify-start gap-1.5 rounded-md px-1.5 py-1 text-left text-[length:var(--reading-text)] outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
+                  selected === key && "bg-sidebar-accent font-medium"
+                )}
+              >
+                <HugeiconsIcon
+                  icon={iconFor(hit.kind)}
+                  strokeWidth={1.8}
+                  data-icon="inline-start"
+                  className="shrink-0 text-muted-foreground"
+                />
+                <span className="flex min-w-0 flex-col">
+                  <span dir="auto" className="truncate">
+                    {hit.name}
+                  </span>
+                  <span className="truncate text-[length:var(--reading-caption)] text-muted-foreground">
+                    {parent}
+                    {hit.matched === "fieldName" && hit.matchedFields.length > 0
+                      ? ` · column ${hit.matchedFields.join(", ")}`
+                      : ` · ${MATCHED[hit.matched]}`}
+                  </span>
                 </span>
-                <span className="truncate text-[length:var(--reading-caption)] text-muted-foreground">
-                  {parent}
-                  {hit.matched === "fieldName" && hit.matchedFields.length > 0
-                    ? ` · column ${hit.matchedFields.join(", ")}`
-                    : ` · ${MATCHED[hit.matched]}`}
-                </span>
-              </span>
-            </button>
-          </li>
-        )
-      })}
-    </ul>
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+    </ScrollArea>
   )
 }

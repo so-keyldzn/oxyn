@@ -484,7 +484,13 @@ export const LongNames: Story = {
     // Truncated on screen, whole for a reader and on hover.
     const text = model.querySelector("[dir=auto]") as HTMLElement
     await expect(text.scrollWidth).toBeGreaterThan(text.clientWidth)
-    await expect(model).toHaveAttribute("title", `${LONG}: ${LONG}`)
+    await userEvent.hover(model)
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-slot="tooltip-content"]')
+      ).toHaveTextContent(`${LONG}: ${LONG}`)
+    )
+    await userEvent.unhover(model)
     await expect(
       screen.getByRole("combobox", { name: "Mode: وضع التخطيط المفصل" })
     ).toBeVisible()
@@ -494,8 +500,7 @@ export const LongNames: Story = {
 const UNBROKEN = "claude_sonnet_analytics_team_staging_inference_profile_v2"
 
 /**
- * Long choices once the list is open: each one is cut with an ellipsis inside
- * the list's frame, never drawn past it.
+ * Long choices wrap inside the open list's frame.
  */
 export const LongChoicesStayInTheList: Story = {
   args: {
@@ -553,8 +558,10 @@ export const Pending: Story = {
       screen.getByRole("combobox", { name: "Thinking: Low" })
     ).toBeDisabled()
     await expect(
-      screen.getByText("Waiting for the agent to apply the change to Model.")
-    ).toBeInTheDocument()
+      screen.getByRole("combobox", { name: "Thinking: Low" })
+    ).toHaveAccessibleDescription(
+      "Waiting for the agent to apply the change to Model."
+    )
     await settled()
   },
 }

@@ -4,6 +4,27 @@ use oxyn_driver::{ConnectionField, DriverFamily, FieldKind};
 use super::*;
 
 #[test]
+fn system_mode_keeps_both_palette_choices_and_ipc_rejects_unknown_names() {
+    let mut preferences = WorkspacePreferences::default();
+    let change: PreferencesChange =
+        serde_json::from_str(r#"{"lightPalette":"ocean","darkPalette":"plum"}"#)
+            .expect("palette patch");
+    change.apply(&mut preferences);
+    for mode in ["light", "system", "dark", "system"] {
+        let change: PreferencesChange =
+            serde_json::from_value(serde_json::json!({"theme": mode})).expect("mode patch");
+        change.apply(&mut preferences);
+        let view = DisplayPreferences::of(&preferences);
+        assert_eq!(view.light_palette, PaletteChoice::Ocean);
+        assert_eq!(view.dark_palette, PaletteChoice::Plum);
+    }
+    assert!(
+        serde_json::from_str::<PreferencesChange>(r#"{"lightPalette":"not_a_palette"}"#).is_err()
+    );
+    assert!(serde_json::from_str::<PreferencesChange>(r#"{"darkPalette":42}"#).is_err());
+}
+
+#[test]
 fn details_send_declared_values_and_no_secret() {
     let metadata =
         DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)

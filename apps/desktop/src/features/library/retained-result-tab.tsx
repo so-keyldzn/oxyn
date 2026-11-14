@@ -8,7 +8,6 @@ import {
 } from "@/components/oxyn/retained-result-view"
 import type { RetainedResultState } from "@/components/oxyn/retained-result-view"
 import { session } from "@/features/session"
-import { useResultDensity } from "@/features/settings/use-result-density"
 import { useReleaseOnClose } from "@/features/library/use-release-on-close"
 import { ExportMenu } from "@/features/workspace/export-menu"
 import { useGridMenu } from "@/features/workspace/grid-menu"
@@ -41,7 +40,6 @@ export function RetainedResultTab({
   /** An export of these rows started or ended: the tab must not close. */
   onExportingChange?: (exporting: boolean) => void
 }) {
-  const density = useResultDensity()
   // Each tab opens the result for itself: the opening counts one reader in
   // the backend, released by this tab alone.
   const view = React.useId()
@@ -106,7 +104,6 @@ export function RetainedResultTab({
       onRetry={() => void opened.refetch()}
       onOpenCopy={onOpenCopy}
       destination={connectionName}
-      density={density}
       gridMenu={gridMenu}
       footerActions={
         state.status === "open" ? (

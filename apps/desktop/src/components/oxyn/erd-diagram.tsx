@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import dagre from "@dagrejs/dagre"
 import {
@@ -147,23 +148,23 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
           className="size-1! min-h-0! min-w-0! border-0! bg-transparent!"
         />
         {onOpen ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            title={label}
-            aria-label={`Open ${label}`}
-            className="nodrag nopan h-8 w-full justify-start gap-1.5 rounded-none border-b px-2 text-xs"
-            onClick={() => onOpen(table.address)}
-          >
-            {title}
-          </Button>
+          <ContentHint content={label}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Open ${label}`}
+              className="nodrag nopan h-8 w-full justify-start gap-1.5 rounded-none border-b px-2 text-xs"
+              onClick={() => onOpen(table.address)}
+            >
+              {title}
+            </Button>
+          </ContentHint>
         ) : (
-          <div
-            title={label}
-            className="flex h-8 items-center gap-1.5 border-b px-2"
-          >
-            {title}
-          </div>
+          <ContentHint content={label}>
+            <div className="flex h-8 items-center gap-1.5 border-b px-2">
+              {title}
+            </div>
+          </ContentHint>
         )}
         <ul className="flex flex-col py-1">
           {shown.length === 0 ? (
@@ -193,9 +194,11 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
                   />
                 ) : null}
               </span>
-              <span className="min-w-0 truncate font-mono" title={column.name}>
-                {column.name}
-              </span>
+              <ContentHint content={column.name}>
+                <span className="min-w-0 truncate font-mono">
+                  {column.name}
+                </span>
+              </ContentHint>
               {column.primaryKey ? (
                 <span className="sr-only">, primary key</span>
               ) : null}

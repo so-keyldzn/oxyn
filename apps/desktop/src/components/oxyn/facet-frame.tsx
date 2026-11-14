@@ -1,3 +1,5 @@
+import { ContentHint } from "./content-hint"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -116,12 +118,13 @@ export function FacetFrame({
           {freshnessLabel(freshness)}
         </Badge>
         {stale ? (
-          <span
-            title="A DDL changed this connection since this was read."
-            className="truncate text-muted-foreground"
+          <ContentHint
+            content={"A DDL changed this connection since this was read."}
           >
-            A DDL changed this connection since this was read.
-          </span>
+            <span className="truncate text-muted-foreground">
+              A DDL changed this connection since this was read.
+            </span>
+          </ContentHint>
         ) : null}
         {/* Refresh and Cancel keep their own place, as Run and Stop do
             (docs/UX-SPEC.md, « Scope of Run in a SQL console »): one button whose meaning
@@ -192,7 +195,7 @@ export function FacetFrame({
         </p>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <ScrollArea className="min-h-0 flex-1">
         {hasValue ? (
           empty ? (
             <Empty className="h-full border-0">
@@ -232,7 +235,7 @@ export function FacetFrame({
             </EmptyContent>
           </Empty>
         )}
-      </div>
+      </ScrollArea>
     </div>
   )
 }

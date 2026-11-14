@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, ArrowDown01Icon } from "@hugeicons/core-free-icons"
@@ -73,71 +74,75 @@ export function MissingModuleNotice({
 }) {
   const named = <code className="font-mono text-foreground">{module}</code>
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto p-4">
-      <Alert className="gap-1.5 px-3 py-3">
-        <HugeiconsIcon
-          icon={Alert02Icon}
-          strokeWidth={2}
-          className="text-warning"
-        />
-        <AlertTitle>
-          {subject.type === "virtualTable"
-            ? "This table needs an SQLite extension"
-            : `This ${subject.noun} reads a table that needs an SQLite extension`}
-        </AlertTitle>
-        <AlertDescription className="flex min-w-0 flex-col gap-2">
-          {subject.type === "virtualTable" ? (
-            <p>
-              This table is provided by the SQLite extension {named}, which Oxyn
-              does not load.{" "}
-              <ShadowTables
-                shadows={subject.shadows}
-                onOpenShadow={onOpenShadow}
-              />
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col p-4">
+        <Alert className="gap-1.5 px-3 py-3">
+          <HugeiconsIcon
+            icon={Alert02Icon}
+            strokeWidth={2}
+            className="text-warning"
+          />
+          <AlertTitle>
+            {subject.type === "virtualTable"
+              ? "This table needs an SQLite extension"
+              : `This ${subject.noun} reads a table that needs an SQLite extension`}
+          </AlertTitle>
+          <AlertDescription className="flex min-w-0 flex-col gap-2">
+            {subject.type === "virtualTable" ? (
+              <p>
+                This table is provided by the SQLite extension {named}, which
+                Oxyn does not load.{" "}
+                <ShadowTables
+                  shadows={subject.shadows}
+                  onOpenShadow={onOpenShadow}
+                />
+              </p>
+            ) : (
+              <p>
+                This {subject.noun} reads a virtual table whose module {named}{" "}
+                is not loaded: Oxyn does not load that SQLite extension, so the
+                read fails.
+              </p>
+            )}
+            {sameModule(module, SQLITE_VEC_MODULE) ? (
+              // The one extension Oxyn ships, off unless the connection opts in:
+              // loading code a database file asks for is a trust decision.
+              <p>
+                You can enable sqlite-vec for this connection in its settings,
+                if you trust this file.
+              </p>
+            ) : null}
+            <p className="text-xs">
+              Running it again as is will fail the same way.
             </p>
-          ) : (
-            <p>
-              This {subject.noun} reads a virtual table whose module {named} is
-              not loaded: Oxyn does not load that SQLite extension, so the read
-              fails.
-            </p>
-          )}
-          {sameModule(module, SQLITE_VEC_MODULE) ? (
-            // The one extension Oxyn ships, off unless the connection opts in:
-            // loading code a database file asks for is a trust decision.
-            <p>
-              You can enable sqlite-vec for this connection in its settings, if
-              you trust this file.
-            </p>
-          ) : null}
-          <p className="text-xs">
-            Running it again as is will fail the same way.
-          </p>
-          <Collapsible className="flex min-w-0 flex-col">
-            <CollapsibleTrigger className="group/raw inline-flex w-fit items-center gap-1 rounded-md py-0.5 pr-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
-              Driver message
-              <HugeiconsIcon
-                icon={ArrowDown01Icon}
-                strokeWidth={2}
-                className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/raw:rotate-180 motion-reduce:transition-none"
-                aria-hidden
-              />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="overflow-hidden">
-              {/* The server's words, code included — never a paraphrase. */}
-              <pre
-                data-selectable
-                tabIndex={0}
-                aria-label="Server message"
-                className="mt-1 max-h-64 overflow-auto rounded-md border bg-muted/40 p-2.5 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {message}
-              </pre>
-            </CollapsibleContent>
-          </Collapsible>
-        </AlertDescription>
-      </Alert>
-    </div>
+            <Collapsible className="flex min-w-0 flex-col">
+              <CollapsibleTrigger className="group/raw inline-flex w-fit items-center gap-1 rounded-md py-0.5 pr-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+                Driver message
+                <HugeiconsIcon
+                  icon={ArrowDown01Icon}
+                  strokeWidth={2}
+                  className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/raw:rotate-180 motion-reduce:transition-none"
+                  aria-hidden
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="overflow-hidden">
+                {/* The server's words, code included — never a paraphrase. */}
+                <ScrollArea className="max-h-64 min-h-0 rounded-md [&>[data-slot=scroll-area-viewport]]:max-h-64">
+                  <pre
+                    data-selectable
+                    tabIndex={0}
+                    aria-label="Server message"
+                    className="mt-1 rounded-md border bg-muted/40 p-2.5 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {message}
+                  </pre>
+                </ScrollArea>
+              </CollapsibleContent>
+            </Collapsible>
+          </AlertDescription>
+        </Alert>
+      </div>
+    </ScrollArea>
   )
 }
 

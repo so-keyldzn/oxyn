@@ -1,3 +1,4 @@
+import { ContentHint } from "@/components/oxyn/content-hint"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -19,7 +20,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs"
+import { ScrollableTabsList } from "@/components/oxyn/scrollable-tabs-list"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Tooltip,
@@ -175,22 +177,16 @@ export function ObjectViewFrame({
     >
       <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-1">
         <div className="flex min-w-0 items-baseline gap-2">
-          <h2
-            dir="auto"
-            title={name}
-            className="max-w-72 truncate text-sm font-medium"
-          >
-            {name}
-          </h2>
+          <ContentHint content={name}>
+            <h2 dir="auto" className="max-w-72 truncate text-sm font-medium">
+              {name}
+            </h2>
+          </ContentHint>
           <span className="shrink-0 text-xs text-muted-foreground">
             {objectKindLabel(kind)}
           </span>
         </div>
-        <TabsList
-          variant="line"
-          aria-label={`Views of ${name}`}
-          className="max-w-full overflow-x-auto"
-        >
+        <ScrollableTabsList size="sm" aria-label={`Views of ${name}`}>
           {inTabBar.map((candidate) =>
             candidate.value === "data" && dataUnavailable ? (
               <Tooltip key={candidate.value}>
@@ -216,7 +212,7 @@ export function ObjectViewFrame({
               </TabsTrigger>
             )
           )}
-        </TabsList>
+        </ScrollableTabsList>
         {compact ? (
           // Beside the tab list, not inside it: a `tablist` holds tabs only.
           <DropdownMenu>

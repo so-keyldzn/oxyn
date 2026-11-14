@@ -16,6 +16,15 @@ import {
 export const ThemeChoice = z.enum(["light", "dark", "system"])
 export type ThemeChoice = z.infer<typeof ThemeChoice>
 
+export const PaletteChoice = z.enum([
+  "oxyn",
+  "graphite",
+  "ocean",
+  "forest",
+  "plum",
+])
+export type PaletteChoice = z.infer<typeof PaletteChoice>
+
 export const DensityChoice = z.enum(["compact", "comfortable"])
 export type DensityChoice = z.infer<typeof DensityChoice>
 
@@ -24,6 +33,8 @@ export type BinaryChoice = z.infer<typeof BinaryChoice>
 
 export const DisplayPreferences = z.object({
   theme: ThemeChoice,
+  lightPalette: PaletteChoice,
+  darkPalette: PaletteChoice,
   readingDensity: DensityChoice,
   sidebarCollapsed: z.boolean(),
   inspectorOpen: z.boolean(),
@@ -42,10 +53,35 @@ export type DisplayPreferences = z.infer<typeof DisplayPreferences>
 export const PreferencesChange = DisplayPreferences.partial()
 export type PreferencesChange = z.infer<typeof PreferencesChange>
 
-export const PreferencesState = z.object({
-  revision: z.number().nonnegative(),
-  preferences: DisplayPreferences,
-})
+export const PreferencesState = z
+  .object({
+    revision: z.number().nonnegative(),
+    // An older running development host only knows the original palette.
+    // Missing fields keep that appearance readable, but disable palette writes;
+    // unknown palette names still fail validation instead of being guessed.
+    preferences: DisplayPreferences.partial({
+      lightPalette: true,
+      darkPalette: true,
+    }).refine(
+      (value) =>
+        (value.lightPalette === undefined) ===
+        (value.darkPalette === undefined),
+      {
+        message: "Both palette fields must be supplied together.",
+      }
+    ),
+  })
+  .transform(({ revision, preferences }) => ({
+    revision,
+    palettesAvailable:
+      preferences.lightPalette !== undefined &&
+      preferences.darkPalette !== undefined,
+    preferences: {
+      ...preferences,
+      lightPalette: preferences.lightPalette ?? ("oxyn" as const),
+      darkPalette: preferences.darkPalette ?? ("oxyn" as const),
+    },
+  }))
 export type PreferencesState = z.infer<typeof PreferencesState>
 
 export const PreferencesSaved = z.object({

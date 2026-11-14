@@ -61,7 +61,7 @@ function workspace(
     costs: () => costs,
     closeAll: () => {
       backend.log.push(`close ${connection}`)
-      return Promise.resolve()
+      return Promise.resolve(true)
     },
   }
 }
@@ -169,8 +169,8 @@ describe("closing a window that is not the last", () => {
     expect(backend.confirmed).toBe(0)
   })
 
-  it("starts no further workspace once Cancel stops the closing one", async () => {
-    let finish = () => {}
+  it("starts workspaces together and cancels pending closes without confirming the window", async () => {
+    let finish = (_closed: boolean) => {}
     let signal: AbortSignal | undefined
     unregister.push(
       registerWorkspaceConsoles("a", {
@@ -190,10 +190,24 @@ describe("closing a window that is not the last", () => {
     await vi.waitFor(() => expect(backend.log).toContain("close billing"))
     cancelWindowClose()
     expect(signal?.aborted).toBe(true)
-    finish()
+    finish(false)
     await pending
-    expect(backend.log).toEqual(["flush", "close billing"])
+    expect(backend.log).toEqual(["flush", "close billing", "close analytics"])
     expect(backend.confirmed).toBe(0)
+  })
+
+  it("keeps the window open and reports a failed workspace close", async () => {
+    unregister.push(
+      registerWorkspaceConsoles("a", {
+        ...workspace("billing", [UNSAVED]),
+        closeAll: () => Promise.resolve(false),
+      })
+    )
+    onCloseRequested()
+    await closeWindow()
+    expect(backend.confirmed).toBe(0)
+    expect(windowClose.state?.busy).toBe(false)
+    expect(windowClose.state?.error).toContain("billing")
   })
 
   it("lets a cancelled close touch nothing of the next one", async () => {

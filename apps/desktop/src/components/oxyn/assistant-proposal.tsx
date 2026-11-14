@@ -1,3 +1,4 @@
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CodeIcon } from "@hugeicons/core-free-icons"
 
@@ -84,14 +85,17 @@ export function AssistantProposal({
             <Skeleton className="h-3 w-1/2" />
           </div>
         ) : state.status === "ready" ? (
-          <pre
-            data-selectable
-            tabIndex={0}
-            aria-label="Proposed SQL, commented"
-            className="max-h-72 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {state.sql}
-          </pre>
+          <ScrollArea className="min-w-0 rounded-md border bg-muted/30 [&>[data-slot=scroll-area-viewport]]:max-h-72">
+            <pre
+              data-selectable
+              tabIndex={0}
+              aria-label="Proposed SQL, commented"
+              className="p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {state.sql}
+            </pre>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
         ) : state.status === "unavailable" ? (
           <p className="text-sm text-muted-foreground">
             There is nothing this database can change on this object from a

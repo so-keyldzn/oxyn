@@ -81,7 +81,9 @@ async function reachConnect(canvasElement: HTMLElement, driver: DriverChoice) {
   for (const field of driver.fields) {
     if (!field.required || field.default) continue
     await userEvent.type(
-      canvasElement.querySelector<HTMLInputElement>(`#field-${field.key}`)!,
+      canvasElement.querySelector<HTMLInputElement>(
+        `[data-connection-field="${CSS.escape(field.key)}"] input`
+      )!,
       field.kind.type === "path" ? "/tmp/billing.sqlite" : "billing"
     )
   }
@@ -97,6 +99,46 @@ async function reachConnect(canvasElement: HTMLElement, driver: DriverChoice) {
     const rect = connect.getBoundingClientRect()
     expect(rect.top).toBeGreaterThanOrEqual(screen.top)
     expect(rect.bottom).toBeLessThanOrEqual(screen.bottom + 1)
+  })
+}
+
+/** The footer occupies its own space; scrolling never places help beneath it. */
+async function expectFieldsAndActionsFit(canvasElement: HTMLElement) {
+  const canvas = within(canvasElement)
+  const fields = canvasElement.querySelector<HTMLElement>(
+    'form [data-slot="scroll-area-viewport"]'
+  )!
+  const actions = canvasElement.querySelector<HTMLElement>(
+    '[data-slot="connection-form-actions"]'
+  )!
+  const main = canvasElement.querySelector("main")!
+  const footerTop = actions.getBoundingClientRect().top
+  await expect(fields.scrollHeight).toBeGreaterThan(fields.clientHeight)
+  await expect(main.scrollHeight).toBeLessThanOrEqual(main.clientHeight + 1)
+  fields.scrollTop = fields.scrollHeight
+  await waitFor(() => {
+    const viewport = fields.getBoundingClientRect()
+    const disclosure = canvasElement
+      .querySelector('[data-slot="privacy-disclosure"]')!
+      .getBoundingClientRect()
+    expect(disclosure.bottom).toBeLessThanOrEqual(viewport.bottom + 1)
+    expect(viewport.bottom).toBeLessThanOrEqual(
+      actions.getBoundingClientRect().top + 1
+    )
+    expect(actions.getBoundingClientRect().top).toBe(footerTop)
+    expect(actions.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      main.getBoundingClientRect().bottom + 1
+    )
+    expect(fields.scrollWidth).toBeLessThanOrEqual(fields.clientWidth + 1)
+  })
+  const readOnlyHelp = canvas.getByText(
+    "Every write and DDL is refused on this connection, yours included."
+  )
+  readOnlyHelp.scrollIntoView({ block: "center" })
+  await waitFor(() => {
+    const help = readOnlyHelp.getBoundingClientRect()
+    expect(help.top).toBeGreaterThanOrEqual(fields.getBoundingClientRect().top)
+    expect(help.bottom).toBeLessThanOrEqual(actions.getBoundingClientRect().top)
   })
 }
 
@@ -334,9 +376,20 @@ export const ManyFieldsShortWindow: Story = {
   args: { driver: postgresWithSsl, connections: [...summaries, ...homonyms] },
   play: async ({ canvasElement }) => {
     await reachConnect(canvasElement, postgresWithSsl)
-    // The page scrolls as a whole; nothing inside it clips the form.
-    const main = canvasElement.querySelector("main")!
-    await expect(main.scrollHeight).toBeGreaterThan(main.clientHeight)
+    await expectFieldsAndActionsFit(canvasElement)
+  },
+}
+
+export const MySqlFormFitsTheWindow: Story = {
+  decorators: [sized("h-[800px] w-[1080px]")],
+  args: { driver: mysqlDriver },
+  play: async ({ canvas, canvasElement }) => {
+    const host = canvas.getByLabelText(/^Host/).getBoundingClientRect()
+    const port = canvas.getByLabelText(/^Port/).getBoundingClientRect()
+    await expect(Math.abs(host.top - port.top)).toBeLessThan(1)
+    await expect(host.right).toBeLessThan(port.left)
+    await reachConnect(canvasElement, mysqlDriver)
+    await expectFieldsAndActionsFit(canvasElement)
   },
 }
 
@@ -358,7 +411,9 @@ export const NotTested: Story = {
     await userEvent.type(canvas.getByLabelText(/^Name/), "billing")
     await expect(status).toHaveTextContent("billing")
     await userEvent.type(
-      canvasElement.querySelector<HTMLInputElement>("#field-path")!,
+      canvasElement.querySelector<HTMLInputElement>(
+        '[data-connection-field="path"] input'
+      )!,
       "/tmp/billing.sqlite"
     )
     await expect(args.onDraftChange).toHaveBeenCalled()
@@ -545,6 +600,7 @@ export const NarrowWindow: Story = {
   args: { onReturnToWorkspace: fn(), driver: postgresWithSsl },
   play: async ({ canvasElement }) => {
     await reachConnect(canvasElement, postgresWithSsl)
+    await expectFieldsAndActionsFit(canvasElement)
   },
 }
 

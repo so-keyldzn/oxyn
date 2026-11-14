@@ -1,3 +1,5 @@
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { ContentHint } from "@/components/oxyn/content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
@@ -143,13 +145,11 @@ export function CatalogPanel({
             <DriverLogo driver={driver} className="size-4" />
           </div>
           <div className="grid min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">
-            <span
-              dir="auto"
-              title={connectionName}
-              className="truncate text-sm font-medium"
-            >
-              {connectionName}
-            </span>
+            <ContentHint content={connectionName}>
+              <span dir="auto" className="truncate text-sm font-medium">
+                {connectionName}
+              </span>
+            </ContentHint>
             <span className="truncate text-xs text-muted-foreground">
               {driver}
             </span>
@@ -343,15 +343,17 @@ function CatalogProblemAlert({
       <AlertTitle>The catalog could not be read</AlertTitle>
       <AlertDescription className="flex flex-col gap-1.5">
         {/* The server's words, code included — never a paraphrase. */}
-        <pre
-          data-selectable
-          // Scrollable, so reachable by keyboard.
-          tabIndex={0}
-          aria-label="Server message"
-          className="max-h-32 overflow-auto font-mono text-xs whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {problem.message}
-        </pre>
+        <ScrollArea className="max-h-32 w-full min-w-0 [&>[data-slot=scroll-area-viewport]]:max-h-32">
+          <pre
+            data-selectable
+            // Scrollable, so reachable by keyboard.
+            tabIndex={0}
+            aria-label="Server message"
+            className="font-mono text-xs whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {problem.message}
+          </pre>
+        </ScrollArea>
         <p className="text-xs">
           {problem.retryable
             ? "This error is transient: refreshing may succeed."

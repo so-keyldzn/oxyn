@@ -42,7 +42,6 @@ import {
   gridInspection,
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
-import { useResultDensity } from "@/features/settings/use-result-density"
 import { ExportMenu } from "@/features/workspace/export-menu"
 import { useGridMenu } from "@/features/workspace/grid-menu"
 import { openObject } from "@/features/workspace/object-requests"
@@ -67,6 +66,8 @@ import type { ResultState } from "@/components/oxyn/result-panel"
 /** What the workspace may ask of a console it does not render itself. */
 export interface ConsoleHandle {
   closeReasons: () => CloseReasons
+  /** A live operation that must finish or be cancelled before closing. */
+  closeBlocked?: () => string | null
   /** The text as typed, to carry into the next connection's first console. */
   text: () => string
   /** Writes the pending draft now; `false` if the text is not in the store. */
@@ -392,6 +393,10 @@ export function ConsolePanel({
   }
   React.useEffect(() => {
     const handle: ConsoleHandle = {
+      closeBlocked: () =>
+        latest.current.exporting
+          ? "Finish or cancel the export before closing this console."
+          : null,
       closeReasons: () => ({
         title: latest.current.doc.title || "Untitled query",
         connection: latest.current.connection,
@@ -580,7 +585,6 @@ export function ConsolePanel({
     [find.answer, find.searching, find.error, onFind, onClearFind]
   )
   const editQuery = React.useCallback(() => view.current?.focus(), [])
-  const density = useResultDensity()
   const latestInspection = React.useRef(inspection)
   latestInspection.current = inspection
   const onActiveChange = React.useCallback((position: GridPosition | null) => {
@@ -597,7 +601,6 @@ export function ConsolePanel({
         onRetry={retry}
         toolbar={resultId ? findBar : undefined}
         footerActions={exportMenu}
-        density={density}
         context={{ connectionName: open.name, statement }}
         onEditQuery={editQuery}
         matches={find.matches}
@@ -618,7 +621,6 @@ export function ConsolePanel({
       resultId,
       findBar,
       exportMenu,
-      density,
       open.name,
       statement,
       editQuery,
