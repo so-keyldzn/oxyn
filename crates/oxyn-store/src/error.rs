@@ -32,6 +32,12 @@ pub enum StoreError {
         /// Static, non-sensitive reason.
         detail: &'static str,
     },
+    /// Invalid local loading state; the reason never echoes supplied content.
+    #[error("metadata loading policy: {detail}")]
+    InvalidMetadataPolicy {
+        /// Static, non-sensitive reason.
+        detail: &'static str,
+    },
     /// The local operation stopped before completion at the caller's request.
     #[error("local operation cancelled")]
     Cancelled,
@@ -151,6 +157,7 @@ impl From<StoreError> for OxynError {
             StoreError::DataDirUnavailable
             | StoreError::ServerProfileConflict
             | StoreError::InvalidServerProfile { .. }
+            | StoreError::InvalidMetadataPolicy { .. }
             | StoreError::SchemaTooRecent { .. }
             | StoreError::SecretInParams { .. }
             | StoreError::TooLarge { .. } => Self::Config(message),

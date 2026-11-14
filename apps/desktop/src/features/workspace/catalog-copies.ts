@@ -17,10 +17,9 @@ const COPIED_AS: Record<CopyAsForm, string> = {
 }
 
 /** What a cancelled read of each facet is called. */
-const FACET_WORDS: Record<RelationFacet, string> = {
-  detail: "structure",
-  constraints: "constraints",
-  incomingKeys: "incoming keys",
+type CopyFacet = Extract<RelationFacet, "description" | "definition">
+const FACET_WORDS: Record<CopyFacet, string> = {
+  description: "structure",
   definition: "definition",
 }
 
@@ -36,14 +35,18 @@ export function useCatalogCopies(open: OpenConnection) {
 
   // The facets the object view reads, with `facet` loaded through the bus
   // when it never was (I-01), and written back under that view's key.
-  const facetsWith = async (node: CatalogNode, facet: RelationFacet) => {
+  const facetsWith = async (node: CatalogNode, facet: CopyFacet) => {
     const key = facetsKey(open.connection, node.address, open.session)
     const cached = await queryClient.fetchQuery({
       queryKey: key,
       queryFn: () =>
         metadata.relationFacets(open.connection, node.address, open.session),
     })
-    if (cached[facet].freshness.state === "fetched") return cached
+    if (
+      (facet === "description" ? cached.detail : cached.definition).freshness
+        .state === "fetched"
+    )
+      return cached
     const outcome = await metadata.refreshRelationFacet(
       newCommandId(),
       open.connection,
@@ -83,7 +86,7 @@ export function useCatalogCopies(open: OpenConnection) {
         throw new Error("No definition was reported for this object.")
       return definition.sql
     }
-    if (form === "insertTemplate") await facetsWith(node, "detail")
+    if (form === "insertTemplate") await facetsWith(node, "description")
     return metadata.composeObjectSql(
       open.connection,
       node.address,

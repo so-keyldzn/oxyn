@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="9b7bb7ad482c" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="580ff07fc069" -->
 
 # Recherche sur les schémas : parcours utilisateur
 
@@ -90,9 +90,9 @@ Ouvrir B plusieurs fois ne crée pas de sessions en double.
 **Entrée :** catalogue, recherche, objet lié ou nœud de la carte.
 
 **Existant :** Données, Structure, Index, Contraintes, Relations et DDL partagent
-une vue d'objet. Données/Structure/Index/clés sortantes demandent actuellement
-`detail` ; en affichage large, les onglets de métadonnées demandent aussi la
-définition adjacente.
+une vue d’objet. #375 sépare l’ancien `detail` en lectures indépendantes de
+description, d’index et de clés sortantes. La définition adjacente attend une
+demande explicite ; la validation figure dans le registre d’achèvement.
 
 **Parcours proposé :** identifier connexion, base, espace de noms et objet ;
 ouvrir la vue adaptée ; demander uniquement ses facettes nécessaires ; afficher
@@ -123,34 +123,39 @@ de l'aperçu conservé restent distinctes.
 
 ## J03 — Maîtriser le chargement des métadonnées
 
-**Entrée :** action proposée `Metadata loading` sur une connexion ou un schéma.
+**Entrée :** `Metadata loading…` dans l’explorateur de la source active.
 
-**Existant :** lectures hiérarchiques, facettes par objet, cache borné, passes de
-complétion de l'éditeur et de l'assistant. Aucun préréglage L1/L2/L3 configurable.
+**Existant :** lectures hiérarchiques, facettes indépendantes, cache borné,
+complétion de l’éditeur et de l’assistant. #375 ajoute les préférences manuelles
+Minimal/Structure/Étendu et les dérogations exactes d’espace de noms natif ;
+la validation est consignée dans le [registre d’achèvement](completion.md).
 
-**Parcours proposé :** choisir un préréglage, voir s'il est hérité, examiner son
-périmètre et demander explicitement des détails supplémentaires au besoin.
+**Parcours proposé :** choisir un préréglage, voir son héritage, examiner son
+périmètre et demander explicitement les détails supplémentaires nécessaires.
 
-| Préréglage provisoire | Lectures anticipées dans le périmètre choisi | Lecture explicite |
+| Préréglage | Préchargement du périmètre choisi | Lecture explicite |
 |---|---|---|
 | Minimal | Noms des objets | Toute facette prise en charge à son ouverture |
 | Structure | Noms, colonnes, index et clés sortantes | Définitions et autres facettes |
-| Étendu | Structure et définitions prises en charge | Les familles d'objets non prises en charge restent indisponibles |
+| Étendu | Structure et définitions disponibles | Les familles non prises en charge restent indisponibles |
 
-Ce sont des candidats, pas de nouveaux budgets. Aucun ne promet de garder la
-base entière en mémoire. Choisir un préréglage est distinct du lancement d'une
-lecture en masse ; le déclencheur proposé est désormais l'action explicite de
-préchargement de D02, pas l'enregistrement de la préférence ni le développement
-de tout l'arbre.
+Ces préréglages n’agrandissent pas les budgets et ne promettent pas de garder
+la base entière en mémoire. Choisir un préréglage ne lance pas une lecture en
+masse : une action distincte précharge le périmètre sélectionné. Enregistrer la
+préférence ou développer un niveau ne précharge rien en masse. Chaque page
+explicite s’arrête à 128 relations / 60 secondes ; la page suivante est liée à
+la génération de source. Facettes indisponibles, échouées, fraîches, périmées et
+non lues restent distinctes. L’annulation atteint la session d’origine. Les
+préférences sont du JSON local lisible séparé de l’authentification.
 
 **Échec et reprise :** afficher le travail en attente, annulé et incomplet ;
-abaisser le niveau arrête le préchargement devenu inutile sans perdre l'éditeur
-courant. Une information manquante reste distincte d'un résultat vide.
+abaisser le niveau arrête le préchargement remplacé sans perdre l’éditeur.
+Une information manquante reste distincte d’un résultat vide.
 
-**Acceptation :** arbre, complétion, diagramme et assistant appliquent une même
-politique ; changer la largeur de l'écran ne la contourne pas par le panneau DDL
-adjacent. Aucun seuil automatique de nombre d'objets ni exception SQLite n'est
-supposé. **Décision :** D02, après mesures.
+**Acceptation :** arbre, complétion, diagramme et assistant demandent leurs
+facettes nécessaires ; changer la largeur ne déclenche pas le DDL adjacent.
+Aucun seuil automatique ni exception SQLite. **Décision :** D02 ; les mesures
+n’autorisent aucun seuil automatique.
 
 ## J04 — Ouvrir une carte relationnelle sans IA
 

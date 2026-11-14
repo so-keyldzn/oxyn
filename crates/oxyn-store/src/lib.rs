@@ -101,6 +101,7 @@ pub mod egress;
 pub mod error;
 pub mod history;
 pub mod journal;
+pub mod metadata_loading;
 pub mod server_profiles;
 pub mod store;
 pub mod workspaces;
@@ -238,6 +239,7 @@ mod tests {
                 "connections",
                 "documents",
                 "external_agents",
+                "metadata_loading_policies",
                 "query_history",
                 "schema_version",
                 "server_profile_members",

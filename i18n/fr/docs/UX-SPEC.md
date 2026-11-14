@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="61952716c00c" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="19fa95f55342" -->
 
 
 
@@ -474,11 +474,39 @@ Un texte conservé après un rafraîchissement échoué est signalé comme
 potentiellement périmé, y compris lors de sa copie dans une console.
 
 En disposition large, la définition accompagne les vues de métadonnées dans
-un panneau initialement large de 424 px. Sa poignée de 8 px fonctionne à la
+un panneau initialement large de 424 px. Afficher Structure, Index ou Relations
+ne lit pas la définition : l’utilisateur la demande explicitement. Sa poignée de 8 px fonctionne à la
 souris et au clavier (320–640 px, Début : 424 px). Cette largeur reste dans le
 workspace ouvert. En disposition compacte, le sous-onglet DDL présente la
 définition sur la largeur disponible ; changer la largeur de fenêtre ne
 relance pas sa lecture.
+
+### Chargement manuel des métadonnées
+
+`Metadata loading…` dans l’explorateur de la source active ouvre les préférences
+de connexion et les dérogations exactes de catalogue/espace de noms observé.
+Minimal précharge les noms ; Structure ajoute descriptions, index et clés
+sortantes pris en charge ; Étendu ajoute les définitions disponibles. Enregistrer
+ne précharge rien et ne ferme aucun éditeur. Chaque vue demande toujours ses
+propres facettes nécessaires, indépendamment du préréglage. Le dialogue sépare
+préchargement, page suivante explicite et annulation, et montre la couverture
+fraîche, périmée, non lue, indisponible ou échouée. Une page est bornée à
+128 relations et 60 secondes ; les grands périmètres restent partiels. Modifier
+la politique arrête les préchargements remplacés. Une erreur ne rejoue aucun
+enregistrement silencieusement.
+
+Si décrire les champs exige une inférence documentaire, Structure demande
+un échantillon borné avec confirmation distincte. Annuler reçoit le focus.
+Les limites déclarées de documents retournés, octets retenus et temps de
+traitement sont affichées ; lots réseau et plan serveur peuvent lire davantage.
+Seules les métadonnées des champs inférés sont conservées, sans afficher ni
+transmettre de valeurs échantillonnées à l’IA. Un échantillonnage non pris en
+charge reste indisponible, sans lecture de remplacement.
+
+Trier ou projeter un aperçu documentaire peut exiger une structure de champs
+fraîche explicitement lue. Absente ou évincée, l’erreur demande de lire Structure
+d’abord. Préparer l’aperçu ne rééchantillonne aucun document silencieusement.
+L’aperçu documentaire simple reste disponible sans cette lecture structurelle.
 
 ### Lisibilité et hauteur de grille
 

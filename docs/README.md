@@ -107,7 +107,7 @@ To locate the boards and their states before implementation, see
 | [0078](adr/0078-page-keyless-relations-with-isolated-retained-reads.md) | Keyless relation pages use bounded retained reads, isolated from catalog sessions | accepted |
 | [0079](adr/0079-retain-temporary-previews-on-their-owning-session.md) | Temporary previews retain their physical owner with explicit occupancy and isolated metadata | accepted |
 | [0080](adr/0080-group-database-connections-under-server-profiles.md) | Group database connections under server profiles without sharing authority | accepted |
-| [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Load catalog facets independently and make bulk prefetch explicit | proposed |
+| [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Load catalog facets independently and make bulk prefetch explicit | accepted |
 | [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Project schema maps from catalog metadata with explicit provenance | proposed |
 | [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Run native database transfers as authorized, owned jobs | proposed |
 

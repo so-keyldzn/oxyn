@@ -45,10 +45,9 @@ pub const MAX_LISTINGS: usize = 32;
 /// The most relations one pass describes.
 ///
 /// Product bound. A statement names a few relations, and a pass is repeated at
-/// every pause in typing; describing is three queries a relation (columns,
-/// indexes, foreign keys), so sixteen of them on a remote server at 50 ms of
-/// round trip are under three seconds — the arithmetic of the assistant's own
-/// bound (`catalog_fill`), which is not re-measured here: it needs a server.
+/// every pause in typing. The existing ceiling is retained after narrowing the
+/// request to fields: index/key reads are no longer implicit, and this change
+/// does not justify increasing the bound without measurements.
 pub const MAX_DESCRIPTIONS: usize = 16;
 
 /// The longest a pass may take, reads included.
@@ -215,8 +214,14 @@ fn next_description(
     names: &[Vec<CompletionNamePart>],
     tried: &HashSet<Read>,
 ) -> Option<CatalogScope> {
+    if cache.server_info().is_some_and(|info| {
+        info.capabilities
+            .contains(oxyn_core::Capabilities::INFERRED_SCHEMA)
+    }) {
+        return None;
+    }
     names.iter().find_map(|chain| {
-        let scope = CatalogScope::Relation(resolve(cache, spaces, folding, chain)?);
+        let scope = CatalogScope::Description(resolve(cache, spaces, folding, chain)?);
         unread(cache, &scope, tried).then_some(scope)
     })
 }

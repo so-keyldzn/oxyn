@@ -7934,6 +7934,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -8286,6 +8287,8 @@ dependencies = [
  "parking_lot",
  "rstest",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

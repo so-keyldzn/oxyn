@@ -189,6 +189,26 @@ impl Backend {
                 namespace,
                 relation,
             },
+            RelationFacet::Description => CatalogRefreshScope::Description {
+                catalog,
+                namespace,
+                relation,
+            },
+            RelationFacet::Indexes => CatalogRefreshScope::Indexes {
+                catalog,
+                namespace,
+                relation,
+            },
+            RelationFacet::OutgoingKeys => CatalogRefreshScope::OutgoingForeignKeys {
+                catalog,
+                namespace,
+                relation,
+            },
+            RelationFacet::SampledDescription => CatalogRefreshScope::SampledDescription {
+                catalog,
+                namespace,
+                relation,
+            },
             RelationFacet::Constraints => CatalogRefreshScope::Constraints {
                 catalog,
                 namespace,
@@ -276,6 +296,10 @@ impl Backend {
         let cache = self.catalog_for(connection, owner)?;
         let cache = cache.read();
         let mut facets = facets(&cache, &path, dialect);
+        facets.sample_limits = owner
+            .and_then(|session| self.inner.executor.sessions().get(session))
+            .filter(|slot| slot.connection() == connection && slot.is_open())
+            .and_then(|slot| slot.schema_sample_limits());
         if let Some(name) = console_name(&path, language) {
             facets.qualified_name = name;
         }
@@ -478,7 +502,23 @@ impl Backend {
 /// The words a tab shows when the session cannot load its facet.
 fn missing_capability(facet: RelationFacet, capabilities: Capabilities) -> Option<&'static str> {
     let (required, message) = match facet {
-        RelationFacet::Detail => return None,
+        RelationFacet::Detail | RelationFacet::Description => {
+            return capabilities
+                .contains(Capabilities::INFERRED_SCHEMA)
+                .then_some("Schema fields require an explicit bounded sampling request.");
+        }
+        RelationFacet::SampledDescription => (
+            Capabilities::INFERRED_SCHEMA,
+            "This session does not provide bounded schema inference.",
+        ),
+        RelationFacet::Indexes => (
+            Capabilities::INDEXES,
+            "This session does not support index introspection.",
+        ),
+        RelationFacet::OutgoingKeys => (
+            Capabilities::FOREIGN_KEYS,
+            "This session does not support outgoing foreign keys.",
+        ),
         RelationFacet::Constraints => (
             Capabilities::CONSTRAINTS,
             "This session does not support constraint introspection.",
@@ -503,9 +543,18 @@ fn facets(cache: &CatalogCache, path: &CatalogPath, dialect: SqlDialect) -> Rela
         kind: summary.map(|summary| summary.kind.as_str().to_owned()),
         holds_records: summary.is_some_and(|summary| summary.kind.holds_records()),
         qualified_name: qualified_name(path, dialect),
+        generation: cache.generation(),
+        sample_limits: None,
+        aggregate_freshness: cache
+            .freshness(&CatalogScope::Relation(path.clone()))
+            .into(),
+        indexes_freshness: cache.freshness(&CatalogScope::Indexes(path.clone())).into(),
+        foreign_keys_freshness: cache
+            .freshness(&CatalogScope::OutgoingForeignKeys(path.clone()))
+            .into(),
         detail: Facet {
             freshness: cache
-                .freshness(&CatalogScope::Relation(path.clone()))
+                .freshness(&CatalogScope::Description(path.clone()))
                 .into(),
             value: catalog::relation_detail(cache, path),
         },

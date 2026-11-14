@@ -439,10 +439,36 @@ failed refresh is flagged as potentially stale, including when copied into a
 console.
 
 In the wide layout, the definition accompanies the metadata views in a panel
-initially 424 px wide. Its 8 px handle works with the mouse and the keyboard
+initially 424 px wide. It does not read a definition merely because Structure,
+Indexes or Relations is visible: the user explicitly requests that definition.
+Its 8 px handle works with the mouse and the keyboard
 (320–640 px, Home: 424 px). This width stays within the open workspace. In the
 compact layout, the DDL sub-tab presents the definition over the available
 width; changing the window width does not re-run its read.
+
+### Manual metadata loading
+
+`Metadata loading…` in the active source’s explorer opens per-connection
+preferences and exact observed catalog/namespace overrides. Minimal preloads
+names, Structure adds supported descriptions/indexes/outgoing keys, Extended
+adds supported definitions. Saving starts no preload and closes no editor.
+Opening a view still requests its own required facets, regardless of the preset.
+The dialog separately offers preload, explicit next page and cancellation, and
+shows actual fresh/stale/unread/unavailable/failed coverage. A page is limited
+to 128 relations and 60 seconds; larger scopes remain partial. Changing the
+policy stops superseded preloads. An error does not silently retry a save.
+
+For a source whose field description requires documentary inference, Structure
+asks for a separate confirmed bounded sample. Cancel is focused first. The
+source’s declared returned-document, retained-byte and processing-time limits
+are shown; protocol batching and the server plan may read more. Only inferred
+field metadata is retained, with no sample values shown or sent to AI.
+Unsupported sampling remains unavailable rather than falling back to a read.
+
+Sorting or projecting a documentary preview may require fresh explicitly read
+field structure. If it is absent or evicted, the error asks the user to read
+Structure first. Preparing the preview does not silently re-sample documents.
+A plain document preview remains available without that structural read.
 
 ### Readability and grid height
 

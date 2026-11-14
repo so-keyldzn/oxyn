@@ -293,6 +293,7 @@ pub mod library;
 pub mod location;
 pub mod menu;
 pub mod metadata;
+pub mod metadata_loading;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;

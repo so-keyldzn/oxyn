@@ -346,14 +346,33 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent()
             && matches!(
                 cmd,
-                Command::DiscoverDatabases { .. }
+                Command::PreloadMetadata { .. }
+                    | Command::ReadMetadataPolicy { .. }
+                    | Command::WriteMetadataPolicy { .. }
+                    | Command::DiscoverDatabases { .. }
                     | Command::ListServerProfiles
                     | Command::SaveServerProfile { .. }
                     | Command::RemoveServerProfile { .. }
                     | Command::SetServerProfileMembership { .. }
             )
         {
-            return Decision::deny("only the human may inspect or change server profiles");
+            return Decision::deny(
+                "only the human may inspect or change local navigation and loading preferences",
+            );
+        }
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::RefreshCatalogScope {
+                    scope: crate::CatalogRefreshScope::SampledDescription { .. },
+                    ..
+                } | Command::RefreshSessionCatalog {
+                    scope: crate::CatalogRefreshScope::SampledDescription { .. },
+                    ..
+                }
+            )
+        {
+            return Decision::deny("schema sampling requires an explicit human request");
         }
         if actor.is_agent() && matches!(cmd, Command::WriteWorkspacePreferences { .. }) {
             return Decision::Deny {

@@ -169,7 +169,9 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
         <ul className="flex flex-col py-1">
           {shown.length === 0 ? (
             <li className="flex h-5.5 items-center px-2 text-muted-foreground">
-              No columns reported
+              {table.columnsKnown === false
+                ? "Columns not loaded"
+                : "No columns reported"}
             </li>
           ) : null}
           {shown.map((column) => (

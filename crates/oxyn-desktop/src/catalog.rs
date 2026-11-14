@@ -26,7 +26,21 @@ pub fn refresh_command(
     let Some(path) = scope else {
         return Command::RefreshCatalog { connection };
     };
-    let scope = match CatalogScope::of(path) {
+    let requested = if path.relation().is_some() {
+        CatalogScope::Description(path.clone())
+    } else {
+        CatalogScope::of(path)
+    };
+    refresh_scope_command(connection, &requested, capabilities)
+}
+
+/// A concrete facet scope stays concrete; no variant is lost through its path.
+pub fn refresh_scope_command(
+    connection: ConnectionId,
+    requested: &CatalogScope,
+    capabilities: Capabilities,
+) -> Command {
+    let scope = match requested {
         CatalogScope::Server => return Command::RefreshCatalog { connection },
         CatalogScope::Catalog(path) if capabilities.contains(Capabilities::SCHEMAS) => {
             CatalogRefreshScope::Namespaces {
@@ -39,6 +53,21 @@ pub fn refresh_command(
                 namespace: path.namespace().map(str::to_owned),
             }
         }
+        CatalogScope::Description(path) => CatalogRefreshScope::Description {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
+        CatalogScope::Indexes(path) => CatalogRefreshScope::Indexes {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
+        CatalogScope::OutgoingForeignKeys(path) => CatalogRefreshScope::OutgoingForeignKeys {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
         CatalogScope::Definition(path) => CatalogRefreshScope::Definition {
             catalog: path.catalog().map(str::to_owned),
             namespace: path.namespace().map(str::to_owned),
@@ -166,13 +195,21 @@ fn relations(cache: &CatalogCache, parent: &CatalogPath) -> Vec<CatalogNode> {
         .collect()
 }
 
+fn visible_scope(path: &CatalogPath) -> CatalogScope {
+    if path.relation().is_some() {
+        CatalogScope::Description(path.clone())
+    } else {
+        CatalogScope::of(path)
+    }
+}
+
 fn known(cache: &CatalogCache, path: &CatalogPath) -> bool {
-    cache.freshness(&CatalogScope::of(path)).is_known()
+    cache.freshness(&visible_scope(path)).is_known()
 }
 
 fn invalidated(cache: &CatalogCache, path: &CatalogPath) -> bool {
     matches!(
-        cache.freshness(&CatalogScope::of(path)),
+        cache.freshness(&visible_scope(path)),
         oxyn_catalog::Freshness::Invalidated
     )
 }

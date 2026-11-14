@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="804284d8bba6" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="56aebcc633c9" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -318,6 +318,23 @@ Ce qui encadre ces lectures :
 Le reste du produit en profite sans code de plus : l'arbre se met à jour par
 l'événement `CatalogUpdated`, et la liste des mentions `@` comme le diagramme
 `erd` lisent le même cache.
+
+La passe demande désormais des descriptions indépendantes, puis les index et
+clés sortantes pris en charge uniquement si `ContextPolicy` les restitue, pour
+les mêmes 24 relations au plus et dans la même échéance de cinq secondes.
+Aucune définition ou contrainte n’est chargée par anticipation. Chaque facette
+est tentée au plus une fois par passe. Le contexte indique la couverture réelle
+des champs/index/clés : lu (y compris vide connu), non lu, périmé ou indisponible.
+Une valeur périmée conservée est signalée ; une information manquante ne prouve
+jamais l’absence d’objet.
+
+Une source déclarant `INFERRED_SCHEMA` ne peut pas être décrite automatiquement
+par cette passe, `describe_schema` ou la complétion. Une description issue
+d’inférence exige une commande humaine distincte `SampledDescription`, avec
+bornes annoncées. Les métadonnées explicitement inférées passent toujours par
+la porte unique et le niveau de confidentialité de la connexion, sans valeurs
+documentaires. Les préréglages manuels ne changent que le préchargement explicite,
+ni la confidentialité ni le budget de contexte.
 
 ### Le classement sémantique reste sur la machine
 

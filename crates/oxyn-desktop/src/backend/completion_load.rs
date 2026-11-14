@@ -180,7 +180,7 @@ async fn pass(
             break;
         };
         match &read {
-            Read::Scope(CatalogScope::Relation(_)) => spent.descriptions += 1,
+            Read::Scope(CatalogScope::Description(_)) => spent.descriptions += 1,
             Read::Scope(CatalogScope::Catalog(_) | CatalogScope::Namespace(_)) => {
                 spent.listings += 1;
             }
@@ -204,7 +204,7 @@ async fn pass(
 /// scope for the resolution path.
 fn command_for(connection: ConnectionId, read: &Read, capabilities: Capabilities) -> Command {
     match read {
-        Read::Scope(scope) => catalog::refresh_command(connection, scope.path(), capabilities),
+        Read::Scope(scope) => catalog::refresh_scope_command(connection, scope, capabilities),
         Read::ResolutionPath => Command::RefreshCatalogScope {
             connection,
             scope: CatalogRefreshScope::ResolutionPath,

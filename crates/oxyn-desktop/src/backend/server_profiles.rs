@@ -1,7 +1,7 @@
 //! Typed profile IPC dispatches through the ordinary audit/policy path.
 
 use oxyn_core::{
-    Actor, Command, CommandId, ConnectionId, ServerProfile, ServerProfileId, ServerProfileSnapshot,
+    Command, CommandId, ConnectionId, ServerProfile, ServerProfileId, ServerProfileSnapshot,
 };
 use oxyn_exec::Outcome;
 
@@ -39,33 +39,11 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<Vec<oxyn_core::DiscoveredDatabase>, IpcError> {
         match self
-            .profile_outcome(id, Command::DiscoverDatabases { connection })
+            .local_command_outcome(id, Command::DiscoverDatabases { connection })
             .await?
         {
             Outcome::DatabasesDiscovered { databases } => Ok(databases),
             _ => Err(IpcError::invalid("Unexpected database discovery outcome")),
-        }
-    }
-
-    async fn profile_outcome(&self, id: CommandId, command: Command) -> Result<Outcome, IpcError> {
-        let cancel = self.track(id)?;
-        let _local = self.local_write(&command);
-        let outcome = self
-            .inner
-            .executor
-            .dispatch_as(id, Actor::Human, command, &cancel)
-            .await?;
-        match outcome {
-            Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
-            Outcome::NeedsApproval { command, .. } => {
-                // No profile approval surface exists: withdraw rather than
-                // leaving a command pending behind a completed IPC request.
-                let _withdrawn = self.inner.executor.reject(command);
-                Err(IpcError::invalid(
-                    "The profile operation required approval and was withdrawn",
-                ))
-            }
-            outcome => Ok(outcome),
         }
     }
 
@@ -74,7 +52,7 @@ impl Backend {
         id: CommandId,
     ) -> Result<Vec<ServerProfileSnapshot>, IpcError> {
         match self
-            .profile_outcome(id, Command::ListServerProfiles)
+            .local_command_outcome(id, Command::ListServerProfiles)
             .await?
         {
             Outcome::ServerProfilesListed { profiles } => Ok(profiles),
@@ -89,7 +67,7 @@ impl Backend {
         expected_revision: Option<u64>,
     ) -> Result<ServerProfileSnapshot, IpcError> {
         match self
-            .profile_outcome(
+            .local_command_outcome(
                 id,
                 Command::SaveServerProfile {
                     profile: Box::new(profile),
@@ -110,7 +88,7 @@ impl Backend {
         expected_revision: u64,
     ) -> Result<(), IpcError> {
         match self
-            .profile_outcome(
+            .local_command_outcome(
                 id,
                 Command::RemoveServerProfile {
                     profile,
@@ -134,7 +112,7 @@ impl Backend {
         expected_profile: Option<ServerProfileId>,
     ) -> Result<(), IpcError> {
         match self
-            .profile_outcome(
+            .local_command_outcome(
                 id,
                 Command::SetServerProfileMembership {
                     connection,

@@ -47,6 +47,11 @@ function facets(
   incoming: Array<CatalogAddress> = []
 ): RelationFacets {
   return {
+    generation: "00000000-0000-4000-8000-00000000000c",
+    sampleLimits: null,
+    aggregateFreshness: fetched,
+    indexesFreshness: fetched,
+    foreignKeysFreshness: fetched,
     address,
     kind: "table",
     holdsRecords: true,

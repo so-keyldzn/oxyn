@@ -110,7 +110,7 @@ unsupported and known-empty links are different states.
 | Feature | Current state in this snapshot | Proposed coverage / prerequisite |
 |---|---|---|
 | Multi-database server profile (#373) | No server-group identity; driver-specific hierarchy already exists | PostgreSQL first; preserve independent per-base policy, cache and sessions. [D01][d01] records the proposed independent credential scope; migration still needs validation. |
-| Configurable introspection (#375) | Shared scope reads and bounded cache; no selectable presets | Common policy for all nine drivers, restricted to their supported facets. No blanket local-file exemption. [D02][d02] records explicit prefetch triggers and preference persistence. |
+| Configurable introspection (#375) | Independent facets, bounded cache and manual per-connection/native-scope presets; explicit preload pages only (validation in completion ledger) | Common policy for all nine drivers, restricted to their supported facets. No blanket local-file exemption. [D02][d02] records explicit prefetch triggers and preference persistence. |
 | Native database export/restore (#374) | No `pg_dump`/`pg_restore` wrapper found in application sources; retained-result export is different | Proposed PostgreSQL adapter only. Compatibility with variants and additional engines requires separate research; do not offer PostgreSQL tools merely because a driver speaks its protocol. [D04][d04] records the job boundary; authentication transport remains an entry gate. |
 | F6 navigation (#308) | Documented, absent from the action manifest | Common workspace action, independent of driver; include a focused map when present. |
 | Saved maps / image export | ERD layout and rendering exist; manual positions are disabled and re-layout/image-export actions are unavailable | [D03][d03] first; persist view choices separately from metadata and sampled values. |
@@ -222,3 +222,28 @@ integration test or a measured performance result.
 [d02]: ../adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md
 [d03]: ../adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md
 [d04]: ../adr/0083-run-native-database-transfers-as-authorized-jobs.md
+
+## Cross-engine metadata loading (#375)
+
+The presets, persisted overrides, read queue, cancellation, progress and
+generation checks are shared host behavior. Plans use the **live session’s
+capabilities**, never an engine-name whitelist. Choosing a scope preserves its
+native absent levels; it does not attach files or open every database.
+
+| Source family | Preload scope | Structure additions | Extended addition | Important limit |
+|---|---|---|---|---|
+| PostgreSQL and compatible variants | Observed schema in the connected database | Fields, supported indexes/outgoing keys | Definition where advertised | Variant/privilege-specific capability refusals remain authoritative |
+| MySQL / MariaDB | Observed database namespace | Fields, indexes/outgoing keys | Definition | No invented SQL constraint facet |
+| SQLite | Observed `main` or attachment on the owning session | Fields, indexes/outgoing keys | Definition | No automatic ATTACH, replacement file or blanket loading exemption |
+| DuckDB | Observed catalog/schema pair | Fields, indexes/outgoing keys | Definition | Catalog identity remains part of the scope |
+| ClickHouse | Observed database namespace | Fields and indexes | Definition | No outgoing FK reads when unavailable |
+| Turso | Observed namespace of the connected endpoint | Fields, indexes/outgoing keys | Unavailable where not declared | No synthetic definition fallback |
+| MongoDB | Observed database namespace | Indexes; field inference excluded | Reconstructed supported definition | Fields require a separate explicit bounded human sample; no FK reads |
+| Elasticsearch / OpenSearch | Observed source root | Mapping-derived fields | Supported definition | Elasticsearch indexes are objects, not the optional SQL-style index facet |
+| Redis / Valkey | Observed numbered database catalog | Type-specific key facts/preview layout | Unavailable | Names are the existing bounded key sample; descriptions do not read key values |
+
+Host-provider tests cover independent capability combinations, including
+index-only, FK-only, definition-only and explicitly inferred descriptions.
+Disposable SQLite and MongoDB checks are separate from this static inventory;
+they do not certify live behavior of every other server/version. See the
+[completion ledger](completion.md) for actual validation and exclusions.

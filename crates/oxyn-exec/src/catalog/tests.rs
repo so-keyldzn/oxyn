@@ -9,8 +9,17 @@ impl CatalogProvider for ConstraintProvider {
     async fn server_info(&self, _: &CancelToken) -> Result<ServerInfo> {
         Ok(ServerInfo::new("fixture", "", Capabilities::CONSTRAINTS))
     }
-    async fn list_relations(&self, _: &CatalogPath, _: &CancelToken) -> Result<Vec<RelationRef>> {
-        Ok(vec![])
+    async fn list_relations(
+        &self,
+        namespace: &CatalogPath,
+        _: &CancelToken,
+    ) -> Result<Vec<RelationRef>> {
+        Ok(["odd\"; name", "parent", "invalid", "cancelled"]
+            .into_iter()
+            .map(|name| {
+                RelationRef::new(namespace.clone(), name, oxyn_catalog::RelationKind::Table)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
     async fn describe_relation(&self, path: &CatalogPath, _: &CancelToken) -> Result<Relation> {
         Ok(Relation::new(
@@ -70,8 +79,19 @@ impl CatalogProvider for DefinitionProvider {
         ))
     }
 
-    async fn list_relations(&self, _: &CatalogPath, _: &CancelToken) -> Result<Vec<RelationRef>> {
-        Ok(vec![])
+    async fn list_relations(
+        &self,
+        namespace: &CatalogPath,
+        _: &CancelToken,
+    ) -> Result<Vec<RelationRef>> {
+        ["odd\"; name", "invalid", "cancelled"]
+            .into_iter()
+            .map(|name| {
+                RelationRef::new(namespace.clone(), name, oxyn_catalog::RelationKind::View)
+                    .map(|summary| summary.with_comment("identity from names"))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     async fn describe_relation(&self, path: &CatalogPath, _: &CancelToken) -> Result<Relation> {
@@ -118,7 +138,8 @@ async fn definition_scope_requires_capability_and_publishes_identity_atomically(
             &provider,
             Capabilities::empty(),
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::NotSupported { .. })
@@ -131,6 +152,7 @@ async fn definition_scope_requires_capability_and_publishes_identity_atomically(
         Capabilities::OBJECT_DEFINITION,
         &scope,
         &CancelToken::new(),
+        None,
     )
     .await
     .expect("read");
@@ -138,12 +160,19 @@ async fn definition_scope_requires_capability_and_publishes_identity_atomically(
     patch.apply(&mut cache).expect("publish");
 
     assert_eq!(
-        cache.relation(&path).expect("relation").kind,
+        cache
+            .relation_summary(&path)
+            .expect("observed summary")
+            .kind,
         oxyn_catalog::RelationKind::View
     );
     assert_eq!(
-        cache.relation(&path).expect("relation").comment.as_deref(),
-        Some("identity from describe")
+        cache
+            .relation_summary(&path)
+            .expect("observed summary")
+            .comment
+            .as_deref(),
+        Some("identity from names")
     );
     let expected = definition_fixture();
     assert_eq!(cache.definition(&path), Some(&expected));
@@ -170,7 +199,8 @@ async fn definition_scope_rejects_invalid_payload_before_publication() {
             &provider,
             Capabilities::OBJECT_DEFINITION,
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::CatalogUnavailable(_))
@@ -197,7 +227,8 @@ async fn definition_scope_does_not_publish_after_provider_cancellation() {
             &provider,
             Capabilities::OBJECT_DEFINITION,
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::Cancelled)
@@ -223,7 +254,8 @@ async fn constraints_scope_is_explicit_capability_gated_and_atomically_published
             &provider,
             Capabilities::empty(),
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::NotSupported { .. })
@@ -234,6 +266,7 @@ async fn constraints_scope_is_explicit_capability_gated_and_atomically_published
         Capabilities::CONSTRAINTS,
         &scope,
         &CancelToken::new(),
+        None,
     )
     .await
     .expect("read");
@@ -257,7 +290,8 @@ async fn constraints_scope_is_explicit_capability_gated_and_atomically_published
             },
             Capabilities::CONSTRAINTS,
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::Cancelled)
@@ -279,6 +313,7 @@ async fn constraints_scope_is_explicit_capability_gated_and_atomically_published
         Capabilities::CONSTRAINTS,
         &relation_scope,
         &CancelToken::new(),
+        None,
     )
     .await
     .expect("ordinary description");
@@ -303,7 +338,8 @@ async fn incoming_keys_are_capability_gated_and_cancellation_never_publishes_par
             &provider,
             Capabilities::empty(),
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::NotSupported { .. })
@@ -314,6 +350,7 @@ async fn incoming_keys_are_capability_gated_and_cancellation_never_publishes_par
         Capabilities::INCOMING_FOREIGN_KEYS,
         &scope,
         &CancelToken::new(),
+        None,
     )
     .await
     .expect("read")
@@ -332,7 +369,8 @@ async fn incoming_keys_are_capability_gated_and_cancellation_never_publishes_par
             },
             Capabilities::INCOMING_FOREIGN_KEYS,
             &scope,
-            &CancelToken::new()
+            &CancelToken::new(),
+            None
         )
         .await,
         Err(OxynError::Cancelled)

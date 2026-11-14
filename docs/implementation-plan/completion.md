@@ -23,7 +23,7 @@ image-generation prompts retain the identifiers used at generation time.
 | Shared research | initial documentation commit on #373 | Journeys, engine matrix, proposed ADRs and mockups are a shared prerequisite. A documentation-only commit across the issues is necessary to retain this common design without duplicating it. |
 | #373 | `feat/multi-base-backend` | Implemented and automatically validated on `ce58839`; `make qualite` passed. Code commit `a3f5961` follows shared research `356c8d6`; personal acceptance remains pending. |
 | #308 | `feat/f6-navigation` | Created from `a3f5961` after a clean #373 commit. Registry/visible-region cycle implemented; Completed: 93 action tests, five browser interaction stories, full quality gate and final frontend revalidation passed. Personal/native OS acceptance pending. |
-| #375 | `feat/metadata-loading` | Not created; will inherit completed #308/#373. Existing lazy reads/facets are baseline implementation, not completion of configurable policy. |
+| #375 | `feat/metadata-loading` | Created from #308 commit `4c80bfa` after a clean validated commit. Completed and automatically validated: shared capability-driven policies/facets/preload, explicit inference and shadcn controls; make qualite passed 4,733 Rust / 2,391 frontend tests. Personal acceptance awaits final dev integration. |
 | Schema map | `feat/schema-map` | Not created; depends on metadata coverage/policy from #375 and focus registration from #308. Existing assistant ERD is reusable rendering, not a standalone map. |
 | #374 | `feat/native-backup-restore` | Not created; inherits the completed stack, reuses ownership/operation state and metadata invalidation. No native-transfer implementation yet. |
 
@@ -141,6 +141,112 @@ also invokes the real palette and verifies it returns focus after dismissal.
 `make socle` passed with zero warnings after the ledger update. Native OS key routing still
 awaits the final dev instance and personal acceptance. No Rust source or IPC
 boundary was changed by the final focus refinement.
+
+## #375 implementation plan
+
+The pure policy/scope vocabulary belongs to core; store owns migration 21,
+bounded JSON and revision comparison. Executor owns policy/audit, independent
+facet plans, source generations, cancellation, demand priority and bounded
+preload accounting. Desktop exposes window/session-checked typed IPC and
+progress; frontend features connect it to shadcn settings and preload controls.
+The existing catalog cache, metadata read coordinator and facet UI are reused.
+
+Order: policy persistence/commands; independent descriptions/indexes/outgoing
+keys and explicit sampling admission; scoped preload and progress; UI and all
+consumers; validation and documentation. Do not change engine protocols or add an external package. Reuse the workspace
+Serde/Serde JSON pins for bounded publication accounting. Existing `INFERRED_SCHEMA` already identifies sampled descriptions.
+
+Key failures to prove: stale revisions and late publications; unread versus
+empty/stale/unavailable/error; exact namespace inheritance; policy save causing
+zero driver calls; cancelled/superseded jobs; budget eviction; explicit sample
+admission with no values; DDL/completion/assistant requesting only justified
+facets. New reads keep native session ownership and fail on a closed source.
+Measure provider calls, metadata bytes and elapsed time on disposable fixtures;
+no automatic threshold or blanket SQLite exemption is adopted.
+
+Completion requires frontend/driver/core/store/executor tests, accessible
+initial/empty/loaded/loading/error stories, local reviews, `cargo fmt --all`,
+`make qualite`, coherent English/French contracts and a clean committed branch.
+Manual acceptance stays reserved for the final integrated dev instance.
+
+## Current #375 implementation and validation
+
+Migration 21 stores revisioned per-connection policies independently of auth.
+Scoped preload runs on the exact live owner with demand priority, explicit
+128-relation detail pages, a 60-second cancellation deadline and bounded reports.
+Continuation checks native scope, policy revision and cache generation. Context
+changes cancel only their console’s preload and retire its cache epoch before
+and after the native operation. No source/session/file is opened implicitly.
+
+The shadcn dialog separates save from preload/next/cancel. Unsaved edits must be
+saved first; stale saves require re-reading. Source hiding/removal releases only
+its owned job. Object tabs/copies/completion/assistant/ERD demand narrow facets;
+wide explicit DDL reads the definition, while Structure does not request it.
+Inferred descriptions require a separate human gesture with declared bounds.
+Preview preparation reuses fresh metadata from its original owner; missing or
+stale documentary structure never triggers a hidden sample. Already inferred
+cached fields remain available without being sampled again.
+
+Terminal coverage distinguishes fresh/stale/unread/evicted from unavailable and
+failed reads. Unknown counts are nullable until measured. Eviction can make a
+fully attempted page partial without starting a refill loop. Publication checks
+the captured generation atomically, including budget eviction. Sampling bounds
+and typed generation belong to the catalog contract; core DTOs carry an opaque
+UUID, so packaging does not depend on unpublished core symbols. Existing UUID,
+Serde and Serde JSON packages are reused without a version/graph expansion.
+
+Verified on 2026-11-14:
+
+- Final `make qualite` passed: format, Clippy with `-D warnings`, 4,733 Rust
+  tests (211 skipped), doctests/rustdoc, four independently verified package
+  archives, and 2,391 frontend tests plus build. Foundation reported zero warnings.
+- The host/provider scenarios cover capability combinations, exact inheritance,
+  CAS/migrations, zero-I/O saves, independent facets, context/policy cancellation,
+  late generations, fixed page continuation, eviction and cached explicit inference.
+- Fifteen settings/sampling stories passed in Chromium with axe. Wide DDL and
+  source replacement/late replies have feature regressions. Visual inspection
+  of final partial/evicted states emitted no page errors.
+- A disposable SQLite private-memory fixture exercised all three levels and
+  cache reuse; measured scope/byte/time results are below. Disposable MongoDB
+  8.0.34 passed 24 tests, including server-observed cancellation, a 1 GiB bounded
+  batch stream, oversized-sample rejection/remote cursor cleanup and profiler
+  proof that preview planning issued no hidden `find`. Its container was removed.
+- MongoDB process peak RSS is not asserted on macOS (the suite’s RSS check is
+  Linux-only). Other live server suites and the reference embedding model were
+  not run by this gate because their URLs/model were unset.
+- `cargo-deny` was absent: Rust license/RUSTSEC audits were not checked.
+  `cargo-about` was absent: notices were not regenerated. npm audit/licenses
+  passed. Full browser output still contains existing ResizeObserver/React act
+  diagnostics; they were not suppressed and assertions passed. Only macOS was
+  exercised locally. Manual acceptance has not been obtained.
+
+Local invariant, boundary, security, organization and UI reviews found no
+remaining blocker after the corrections above. The existing large bus/cache/
+object/workspace dispatchers retain their established responsibility; policy,
+scheduling, sampling, cache accounting and pure UI/controller responsibilities
+are separated in domain modules. No second driver cache, automatic count
+threshold, SQLite exemption, new protocol or global configuration was added.
+The ERD changes in this lot are required facet/ownership consumers, not a second
+standalone-map implementation. No merge to dev/main or push occurred.
+
+### Disposable SQLite measurement (2026-11-14)
+
+One private-memory database, three tables, one outgoing FK and one secondary
+index; each mode starts with names/fields unread in that namespace:
+
+| Preset | Submitted scopes | Encoded metadata bytes | Elapsed ms | Fresh detailed facets |
+|---|---:|---:|---:|---:|
+| Minimal | 1 | 554 | 0 | 0 |
+| Structure | 10 | 5,164 | 1 | 9 |
+| Extended | 13 | 7,082 | 0 | 12 |
+
+Repeating each page submitted zero reads and zero encoded bytes. The pure
+provider-probe tests separately assert exact description/index/key/definition
+method calls. Scope counts can differ from provider method/network calls.
+Milliseconds are floored, so zero is below report resolution, not zero work.
+This is a local smoke measurement, not a network benchmark or evidence for
+an automatic threshold/SQLite exemption. The current checked implementation
+must still pass the complete gate before the branch changes.
 
 ## Validation and acceptance gates
 

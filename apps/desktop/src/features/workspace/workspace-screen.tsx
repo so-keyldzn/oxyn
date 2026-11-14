@@ -989,6 +989,7 @@ export function WorkspaceScreen({
             <CatalogSidebar
               key={sourceOpen?.session ?? open.session}
               navigation={visible}
+              active={visible}
               open={sourceOpen ?? open}
               sessionScoped={sourceOpen !== undefined}
               sourceSelector={

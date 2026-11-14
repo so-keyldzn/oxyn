@@ -29,8 +29,8 @@ use crate::session::LANGUAGE;
 
 /// The preview command.
 ///
-/// `relation` is the description, read only when the shape sorts, pages or
-/// projects. `ordered_by_id` says whether a preview with no sort asked for
+/// `relation` is an explicitly read description supplied by the host for
+/// schema-dependent sorts, pages or projections. This composer performs no sampling. `ordered_by_id` says whether a preview with no sort asked for
 /// comes in `_id` order: [`Relation::previews_in_key_order`] of the
 /// description when one was read, the collection's listing otherwise — the
 /// two read the same condition.

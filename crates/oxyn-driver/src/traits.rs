@@ -219,6 +219,38 @@ pub trait Session: Send + Sync {
         })
     }
 
+    /// Plan a preview with metadata already read on the exact owning session.
+    ///
+    /// `known` is a fresh host-cache description, never a webview-provided schema
+    /// or permission to sample more rows. Inferred-schema adapters override this
+    /// method to reuse it without hidden probing. The default refuses inferred
+    /// sources and preserves the established planning paths for other engines.
+    ///
+    /// # Errors
+    /// Unsupported inference-free planning, cancellation, or native preparation errors.
+    async fn plan_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        _known: Option<&oxyn_catalog::Relation>,
+        cancel: &CancelToken,
+    ) -> Result<PreparedPreview> {
+        if self.capabilities().contains(Capabilities::INFERRED_SCHEMA) {
+            return Err(OxynError::NotSupported {
+                capability: "preview planning without implicit document inference".into(),
+            });
+        }
+        if shape.continuable {
+            self.prepare_preview(path, limit, shape, cancel).await
+        } else {
+            Ok(PreparedPreview {
+                request: self.preview_request(path, limit, shape, cancel).await?,
+                mode: PreviewMode::Bounded,
+            })
+        }
+    }
+
     /// Opens an isolated read session bound to this session's original target.
     ///
     /// Called only for `PreviewMode::Dedicated`. Preserve credentials, access

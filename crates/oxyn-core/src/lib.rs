@@ -79,10 +79,16 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod library;
+pub mod metadata_loading;
 pub mod server_profile;
 pub use library::{
     DocumentFilter, HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter,
     MAX_QUERY_DOCUMENT_BYTES, QueryDocumentUpdate,
+};
+pub use metadata_loading::{
+    MetadataFacet, MetadataLevel, MetadataLoadingPolicy, MetadataOverride, MetadataPolicySnapshot,
+    MetadataPreloadCursor, MetadataPreloadIssue, MetadataPreloadProgress, MetadataPreloadRequest,
+    MetadataPreloadState, MetadataScope,
 };
 pub mod policy;
 pub mod preferences;

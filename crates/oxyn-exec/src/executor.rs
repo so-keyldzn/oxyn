@@ -95,6 +95,14 @@ mod session_catalog;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Outcome {
+    /// Manual metadata policy read/saved without opening a server session.
+    MetadataPolicy {
+        snapshot: oxyn_core::MetadataPolicySnapshot,
+    },
+    /// Actual reads and coverage of an explicit bounded preload.
+    MetadataPreloaded {
+        progress: oxyn_core::MetadataPreloadProgress,
+    },
     /// Server databases, without opening any child session.
     DatabasesDiscovered {
         databases: Vec<oxyn_core::DiscoveredDatabase>,
@@ -152,10 +160,14 @@ pub enum Outcome {
 
     /// Metadata was refreshed without including its contents in the outcome.
     CatalogRefreshed {
+        /// Cache generation atomically observed at publication.
+        generation: oxyn_catalog::CatalogGenerationId,
         /// Connection owning the updated cache.
         connection: ConnectionId,
         /// Requested scope, including Root for the legacy command.
         scope: CatalogRefreshScope,
+        /// Bounded encoded metadata bytes, not protocol traffic.
+        metadata_bytes: u64,
     },
 
     /// The local catalog cache, handed to whoever was allowed to read it.
@@ -416,6 +428,7 @@ pub struct Executor {
     events: EventBus,
     results: RwLock<crate::retained::RetainedResults>,
     previews: crate::preview_stream::Registry,
+    metadata_jobs: Arc<metadata_loading::jobs::Jobs>,
     catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: Arc<RwLock<HashMap<ConnectionId, ConnectionConfig>>>,
     /// Orders every write of a connection — to the store, then to
@@ -832,6 +845,20 @@ impl Executor {
                 self.create_database_connection(*profile, *seed, config, cancel)
                     .await
             }
+            Command::PreloadMetadata { request } => {
+                self.preload_metadata(id, request, cancel).await
+            }
+            Command::ReadMetadataPolicy { connection } => {
+                self.read_metadata_policy(*connection, cancel).await
+            }
+            Command::WriteMetadataPolicy {
+                connection,
+                policy,
+                expected_revision,
+            } => {
+                self.write_metadata_policy(*connection, policy, *expected_revision, cancel)
+                    .await
+            }
             Command::ListServerProfiles => self.list_server_profiles(cancel).await,
             Command::SaveServerProfile {
                 profile,
@@ -881,14 +908,18 @@ impl Executor {
                 if cancel.is_cancelled() {
                     return Err(OxynError::Cancelled);
                 }
-                self.set_session_context(
-                    *connection,
-                    *session,
-                    catalog.as_deref(),
-                    namespace.as_deref(),
-                    cancel,
-                )
-                .await
+                let outcome = self
+                    .set_session_context(
+                        *connection,
+                        *session,
+                        catalog.as_deref(),
+                        namespace.as_deref(),
+                        cancel,
+                    )
+                    .await;
+                self.events
+                    .publish(id, Some(*connection), Event::CatalogUpdated);
+                outcome
             }
 
             Command::Execute {
@@ -1543,6 +1574,7 @@ impl Executor {
                 let next = crate::catalog::ConnectionCatalog {
                     cache: Arc::clone(&slot.catalog.cache),
                     refresh: Arc::clone(&current.refresh),
+                    queue: Arc::clone(&current.queue),
                     closed: CancelToken::new(),
                     session: RwLock::new(Some(slot.id())),
                 };
@@ -1709,7 +1741,13 @@ impl Executor {
         )
         .map_err(|error| OxynError::Config(error.to_string()))?;
         let context = oxyn_driver::SessionContext::from_path(&path);
-        slot.set_context(&context, cancel).await?;
+        self.metadata_jobs.cancel_session(session);
+        slot.catalog.cache.write().invalidate_all();
+        let changed = slot.set_context(&context, cancel).await;
+        // Reads started while the provider was changing context are obsolete
+        // too, including when the operation's outcome is uncertain.
+        slot.catalog.cache.write().invalidate_all();
+        changed?;
         Ok(Outcome::SessionContextSet {
             session,
             context: slot.context(cancel).await?,
@@ -1757,6 +1795,15 @@ impl Executor {
             .get(&connection)
             .cloned()
             .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let _turn = state
+            .queue
+            .enter(
+                id,
+                crate::catalog::priority::Priority::Demand,
+                cancel,
+                &state.closed,
+            )
+            .await?;
         let mut budget = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(OxynError::Cancelled),
@@ -1778,6 +1825,7 @@ impl Executor {
             })
             .filter(|slot| slot.is_open())
             .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let generation = slot.catalog.cache.read().generation();
         let operation = cancel.child();
         let read = slot.read_catalog(scope, &operation);
         tokio::pin!(read);
@@ -1801,17 +1849,17 @@ impl Executor {
         {
             return Err(OxynError::Cancelled);
         }
-        let evicted = budget.reserve_for(slot.id(), scope, &patch)?;
-        self.evict_session_catalogs(evicted);
-        if let Err(error) = slot.catalog.publish(patch) {
-            budget.release_owner(slot.id());
-            return Err(error);
-        }
+        let metadata_bytes = u64::try_from(patch.encoded_bytes()?)
+            .map_err(|_| OxynError::Config("metadata byte count exceeds report range".into()))?;
+        let generation =
+            self.publish_catalog_patch(&slot, &mut budget, scope, patch, generation, cancel)?;
         self.events
             .publish(id, Some(connection), Event::CatalogUpdated);
         Ok(Outcome::CatalogRefreshed {
             connection,
             scope: scope.clone(),
+            metadata_bytes,
+            generation,
         })
     }
 
@@ -3257,6 +3305,7 @@ impl ExecutorBuilder {
             events: self.events,
             results: RwLock::new(crate::retained::RetainedResults::default()),
             previews,
+            metadata_jobs: Arc::new(metadata_loading::jobs::Jobs::default()),
             catalogs: RwLock::new(HashMap::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_writes: Arc::new(Mutex::new(())),
@@ -3356,3 +3405,6 @@ mod stopped_write_tests;
 
 #[path = "server_profiles.rs"]
 mod server_profiles;
+
+#[path = "metadata_loading.rs"]
+mod metadata_loading;

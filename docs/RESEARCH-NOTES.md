@@ -3501,3 +3501,42 @@ is an access hint for the current role, not a guarantee of successful login.
 Sources: [pg_database](https://www.postgresql.org/docs/current/catalog-pg-database.html),
 [access privilege functions](https://www.postgresql.org/docs/current/functions-info.html).
 The 1024-entry/name-byte limits are Oxyn input bounds, not PostgreSQL limits.
+
+### Metadata publication accounting — checked 2026-11-14
+
+The executor reuses workspace pins `serde` 1.0.229 and `serde_json` 1.0.151 to
+count JSON metadata bytes through a bounded writer, without retaining a second
+encoded payload. The crates.io version API confirmed both exact versions are
+not yanked and licensed `MIT OR Apache-2.0` on this date. The web reader could
+not open the API; a direct HTTPS JSON request to the primary registry succeeded.
+Sources: [Serde registry record](https://crates.io/api/v1/crates/serde/1.0.229),
+[Serde JSON registry record](https://crates.io/api/v1/crates/serde_json/1.0.151).
+The 16 MiB patch, 128-relation preload, 32 overrides and 128 KiB policy limits
+are Oxyn input/publication guards, not automatic loading thresholds or engine
+limits. Protocol receive buffers and server-side query plans remain separate.
+
+### Metadata inference processing limit — checked 2026-11-14
+
+MongoDB’s `find.maxTimeMS` sets cumulative server processing time for its cursor
+and later `getMore` calls. It excludes client/server network latency and idle
+time; termination happens at server interrupt points. The schema sampler’s
+10,000 ms limit therefore describes processing, not end-to-end latency. Its
+1,000 returned-document / 8 MiB retained-input bounds do not cap the server’s
+scan work or protocol batches.
+
+Sources: [cursor.maxTimeMS](https://www.mongodb.com/docs/manual/reference/method/cursor.maxtimems/),
+[getMore](https://www.mongodb.com/docs/manual/reference/command/getmore/).
+
+### Catalog publication tokens — checked 2026-11-14
+
+`oxyn-catalog` now directly uses the existing workspace UUID dependency for
+its transient publication token. The manifest requirement remains 1.26.0;
+`Cargo.lock` resolves 1.27.0, not yanked, Apache-2.0 OR MIT, with `v7` and
+`serde` features verified against the registry. No external package/version
+is added to the graph. Catalog contract types remain owned by the catalog;
+core command DTOs carry the opaque UUID without a backward dependency.
+
+Sources: [UUID 1.27.0 registry record](https://crates.io/api/v1/crates/uuid/1.27.0),
+[Cargo packaging](https://doc.rust-lang.org/cargo/commands/cargo-package.html):
+normalized package manifests omit path overrides and verification builds the
+archive against versioned dependencies. This check is retained without publishing.

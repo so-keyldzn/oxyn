@@ -58,7 +58,7 @@ fn eviction_drops_contents_but_keeps_the_node_its_parent_listed() {
     assert!(cache.indexes(&table).is_none(), "unread, never empty");
     assert!(cache.constraints(&table).is_some(), "own scope, kept");
     assert_eq!(
-        cache.freshness(&CatalogScope::Relation(table.clone())),
+        cache.freshness(&CatalogScope::Description(table.clone())),
         Freshness::Never
     );
 
@@ -405,7 +405,7 @@ fn staleness_returns_a_minimal_set() {
     cache.invalidate(&CatalogScope::Relation(table.clone()));
     assert_eq!(
         cache.stale(HOUR),
-        vec![CatalogScope::Relation(table)],
+        vec![CatalogScope::Description(table)],
         "only the invalidated relation is to be reread"
     );
 
@@ -429,10 +429,14 @@ fn an_invalidation_does_not_lose_the_data() {
     cache.invalidate(&CatalogScope::Relation(table.clone()));
     assert!(cache.relation(&table).is_some(), "the data stays readable");
     assert_eq!(
-        cache.freshness(&CatalogScope::Relation(table.clone())),
+        cache.freshness(&CatalogScope::Description(table.clone())),
         Freshness::Invalidated
     );
-    assert!(cache.stale(HOUR).contains(&CatalogScope::Relation(table)));
+    assert!(
+        cache
+            .stale(HOUR)
+            .contains(&CatalogScope::Description(table))
+    );
 }
 
 #[test]
@@ -445,7 +449,7 @@ fn an_invalidation_descends_into_the_subtree() {
 
     cache.invalidate_all();
     assert_eq!(
-        cache.freshness(&CatalogScope::Relation(table)),
+        cache.freshness(&CatalogScope::Description(table)),
         Freshness::Invalidated,
         "the server invalidation reaches the leaves"
     );
@@ -750,4 +754,43 @@ fn invalidated_definitions_remain_evictable_and_bounded() {
             <= MAX_DEFINITION_BYTES
     );
     assert!(cache.definition(&extra).is_some());
+}
+
+#[test]
+fn narrow_facet_eviction_retires_the_generation_but_preserves_other_known_empty_facets() {
+    let mut cache = cache_postgres();
+    let path = item_path(Some("sales"), Some("public"), "clients");
+    cache
+        .set_relation(&path, Relation::new("clients", RelationKind::Table))
+        .expect("description");
+    cache
+        .set_indexes(&path, vec![])
+        .expect("known empty indexes");
+    cache
+        .set_foreign_keys(&path, vec![])
+        .expect("known empty keys");
+    let before = cache.generation();
+    cache.evict(&CatalogScope::Description(path.clone()));
+    assert_ne!(cache.generation(), before);
+    assert!(cache.relation(&path).is_none());
+    assert!(cache.relation_summary(&path).is_some());
+    assert_eq!(cache.indexes(&path), Some([].as_slice()));
+    assert!(matches!(
+        cache.freshness(&CatalogScope::Indexes(path.clone())),
+        Freshness::Fetched(_)
+    ));
+    cache.invalidate(&CatalogScope::OutgoingForeignKeys(path.clone()));
+    assert_eq!(
+        cache.freshness(&CatalogScope::OutgoingForeignKeys(path.clone())),
+        Freshness::Invalidated
+    );
+    assert_eq!(
+        cache.freshness(&CatalogScope::Description(path.clone())),
+        Freshness::Never
+    );
+    assert_eq!(
+        cache.freshness(&CatalogScope::Relation(path)),
+        Freshness::Never,
+        "independent reads never satisfy the compatibility aggregate"
+    );
 }

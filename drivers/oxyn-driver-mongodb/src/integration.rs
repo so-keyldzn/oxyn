@@ -28,6 +28,7 @@
 //! catalog, the preview, the error classes, the read-only account.
 
 mod hostile;
+mod sampling;
 
 use std::time::Duration;
 
@@ -727,10 +728,16 @@ async fn a_preview_is_bounded_ordered_by_id_when_sorted_and_read_only() {
         sort: vec![PreviewSort::descending("g")],
         ..PreviewShape::unordered()
     };
-    let request = session
-        .preview_request(&path, 10, &shape, &CancelToken::new())
+    let known = session
+        .catalog()
+        .describe_relation(&path, &CancelToken::new())
         .await
-        .expect("composed");
+        .expect("explicit schema read");
+    let request = session
+        .plan_preview(&path, 10, &shape, Some(&known), &CancelToken::new())
+        .await
+        .expect("composed without another inference read")
+        .request;
     assert!(request.limits.read_only);
     let mut cursor = session
         .execute(request, &CancelToken::new())

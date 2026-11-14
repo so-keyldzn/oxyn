@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="f9d25ac62aa6" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="7313d278e872" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -150,6 +150,27 @@ curseur ne peut donc pas interrompre ce nettoyage.
 SQLite, parce qu'elle déclare une clé primaire, fait lire à un clic sur cette
 table chaque vecteur dans un b-tree temporaire avant que la première ligne
 n'apparaisse.
+
+Un fournisseur dont la description réalise une inférence déclare
+`INFERRED_SCHEMA` et expose `CatalogProvider::schema_sample_limits`, sans I/O,
+capturé sur la session vivante. Une borne absente ou invalide rend
+l’échantillonnage hôte indisponible. Description ordinaire et agrégat refusent
+l’inférence implicite ; `SampledDescription` exige un geste humain distinct.
+Les métadonnées renvoyées portent structure et provenance inférées, jamais les
+valeurs des documents. Les bornes distinguent documents retournés et octets
+retenus des lots réseau, du travail du plan serveur et du nettoyage d’annulation.
+MongoDB borne cumulativement le traitement serveur du curseur `find` de schéma ;
+ce n’est pas une échéance de temps réseau ou de temps réel. Les lectures
+indépendantes d’index/clés/définitions ne décrivent pas les champs sans nécessité.
+
+`Session::plan_preview` est l’entrée de préparation de l’hôte. Son indication
+`Relation` optionnelle vient de métadonnées fraîches de la session d’origine,
+jamais d’un schéma fourni par le client ou du cache d’une autre connexion. Un
+adaptateur `INFERRED_SCHEMA` doit préparer sans inférence implicite ; le défaut
+refuse. Tris/projections dépendant des champs peuvent exiger une lecture
+explicite préalable de Structure. Aucun échantillon documentaire caché, même
+avant un échantillon de lignes projeté approuvé. La conversion des lignes
+réellement demandées en Arrow demeure un flux distinct et borné.
 
 ### 4. Il distingue trois familles d'erreurs, et il les classe
 

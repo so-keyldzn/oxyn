@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="79d058b60062" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="1a4a2ca9a0dd" -->
 
 # Recherche sur les schémas : matrice des moteurs
 
@@ -117,7 +117,7 @@ charge et absence constatée de liens sont des états différents.
 | Fonction | État actuel dans ce code | Couverture proposée / prérequis |
 |---|---|---|
 | Profil serveur multi-base (#373) | Pas d'identité de groupe serveur ; hiérarchie propre à chaque driver déjà présente | PostgreSQL d'abord ; politique, cache et sessions indépendants par base. [D01][d01] consigne la portée indépendante proposée des identifiants ; la migration reste à valider. |
-| Introspection configurable (#375) | Lectures par périmètre et cache borné partagés ; aucun préréglage sélectionnable | Politique commune aux neuf drivers, limitée à leurs facettes disponibles. Aucune exemption générale pour les fichiers locaux. [D02][d02] consigne les déclencheurs explicites et la persistance de préférence. |
+| Introspection configurable (#375) | Facettes indépendantes, cache borné et préréglages manuels par connexion/périmètre natif ; pages de préchargement explicites uniquement (validation dans le registre d’achèvement) | Politique commune aux neuf drivers, limitée à leurs facettes disponibles. Aucune exemption générale pour les fichiers locaux. [D02][d02] consigne les déclencheurs explicites et la persistance de préférence. |
 | Export/restauration natifs (#374) | Aucun wrapper `pg_dump`/`pg_restore` trouvé dans le code applicatif ; l'export de résultats conservés est distinct | Adaptateur PostgreSQL proposé uniquement. Compatibilité des variantes et autres moteurs à étudier séparément ; ne pas proposer les outils PostgreSQL simplement parce qu'un driver parle ce protocole. [D04][d04] consigne la frontière des tâches ; le transport d'authentification reste un prérequis. |
 | Navigation F6 (#308) | Documentée, absente du manifeste d'actions | Action commune du workspace, indépendante du driver ; inclure une carte focalisée lorsqu'elle existe. |
 | Cartes enregistrées / export d'image | Placement et rendu ERD existants ; positions manuelles désactivées et actions de réorganisation/export indisponibles | [D03][d03] d'abord ; enregistrer les choix d'affichage séparément des métadonnées et des valeurs échantillonnées. |
@@ -232,3 +232,36 @@ ne revendique un test d'intégration réussi ni une performance mesurée.
 [d02]: ../adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md
 [d03]: ../adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md
 [d04]: ../adr/0083-run-native-database-transfers-as-authorized-jobs.md
+
+### Actualisation #375 dans le worktree
+
+Les facettes sont indépendantes. Minimal/Structure/Étendu sont des préférences
+manuelles par connexion et périmètre natif ; seul le préchargement explicite
+lance une page. Aucun moteur, SQLite inclus, ne bénéficie d’une exemption
+automatique. La validation courante est suivie dans [completion.md](completion.md).
+
+## Chargement des métadonnées entre moteurs (#375)
+
+Préréglages, dérogations persistées, file de lectures, annulation, progression et
+contrôle des générations sont communs à l’hôte. Les plans utilisent les
+**capacités de la session vivante**, jamais une liste de noms de moteurs.
+Le périmètre conserve les niveaux natifs absents ; aucun fichier n’est attaché
+et toutes les bases ne sont pas ouvertes automatiquement.
+
+| Famille | Périmètre | Ajouts Structure | Ajout Étendu | Limite importante |
+|---|---|---|---|---|
+| PostgreSQL et variantes compatibles | Schéma observé de la base connectée | Champs, index/clés sortantes disponibles | Définition annoncée | Capacités de la variante et privilèges font foi |
+| MySQL / MariaDB | Base observée au niveau espace de noms | Champs, index/clés sortantes | Définition | Aucune facette de contraintes SQL inventée |
+| SQLite | `main` ou attachement observé sur la session propriétaire | Champs, index/clés sortantes | Définition | Aucun ATTACH, fichier de remplacement ou exemption générale |
+| DuckDB | Couple catalogue/schéma observé | Champs, index/clés sortantes | Définition | L’identité du catalogue reste dans le périmètre |
+| ClickHouse | Base observée au niveau espace de noms | Champs et index | Définition | Aucune lecture de FK sortantes indisponibles |
+| Turso | Espace de noms observé de l’endpoint connecté | Champs, index/clés sortantes | Indisponible si non annoncée | Aucune définition de remplacement inventée |
+| MongoDB | Base observée au niveau espace de noms | Index ; inférence de champs exclue | Définition reconstruite disponible | Champs sur échantillon humain distinct et borné ; aucune FK |
+| Elasticsearch / OpenSearch | Racine observée de la source | Champs du mapping | Définition disponible | Un index Elasticsearch est un objet, pas la facette d’index SQL optionnelle |
+| Redis / Valkey | Catalogue de base numérotée observé | Faits de type de clé/disposition d’aperçu | Indisponible | Noms issus de l’échantillon de clés borné ; aucune valeur lue par la description |
+
+Les tests hôte/fournisseur couvrent les combinaisons indépendantes : index seul,
+FK seule, définition seule et description explicitement inférée. Les vérifications
+SQLite et MongoDB jetables sont distinctes de cet inventaire statique ; elles ne
+certifient pas toutes les versions des autres serveurs. Le [registre](completion.md)
+détaille les validations réellement exécutées et leurs exclusions.

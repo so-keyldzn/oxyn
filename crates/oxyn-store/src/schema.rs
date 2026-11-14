@@ -20,6 +20,7 @@
 //! | `audit_journal` | the audit trail — **append-only** | **no** |
 //! | `documents` | saved tabs and queries | yes |
 //! | `workspace_preferences` | versioned display preferences | yes |
+//! | `metadata_loading_policies` | versioned per-connection metadata presets, without authentication | yes |
 //! | `app_sessions` | what tells a clean shutdown from a crash | yes |
 //! | `ai_providers` | the declared providers — **per machine** | yes |
 //! | `external_agents` | the declared external agents — **per machine**, without a secret | yes |
@@ -852,6 +853,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 20,
         name: "server_profiles",
         sql: include_str!("schema/server_profiles.sql"),
+    },
+    Migration {
+        version: 21,
+        name: "metadata_loading_policies",
+        sql: include_str!("schema/metadata_loading.sql"),
     },
 ];
 

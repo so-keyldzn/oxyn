@@ -106,6 +106,9 @@ function tableOf(facets: RelationFacets, requested: boolean): ErdTable {
       primaryKey: field.primaryKey,
       foreignKey: keyed.has(field.name),
     })),
+    columnsKnown:
+      facets.detail.freshness.state === "fetched" &&
+      facets.detail.value !== null,
     requested,
   }
 }
@@ -149,7 +152,7 @@ export async function assembleErd(
 
   const startList = [...starts.values()].slice(0, ERD_MAX_TABLES)
   const startFacets = await inPool(startList, (address) =>
-    sources.facets(address, ["detail", "incomingKeys"])
+    sources.facets(address, ["description", "outgoingKeys", "incomingKeys"])
   )
 
   const neighbours = new Map<string, CatalogAddress>()
@@ -168,7 +171,7 @@ export async function assembleErd(
   const omitted =
     neighbours.size - neighbourList.length + (starts.size - startList.length)
   const neighbourFacets = await inPool(neighbourList, (address) =>
-    sources.facets(address, ["detail"])
+    sources.facets(address, ["description", "outgoingKeys"])
   )
 
   const tables = [

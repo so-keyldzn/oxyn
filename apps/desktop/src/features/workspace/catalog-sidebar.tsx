@@ -1,4 +1,5 @@
 import * as React from "react"
+import { MetadataLoadingSettings } from "@/features/metadata/loading-settings"
 import { CatalogTransferDialog } from "@/components/oxyn/catalog-transfer-dialog"
 import { ExplorerNavigation } from "@/features/multi-base/explorer-provider"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -78,9 +79,11 @@ export function CatalogSidebar({
   sourceSelector,
   sessionScoped = false,
   navigation = true,
+  active: visible = true,
 }: {
   open: OpenConnection
   navigation?: boolean
+  active?: boolean
   sourceSelector?: React.ReactNode
   sessionScoped?: boolean
   selected: string | null
@@ -320,6 +323,9 @@ export function CatalogSidebar({
         }
         onLeave={onLeave}
       />
+      {supported && visible && (
+        <MetadataLoadingSettings open={open} nodes={tree.data} />
+      )}
       <SidebarRail />
       {operation.element}
       {transfer && (

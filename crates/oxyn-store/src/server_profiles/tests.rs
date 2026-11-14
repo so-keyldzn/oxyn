@@ -245,7 +245,10 @@ fn migration_from_nineteen_keeps_existing_connection_identity() {
     ).expect("legacy connection");
     drop(connection);
     let store = Store::open_at(&path).expect("migration");
-    assert_eq!(store.schema_version().expect("version"), 20);
+    assert_eq!(
+        store.schema_version().expect("version"),
+        crate::schema::latest_version()
+    );
     assert!(
         store
             .server_profiles()

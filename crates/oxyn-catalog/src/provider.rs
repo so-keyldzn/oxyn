@@ -57,12 +57,17 @@ use crate::path::CatalogPath;
 /// driver, never one per product (ADR-0003).
 #[async_trait]
 pub trait CatalogProvider: Send + Sync {
+    /// Pure declaration of explicit inference bounds, with no I/O or host callback.
+    /// Returning `None` makes sampled descriptions unavailable to the host.
+    fn schema_sample_limits(&self) -> Option<crate::SchemaSampleLimits> {
+        None
+    }
+
     /// Server identity and session capabilities.
     ///
-    /// It is the only call without a default value: a source that can tell
-    /// nothing about itself may return a [`ServerInfo`] with empty fields, but
-    /// it must declare its capabilities — the whole rest of the interface
-    /// hangs on them.
+    /// Like relation listing and description, this has no default. A source
+    /// that can tell nothing about itself may use empty identity fields, but
+    /// must declare its capabilities; the remaining optional facets depend on them.
     ///
     /// # Errors
     /// Any session error: disconnection, insufficient rights, cancellation.

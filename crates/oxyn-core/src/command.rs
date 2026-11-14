@@ -169,6 +169,42 @@ pub enum CatalogRefreshScope {
         /// Raw relation name.
         relation: String,
     },
+    /// Fields and native paging evidence, without indexes or outgoing keys.
+    Description {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Only supported indexes; a missing summary requires a names dependency.
+    Indexes {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Only supported outgoing keys, without a description read.
+    OutgoingForeignKeys {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Explicit human-only bounded inference; no sampled values leave the driver.
+    SampledDescription {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
     /// Constraints of one relation, gated by the session's `CONSTRAINTS` capability.
     Constraints {
         /// Absent when the source has no catalog level.
@@ -402,6 +438,25 @@ pub enum Command {
     ReadWorkspacePreferences {
         /// Owning workspace.
         workspace: WorkspaceId,
+    },
+    /// Read one saved connection's manual loading policy without opening it.
+    ReadMetadataPolicy {
+        /// Existing connection in the executor's workspace.
+        connection: ConnectionId,
+    },
+    /// Save loading preferences only; never changes authentication or starts I/O.
+    WriteMetadataPolicy {
+        /// Existing connection in the executor's workspace.
+        connection: ConnectionId,
+        /// Versioned, bounded presets and native namespace exceptions.
+        policy: Box<crate::MetadataLoadingPolicy>,
+        /// Exact observed revision, zero for a missing policy.
+        expected_revision: u64,
+    },
+    /// Explicit, bounded metadata preload on an already owned live session.
+    PreloadMetadata {
+        /// Bounded, reviewed source and policy; never authentication parameters.
+        request: Box<crate::MetadataPreloadRequest>,
     },
     /// Save a newer display snapshot. Only the human may change their interface.
     WriteWorkspacePreferences {
@@ -678,6 +733,9 @@ impl Command {
             | Self::InspectResultValue { .. }
             | Self::Export { .. }
             | Self::ReadWorkspacePreferences { .. }
+            | Self::PreloadMetadata { .. }
+            | Self::ReadMetadataPolicy { .. }
+            | Self::WriteMetadataPolicy { .. }
             | Self::WriteWorkspacePreferences { .. }
             | Self::WriteWindowLayout { .. }
             | Self::ListQueryDocuments { .. }
@@ -720,7 +778,10 @@ impl Command {
     pub fn target_connection(&self) -> Option<ConnectionId> {
         match self {
             Self::ReadHistory { filter } => filter.connection,
-            Self::DiscoverDatabases { connection }
+            Self::PreloadMetadata { request } => Some(request.connection),
+            Self::ReadMetadataPolicy { connection }
+            | Self::WriteMetadataPolicy { connection, .. }
+            | Self::DiscoverDatabases { connection }
             | Self::SetServerProfileMembership { connection, .. }
             | Self::Connect { connection }
             | Self::Disconnect { connection }
@@ -875,6 +936,9 @@ impl Command {
             Self::ListHistoryConnections { .. } => "ListHistoryConnections",
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
+            Self::PreloadMetadata { .. } => "PreloadMetadata",
+            Self::ReadMetadataPolicy { .. } => "ReadMetadataPolicy",
+            Self::WriteMetadataPolicy { .. } => "WriteMetadataPolicy",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
             Self::WriteWindowLayout { .. } => "WriteWindowLayout",
             Self::WriteDocument { .. } => "WriteDocument",

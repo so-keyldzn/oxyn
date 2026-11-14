@@ -48,9 +48,9 @@ use crate::cancel::{self, Quarantine, Registry, Running};
 use crate::catalog::MongoCatalog;
 use crate::command;
 use crate::error::{map_error, stopped};
-use crate::preview;
 
 mod execution;
+mod preview_plan;
 
 /// The commands whose reply is a cursor: their results stream through
 /// `getMore`. Every other command's reply is one document, the whole result.
@@ -206,20 +206,10 @@ impl Session for MongoSession {
         shape: &PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        // A plain preview still comes in `_id` order (ADR-0068), but needs only
-        // the collection's kind for it: its `listCollections` entry, not the
-        // sample of documents a description reads.
-        let (relation, ordered_by_id) = if shape.needs_total_order() || shape.columns.is_some() {
-            let relation = self.catalog.describe_relation(path, cancel).await?;
-            let ordered = relation
-                .primary_key()
-                .iter()
-                .any(|field| field.name == "_id");
-            (Some(relation), ordered)
-        } else {
-            (None, self.catalog.previews_in_id_order(path, cancel).await?)
-        };
-        preview::request(path, limit, shape, relation.as_ref(), ordered_by_id)
+        Ok(self
+            .compose_preview(path, limit, shape, None, false, cancel)
+            .await?
+            .request)
     }
 
     async fn prepare_preview(
@@ -229,20 +219,20 @@ impl Session for MongoSession {
         shape: &PreviewShape,
         cancel: &CancelToken,
     ) -> Result<oxyn_driver::PreparedPreview> {
-        let (relation, ordered) = if !shape.sort.is_empty() || shape.columns.is_some() {
-            let relation = self.catalog.describe_relation(path, cancel).await?;
-            let ordered = relation
-                .primary_key()
-                .iter()
-                .any(|field| field.name == "_id");
-            (Some(relation), ordered)
-        } else {
-            (None, self.catalog.previews_in_id_order(path, cancel).await?)
-        };
-        Ok(oxyn_driver::PreparedPreview {
-            request: preview::stream_request(path, limit, shape, relation.as_ref(), ordered)?,
-            mode: oxyn_driver::PreviewMode::Retained,
-        })
+        self.compose_preview(path, limit, shape, None, true, cancel)
+            .await
+    }
+
+    async fn plan_preview(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        shape: &PreviewShape,
+        known: Option<&oxyn_catalog::Relation>,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_driver::PreparedPreview> {
+        self.compose_preview(path, limit, shape, known, shape.continuable, cancel)
+            .await
     }
 
     async fn set_context(&self, context: &SessionContext, _cancel: &CancelToken) -> Result<()> {

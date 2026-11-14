@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="370b7c884d48" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="695e4728b15f" -->
 
 # Suivi d'achèvement des outils de bases de données
 
@@ -26,7 +26,7 @@ Les prompts historiques conservent leurs identifiants de génération.
 | Recherche commune | commit documentaire initial sur #373 | Parcours, matrice, ADR proposés et maquettes sont un prérequis commun. Un commit documentaire transversal est nécessaire pour conserver ce socle sans duplication. |
 | #373 | `feat/multi-base-backend` | Implémenté et validé automatiquement sur `ce58839` ; `make qualite` réussi. Le commit `a3f5961` suit la recherche `356c8d6` ; acceptation personnelle attendue. |
 | #308 | `feat/f6-navigation` | Créée depuis `a3f5961` après un commit #373 propre. Cycle visible via registre implémenté ; Terminé : 93 tests d’actions, cinq stories navigateur, gate complet et revalidation frontend finale réussis. Acceptation personnelle/native attendue. |
-| #375 | `feat/metadata-loading` | Non créée ; héritera de #308/#373. Les lectures paresseuses et facettes existantes ne constituent pas encore la politique configurable. |
+| #375 | `feat/metadata-loading` | Créée depuis `4c80bfa` (#308), propre et validé. Implémentation commune selon capacités terminée et validée automatiquement : make qualite passe 4733 tests Rust / 2391 frontend. Acceptation personnelle après intégration finale sur dev. |
 | Carte | `feat/schema-map` | Non créée ; dépend de couverture/politique #375 et du focus #308. L'ERD de l'assistant est un rendu réutilisable, pas une carte autonome. |
 | #374 | `feat/native-backup-restore` | Non créée ; héritera de la pile terminée et réutilisera propriété, opérations et invalidation. Aucun transfert natif implémenté. |
 
@@ -147,6 +147,33 @@ fermeture. `make socle` réussit sans avertissement après cette mise à jour. L
 attendent l’instance finale dev et l’acceptation personnelle. Aucun Rust ou IPC
 n’a changé lors du dernier raffinement de focus.
 
+## Plan d’implémentation de #375
+
+Core porte politique et périmètre purs ; store porte migration 21, JSON borné et
+comparaison de révision. L’exécuteur possède politique/audit, facettes séparées,
+générations, annulation, priorité des demandes et comptage borné. Le desktop
+expose IPC typé, contrôle de session/fenêtre et progression ; les features
+frontend raccordent réglages et préchargement shadcn. Cache, coordination des
+lectures et UI des facettes existants sont réutilisés.
+
+Ordre : persistance/commandes ; descriptions/index/clés séparés et admission
+explicite des échantillons ; préchargement/progression ; UI et consommateurs ;
+validation/documentation. Aucun protocole ni paquet externe ajouté ; les versions Serde/Serde JSON du
+workspace sont réutilisées pour borner la publication.
+`INFERRED_SCHEMA` identifie déjà les descriptions échantillonnées.
+
+Échecs à prouver : révisions et publications tardives, distinction non lu/vide/
+périmé/indisponible/erreur, héritage exact, sauvegarde sans appel driver,
+annulation/remplacement, éviction, admission explicite sans valeurs, demandes
+justifiées du DDL/complétion/assistant. Une source fermée ne se reconnecte pas.
+Mesurer appels provider, octets de métadonnées et temps sur sources jetables ;
+aucun seuil automatique ni exemption générale SQLite.
+
+La livraison exige tests de toutes les couches, stories accessibles par état,
+revues locales, `cargo fmt --all`, `make qualite`, contrats anglais/français
+cohérents et branche propre commitée. L’acceptation personnelle reste réservée
+à l’instance finale dev intégrée.
+
 ## Validation et acceptation
 
 Chaque lot consignera formatage, lint, typage, tests, stories, build et
@@ -165,3 +192,79 @@ L'acceptation personnelle n'est **pas obtenue**. Le scénario final couvrira
 F6/Maj+F6, découverte/ouverture, répétitions, A→B→A, brouillons, erreurs/annulation,
 niveaux de métadonnées, carte, export/restauration PostgreSQL jetables.
 Attendre le retour de l'utilisateur avant d'annoncer son accord manuel.
+
+### Mesure SQLite jetable (2026-11-14)
+
+Une base mémoire privée, trois tables, une clé sortante et un index secondaire ;
+chaque mode démarre sans avoir lu les noms/champs de cet espace de noms.
+
+| Préréglage | Périmètres soumis | Octets de métadonnées encodées | Durée ms | Facettes détaillées fraîches |
+|---|---:|---:|---:|---:|
+| Minimal | 1 | 554 | 0 | 0 |
+| Structure | 10 | 5 164 | 1 | 9 |
+| Étendu | 13 | 7 082 | 0 | 12 |
+
+Répéter chaque page n’a soumis aucune lecture et aucun octet supplémentaire.
+Les tests sur fournisseur instrumenté vérifient séparément les appels exacts
+aux méthodes de description/index/clés/définition. Périmètres et appels réseau
+ne sont pas équivalents. Les millisecondes sont arrondies vers le bas : zéro
+signifie sous la résolution du rapport, pas aucun travail. C’est une mesure de
+fonctionnement locale, ni un banc réseau ni une justification de seuil ou
+d’exemption SQLite. La porte complète reste nécessaire avant toute bascule.
+
+## Validation finale actuelle de #375
+
+La migration 21 sépare politique et authentification. Le préchargement reste sur
+le propriétaire vivant exact : priorité interactive, pages explicites de
+128 descriptions, échéance d’annulation de 60 secondes, rapports bornés. Scope,
+révision et génération lient la continuation. Changer le contexte annule le seul
+préchargement de cette console et retire sa génération avant/après l’opération.
+Aucune source/session/fichier n’est ouvert implicitement.
+
+Le dialogue shadcn sépare enregistrement, préchargement, page suivante et arrêt.
+Les éditions doivent être enregistrées ; un conflit exige une relecture. Masquer
+ou retirer la source libère sa seule tâche. Onglets, copies, complétion, assistant
+et ERD demandent des facettes précises ; DDL explicite en large lit la définition,
+Structure ne la lit pas. L’inférence exige un geste humain borné. Préparer un
+aperçu réutilise les métadonnées fraîches du propriétaire ; structure absente ou
+périmée n’entraîne aucun échantillon caché. Des champs déjà inférés restent
+disponibles sans nouvel échantillon.
+
+Le bilan distingue frais/périmé/non lu/évincé, indisponible et échoué. Les comptes
+restent nullables avant mesure ; une éviction rend le bilan partiel sans boucle
+de relecture. La publication contrôle atomiquement génération et éviction. Bornes
+d’échantillonnage et génération typée appartiennent au contrat catalogue ; les
+DTO du cœur transportent un UUID opaque et n’imposent aucun symbole non publié
+à l’empaquetage. UUID/Serde/Serde JSON existants sont réutilisés sans nouvelle
+version ou paquet externe dans le graphe.
+
+Vérifié le 2026-11-14 :
+
+- `make qualite` final passe : formatage, Clippy `-D warnings`, 4733 tests Rust
+  (211 ignorés), doctests/rustdoc, quatre archives vérifiées séparément, 2391
+  tests frontend et build. Socle : zéro avertissement.
+- Scénarios capacités indépendantes, héritage exact, CAS/migrations, sauvegarde
+  sans I/O serveur, facettes indépendantes, annulation contexte/politique,
+  générations tardives, continuation bornée, éviction et inférence en cache.
+- Quinze stories de réglages/échantillonnage passent dans Chromium avec axe ;
+  régressions DDL large et remplacement de source/réponse tardive. Inspection
+  des états partiels/évincés sans erreur de page.
+- SQLite mémoire privée exerce les trois niveaux et le cache (mesures ci-dessus).
+  MongoDB 8.0.34 jetable : 24 tests réussis, annulation observée serveur, flux
+  de 1 Gio en lots bornés, échantillon trop grand refusé/curseur libéré et preuve
+  par profiler que préparer l’aperçu ne soumet aucun `find` caché. Conteneur supprimé.
+- Pic RSS MongoDB non vérifié sur macOS (assertion Linux uniquement). Autres
+  serveurs et modèle d’embeddings de référence non exécutés dans la porte,
+  faute d’URL/modèle configurés.
+- `cargo-deny` absent : audits Rust licences/RUSTSEC non exécutés. `cargo-about`
+  absent : notices non régénérées. Audit/licences npm réussis. Diagnostics
+  ResizeObserver/React act existants conservés dans la sortie navigateur,
+  assertions réussies. macOS seul vérifié ; aucune acceptation manuelle obtenue.
+
+Revues locales invariants/frontières/sécurité/organisation/UI : aucun blocage
+restant après corrections. Les grands répartiteurs bus/cache/objet/workspace
+conservent leur rôle existant ; politique, ordonnanceur, inférence, comptabilité
+et UI pure/contrôleur sont séparés. Aucun second cache driver, seuil automatique,
+exemption SQLite, protocole ou configuration globale ajouté. L’ERD est adapté
+comme consommateur de facettes/propriété, sans seconde carte autonome. Aucune
+intégration dev/main ni publication effectuée.

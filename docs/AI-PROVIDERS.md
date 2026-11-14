@@ -306,6 +306,21 @@ What frames these reads:
    way, and the read is awaited two seconds to finish cleanly rather
    than abandoned in the middle of an exchange.
 
+The completion pass now requests independent descriptions, then supported
+indexes and outgoing keys only where `ContextPolicy` renders them, for the same
+at-most-24 selected relations and within the same five-second deadline. It does
+not load definitions or constraints speculatively. Each facet is attempted at
+most once in that pass. The rendered context states its actual field/index/key
+coverage: read (including known empty), unread, stale or unavailable. A retained
+stale value is labelled as such; missing metadata is never evidence of absence.
+
+A source declaring `INFERRED_SCHEMA` cannot be automatically described by this
+pass, by `describe_schema`, or by editor completion. Such field descriptions
+require a separate human-only `SampledDescription` command with declared bounds.
+Already explicitly inferred metadata still crosses the single context gateway
+under the connection’s tier; no document values accompany it. Manual loading
+presets change only explicit prefetch, not the privacy tier or context budget.
+
 The rest of the product benefits without more code: the tree updates through
 the `CatalogUpdated` event, and the list of `@` mentions as well as the `erd`
 diagram read the same cache.

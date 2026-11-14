@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b4c457bd1945" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a4abca553a81" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3558,3 +3558,40 @@ indique un privilège du rôle courant, sans garantir la réussite de l'authenti
 Sources : [pg_database](https://www.postgresql.org/docs/current/catalog-pg-database.html),
 [fonctions de privilèges](https://www.postgresql.org/docs/current/functions-info.html).
 Les limites de 1024 entrées/octets par nom sont des bornes Oxyn, pas PostgreSQL.
+
+### Comptage de publication des métadonnées — vérifié le 2026-11-14
+
+L’exécuteur réutilise `serde` 1.0.229 et `serde_json` 1.0.151 du workspace pour
+compter les octets JSON via un writer borné, sans seconde copie encodée. L’API
+crates.io confirme ces versions non retirées et sous `MIT OR Apache-2.0` à cette
+date. Le lecteur web ne pouvait ouvrir l’API ; une requête HTTPS JSON directe au
+registre primaire a réussi. Sources : [Serde](https://crates.io/api/v1/crates/serde/1.0.229),
+[Serde JSON](https://crates.io/api/v1/crates/serde_json/1.0.151).
+Les 16 Mio par patch, 128 relations préchargées, 32 dérogations et 128 Kio par
+politique sont des gardes Oxyn, pas des seuils automatiques ni limites des
+moteurs. Buffers protocolaires et plans serveur restent des sujets distincts.
+
+### Limite de traitement de l’inférence — vérifiée le 2026-11-14
+
+`find.maxTimeMS` de MongoDB borne cumulativement le traitement serveur du
+curseur et de ses `getMore`. La latence client/serveur et l’inactivité sont
+exclues ; l’arrêt intervient aux points d’interruption du serveur. Les
+10 000 ms du lecteur de schéma désignent donc le traitement, pas la latence
+bout en bout. Les bornes de 1000 documents retournés et 8 Mio retenus ne bornent
+ni le parcours serveur ni les lots du protocole.
+
+Sources : [cursor.maxTimeMS](https://www.mongodb.com/docs/manual/reference/method/cursor.maxtimems/),
+[getMore](https://www.mongodb.com/docs/manual/reference/command/getmore/).
+
+### Jetons de publication du catalogue — vérifiés le 2026-11-14
+
+`oxyn-catalog` réutilise directement UUID du workspace pour ses jetons transitoires.
+L’exigence reste 1.26.0 ; `Cargo.lock` résout 1.27.0, non retirée, sous
+Apache-2.0 OR MIT, avec `v7` et `serde` vérifiés dans le registre. Aucun nouveau
+paquet ou version externe n’entre dans le graphe. Les types du contrat restent
+au catalogue ; les DTO du cœur transportent le UUID opaque sans dépendance inverse.
+
+Sources : [UUID 1.27.0](https://crates.io/api/v1/crates/uuid/1.27.0),
+[empaquetage Cargo](https://doc.rust-lang.org/cargo/commands/cargo-package.html) :
+les manifestes normalisés retirent les chemins locaux et la vérification compile
+l’archive avec les dépendances versionnées. Ce contrôle est conservé sans publication.

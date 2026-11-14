@@ -82,8 +82,9 @@ Repeated opening of B does not allocate duplicate sessions.
 **Entry:** catalog, search result, related object or map node.
 
 **Existing:** Data, Structure, Indexes, Constraints, Relations and DDL share an
-object view. Data/Structure/Indexes/outgoing keys currently request `detail`;
-the wide layout also requests the adjacent definition on metadata tabs.
+object view. The former shared `detail` request is split into independent
+description, indexes and outgoing-key reads by #375. The adjacent definition
+now waits for an explicit request; validation is recorded in the completion ledger.
 
 **Proposed flow:** identify connection, database, namespace and object; open the
 appropriate view; request only its required facets; show freshness and
@@ -110,10 +111,12 @@ Metadata availability and retained-preview availability remain distinct.
 
 ## J03 — Control metadata loading
 
-**Entry:** proposed `Metadata loading` action on a connection or schema.
+**Entry:** `Metadata loading…` in the active source explorer.
 
 **Existing:** hierarchical reads, per-object facets, bounded cache, editor and
-assistant completion passes. There are no configurable L1/L2/L3 presets.
+assistant completion passes. #375 adds manual Minimal/Structure/Extended
+preferences and exact native namespace overrides, with validation tracked in
+the [completion ledger](completion.md).
 
 **Proposed flow:** choose a preset, see whether it is inherited, inspect its
 scope, and explicitly request further details when needed.
@@ -124,10 +127,13 @@ scope, and explicitly request further details when needed.
 | Structure | Names, columns, indexes and outgoing keys | Definitions and other facets |
 | Extended | Structure plus supported definitions | Unsupported object families remain unavailable |
 
-These are candidates, not new budgets. None promises that the whole database
-remains in memory. Selecting a preset is distinct from starting a bulk read;
-the proposed trigger is now the explicit preload action in D02, not saving the
-preference or expanding the whole tree.
+These manual presets do not enlarge existing budgets or promise that the
+whole database remains in memory. Selecting a preset is distinct from starting a bulk read;
+the trigger is an explicit selected-scope preload action. Saving the preference
+or expanding a level starts no bulk read. Each explicit page stops at 128
+relations / 60 seconds and offers a generation-bound next page; unsupported,
+failed, fresh, stale and unread facets remain distinct. Cancellation reaches
+the original session. Preferences are local readable JSON, separate from auth.
 
 **Failure and recovery:** show pending, cancelled and incomplete work; lowering
 the preset stops obsolete prefetch work without discarding the current editor.
@@ -136,7 +142,7 @@ Keep missing information distinguishable from an empty result.
 **Acceptance:** tree, completion, diagram and assistant apply one policy;
 switching screen width does not bypass it through the adjacent DDL panel.
 No automatic object-count threshold or SQLite exemption is assumed.
-**Decision:** D02, after measurements.
+**Decision:** D02; measurements do not authorize automatic thresholds.
 
 ## J04 — Open a relational schema map without AI
 

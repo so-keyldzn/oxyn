@@ -288,14 +288,15 @@ impl CatalogFill<'_> {
                 let cache = self.catalog.read();
                 let scope = listing.or_else(|| {
                     next_description(&cache, want, &policy, &tried, descriptions, &scores)
+                        .or_else(|| next_structure_facet(&cache, want, &policy, &tried, &scores))
                 });
                 scope.map(|scope| {
                     let capabilities = cache
                         .server_info()
                         .map_or(Capabilities::empty(), |server| server.capabilities);
-                    let command = crate::catalog::refresh_command(
+                    let command = crate::catalog::refresh_scope_command(
                         self.connection,
-                        scope.path(),
+                        &scope,
                         capabilities,
                     );
                     (scope, command)
@@ -308,16 +309,21 @@ impl CatalogFill<'_> {
                 emit(AiEvent::CatalogReading);
             }
             filled.attempted += 1;
-            let describing = matches!(scope, CatalogScope::Relation(_));
+            let describing = matches!(scope, CatalogScope::Description(_));
+            let structure_facet = matches!(
+                scope,
+                CatalogScope::Indexes(_) | CatalogScope::OutgoingForeignKeys(_)
+            );
             if describing {
                 descriptions += 1;
-            } else {
+            } else if !structure_facet {
                 listings += 1;
             }
             tried.insert(scope);
             match self.read(command, cancel, deadline).await {
                 Step::Done if describing => filled.described += 1,
-                Step::Done => filled.listed += 1,
+                Step::Done if !structure_facet => filled.listed += 1,
+                Step::Done => {}
                 Step::Failed(_) => filled.failed += 1,
                 Step::Stopped(stop) => {
                     filled.stopped = Some(stop);
@@ -330,7 +336,9 @@ impl CatalogFill<'_> {
             filled.unlisted = cache.unlisted_count();
             filled.not_loaded = wanted(&cache, want, &policy, &scores)
                 .iter()
-                .filter(|path| !fetched(cache.freshness(&CatalogScope::Relation((*path).clone()))))
+                .filter(|path| {
+                    !fetched(cache.freshness(&CatalogScope::Description((*path).clone())))
+                })
                 .count();
         }
         if filled.attempted > 0 {
@@ -464,12 +472,46 @@ fn next_description(
     descriptions: usize,
     scores: &SemanticScores,
 ) -> Option<CatalogScope> {
-    if descriptions >= MAX_DESCRIPTIONS {
+    if descriptions >= MAX_DESCRIPTIONS
+        || cache
+            .server_info()
+            .is_some_and(|info| info.capabilities.contains(Capabilities::INFERRED_SCHEMA))
+    {
         return None;
     }
     wanted(cache, want, policy, scores)
         .into_iter()
-        .map(CatalogScope::Relation)
+        .map(CatalogScope::Description)
+        .find(|scope| !tried.contains(scope) && !fetched(cache.freshness(scope)))
+}
+
+/// Read only the additional facets actually rendered by the context gateway.
+fn next_structure_facet(
+    cache: &CatalogCache,
+    want: Want<'_>,
+    policy: &ContextPolicy,
+    tried: &HashSet<CatalogScope>,
+    scores: &SemanticScores,
+) -> Option<CatalogScope> {
+    let caps = cache.server_info()?.capabilities;
+    wanted(cache, want, policy, scores)
+        .into_iter()
+        .take(MAX_DESCRIPTIONS)
+        .filter(|path| cache.relation(path).is_some())
+        .flat_map(|path| {
+            [
+                (
+                    policy.include_indexes && caps.contains(Capabilities::INDEXES),
+                    CatalogScope::Indexes(path.clone()),
+                ),
+                (
+                    policy.include_foreign_keys && caps.contains(Capabilities::FOREIGN_KEYS),
+                    CatalogScope::OutgoingForeignKeys(path),
+                ),
+            ]
+        })
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, scope)| scope)
         .find(|scope| !tried.contains(scope) && !fetched(cache.freshness(scope)))
 }
 

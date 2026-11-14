@@ -16,6 +16,7 @@ const ipc = vi.hoisted(() => ({
 const never = { freshness: { state: "never" }, value: null }
 const facets = {
   detail: never,
+  aggregateFreshness: { state: "never" },
   constraints: never,
   incomingKeys: never,
   definition: never,
@@ -49,10 +50,22 @@ afterEach(async () => {
 })
 
 it("keeps a facet read through StrictMode and reattachment, with an explicit Stop", async () => {
-  const open = {
+  const open: OpenConnection = {
+    capabilities: [],
+    name: "Example",
+    driver: "sqlite",
+    environment: "local",
+    readOnly: true,
+    privacyTier: "metadata",
+    console: {
+      session: "console-owner",
+      capabilities: [],
+      readOnly: true,
+      transactionState: "idle",
+    },
     connection: "facet-connection",
     session: "facet-owner",
-  } as OpenConnection
+  }
   const address = { catalog: null, namespace: "temp", relation: "records" }
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },

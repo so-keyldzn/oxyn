@@ -25,6 +25,11 @@ const NEVER = { freshness: { state: "never" as const }, value: null }
 
 function facets(detailRead: boolean): RelationFacets {
   return {
+    generation: "00000000-0000-4000-8000-00000000000c",
+    sampleLimits: null,
+    aggregateFreshness: { state: "never" as const },
+    indexesFreshness: { state: "never" as const },
+    foreignKeysFreshness: { state: "never" as const },
     address: { catalog: null, namespace: "public", relation: "orders" },
     kind: "table",
     holdsRecords: true,
@@ -133,7 +138,7 @@ describe("the catalog's copies", () => {
       "connection-1",
       "session-1",
       orders.address,
-      "detail"
+      "description"
     )
     expect(refreshRelationFacet.mock.invocationCallOrder[0]).toBeLessThan(
       composeObjectSql.mock.invocationCallOrder[0] ?? 0

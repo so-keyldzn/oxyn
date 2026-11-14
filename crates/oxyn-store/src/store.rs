@@ -176,6 +176,12 @@ impl Store {
         Connections::new(self)
     }
 
+    /// Manual metadata preferences. Every operation may block on the store.
+    #[must_use]
+    pub fn metadata_policies(&self) -> crate::metadata_loading::MetadataPolicies<'_> {
+        crate::metadata_loading::MetadataPolicies::new(self)
+    }
+
     /// The execution history.
     #[must_use]
     pub fn history(&self) -> History<'_> {

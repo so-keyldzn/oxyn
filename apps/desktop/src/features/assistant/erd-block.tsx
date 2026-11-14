@@ -1,3 +1,5 @@
+import { facetUnavailable } from "@/features/metadata/capabilities"
+import { facetFreshness } from "@/features/metadata/facet-state"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 
@@ -12,21 +14,8 @@ import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { metadata } from "@/lib/ipc/metadata"
-import type { RelationFacet, RelationFacets } from "@/lib/ipc/metadata"
+import type { RelationFacet } from "@/lib/ipc/metadata"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
-
-function freshness(facets: RelationFacets, facet: RelationFacet) {
-  switch (facet) {
-    case "detail":
-      return facets.detail.freshness.state
-    case "constraints":
-      return facets.constraints.freshness.state
-    case "incomingKeys":
-      return facets.incomingKeys.freshness.state
-    case "definition":
-      return facets.definition.freshness.state
-  }
-}
 
 /**
  * Reads a facet never read, through the same command as the object view.
@@ -39,6 +28,7 @@ async function readFacet(
   facet: RelationFacet,
   signal: AbortSignal
 ) {
+  if (facet === "sampledDescription" || facetUnavailable(open, facet)) return
   const id = newCommandId()
   const cancel = () => void backend.cancel(id)
   signal.addEventListener("abort", cancel)
@@ -76,22 +66,28 @@ function sourcesFor(
     // The sidebar's own key: a search it already ran is not run again.
     search: (relation) =>
       queryClient.fetchQuery({
-        queryKey: ["catalog-search", open.connection, relation],
-        queryFn: () => metadata.searchCatalog(open.connection, relation),
+        queryKey: ["catalog-search", open.connection, open.session, relation],
+        queryFn: () =>
+          metadata.searchCatalog(open.connection, relation, open.session),
       }),
     facets: async (address, wanted) => {
-      const key = facetsKey(open.connection, address)
+      const key = facetsKey(open.connection, address, open.session)
       const cached = await queryClient.fetchQuery({
         queryKey: key,
-        queryFn: () => metadata.relationFacets(open.connection, address),
+        queryFn: () =>
+          metadata.relationFacets(open.connection, address, open.session),
       })
       const missing = wanted.filter(
-        (facet) => freshness(cached, facet) !== "fetched"
+        (facet) => facetFreshness(cached, facet).state !== "fetched"
       )
       if (missing.length === 0) return cached
       for (const facet of missing) await readFacet(open, address, facet, signal)
       // Written back under the object view's key: it now reads fresh too.
-      const read = await metadata.relationFacets(open.connection, address)
+      const read = await metadata.relationFacets(
+        open.connection,
+        address,
+        open.session
+      )
       queryClient.setQueryData(key, read)
       return read
     },
@@ -117,6 +113,7 @@ export function ErdBlock({
   const erdKey = [
     "assistant-erd",
     open.connection,
+    open.session,
     JSON.stringify(
       request.names.map((name) => [name.namespace, name.relation])
     ),
@@ -161,9 +158,13 @@ export function ErdBlock({
     void copyToClipboard(
       queryClient
         .fetchQuery({
-          queryKey: facetsKey(open.connection, table.address),
+          queryKey: facetsKey(open.connection, table.address, open.session),
           queryFn: () =>
-            metadata.relationFacets(open.connection, table.address),
+            metadata.relationFacets(
+              open.connection,
+              table.address,
+              open.session
+            ),
         })
         .then(
           (facets) => facets.qualifiedName,

@@ -27,6 +27,8 @@ export interface ErdTable {
   name: string
   namespace: string | null
   columns: Array<ErdColumn>
+  /** False distinguishes unread/sample-required structure from known empty. */
+  columnsKnown?: boolean
   /** Named by the answer, as opposed to drawn as a neighbour of one. */
   requested: boolean
 }

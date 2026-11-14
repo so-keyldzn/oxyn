@@ -118,6 +118,7 @@ pub(crate) const fn is_local_write(command: &Command) -> bool {
             | Command::SaveServerProfile { .. }
             | Command::RemoveServerProfile { .. }
             | Command::SetServerProfileMembership { .. }
+            | Command::WriteMetadataPolicy { .. }
             | Command::WriteWorkspacePreferences { .. }
             | Command::SaveQueryDocument { .. }
             | Command::CloseQueryDocument { .. }

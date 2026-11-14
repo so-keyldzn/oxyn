@@ -22,6 +22,8 @@ serde.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Transient publication tokens; the existing workspace UUID pin is reused.
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

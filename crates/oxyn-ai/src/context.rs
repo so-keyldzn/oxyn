@@ -71,6 +71,7 @@ use serde::{Deserialize, Serialize};
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
+mod facet_coverage;
 mod key_patterns;
 mod mentions;
 mod semantic;
@@ -677,6 +678,7 @@ impl<'a> ContextBuilder<'a> {
         let kind_label = kind.map_or("relation", |k| k.as_str());
 
         let mut out = format!("{kind_label} {}\n", naming.path(path));
+        out.push_str(&facet_coverage::render(self.cache, path, &self.policy));
 
         if let Some(relation) = detail {
             if let Some(rows) = relation.estimated_rows {
