@@ -365,6 +365,26 @@
       }
     },
     {
+      "id": "view.focusNext",
+      "label": "Focus next area",
+      "zone": "global",
+      "shortcut": { "mac": "F6", "other": "F6" },
+      "menu": {
+        "mac": { "menu": "view", "group": 2, "order": 0 },
+        "other": { "menu": "view", "group": 2, "order": 0, "mnemonic": "n" }
+      }
+    },
+    {
+      "id": "view.focusPrevious",
+      "label": "Focus previous area",
+      "zone": "global",
+      "shortcut": { "mac": "Shift+F6", "other": "Shift+F6" },
+      "menu": {
+        "mac": { "menu": "view", "group": 2, "order": 1 },
+        "other": { "menu": "view", "group": 2, "order": 1, "mnemonic": "r" }
+      }
+    },
+    {
       "id": "view.catalog",
       "label": "Show catalog",
       "zone": "global",

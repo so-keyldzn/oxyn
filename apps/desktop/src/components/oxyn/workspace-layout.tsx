@@ -207,6 +207,7 @@ export function WorkspaceLayout({
     const node = document.createElement("div")
     node.className = "contents"
     node.dataset.slot = "workspace-aside-content"
+    node.dataset.focusRegion = "inspector"
     return node
   })
   // A node taken out of the document loses focus, and the caret with it: a
@@ -336,6 +337,7 @@ export function WorkspaceLayout({
 
   return (
     <SidebarProvider
+      data-focus-workspace
       open={compact ? compactOpen : sidebarOpen}
       onOpenChange={compact ? setCompactOpen : onSidebarOpenChange}
       onKeyDown={closeOverlaidAside}
@@ -390,7 +392,11 @@ export function WorkspaceLayout({
               <EnvironmentBadge environment={environment} />
               {readOnly ? <ReadOnlyBadge /> : null}
             </div>
-            <div data-action-zone="tabs" className="ml-2 min-w-0 flex-1">
+            <div
+              data-focus-region="tabs"
+              data-action-zone="tabs"
+              className="ml-2 min-w-0 flex-1"
+            >
               {tabs}
             </div>
             {aiEntry}

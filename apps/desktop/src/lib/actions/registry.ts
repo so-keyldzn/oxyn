@@ -25,6 +25,7 @@ import type {
   ItemHandle,
   OverlayActions,
 } from "./context"
+import { cycleFocus } from "./focus-regions"
 import { actionSpec, onPlatform } from "./manifest"
 import type { Zone } from "./manifest"
 import { editorClipboardBehaviours, menuBehaviours } from "./menu-behaviours"
@@ -428,6 +429,18 @@ export const behaviours: Record<string, ActionBehaviour> = {
     },
     run: (context) => context.sources.workspace?.actions.openAssistant(),
   },
+  "view.focusNext": inWorkspace(
+    () => true,
+    (_workspace, context) => {
+      cycleFocus(context.focused, 1)
+    }
+  ),
+  "view.focusPrevious": inWorkspace(
+    () => true,
+    (_workspace, context) => {
+      cycleFocus(context.focused, -1)
+    }
+  ),
   "view.catalog": inWorkspace(
     () => true,
     (workspace) => workspace.actions.showCatalog()

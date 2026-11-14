@@ -646,8 +646,16 @@ What each surface guarantees:
 | `⌘P` | open an object by its name, among the objects already loaded — the scope is announced, as in the catalog search |
 | `⌘/` | the shortcut sheet |
 | `⌃Tab`, `⌃⇧Tab` | the next tab, the previous one ("Independent consoles") |
-| `F6`, `⇧F6` | the next area, the previous one: catalog, editor, results, side panel |
+| `F6`, `⇧F6` | the next visible area, the previous one: navigation, tabs, editor, results, inspector, assistant and a mounted map |
 | `⇧F10`, `Menu` key | the context menu of the focused element, like the right click |
+
+F6 and Shift+F6 use the action registry, including View, the palette and the
+shortcut sheet. The cycle follows document order in the visible workspace;
+closed/collapsed panels and hidden retained workspaces are excluded. A mounted
+map can register a focus region without being a prerequisite for the shortcut.
+Returning to a region restores its last valid focus target; CodeMirror restores
+its own cursor and selection. No panel opens and no connection activates during
+the cycle. A modal keeps focus until it is dismissed.
 
 `⌘J` (back to the editor), `⌘B` (sidebar) and `⌘2` (preview grid) keep the
 meaning that "First workspace navigation" and "Filter, sort, page through" give

@@ -13,6 +13,7 @@ import type { CatalogAddress } from "@/lib/ipc/types"
 import type { DensityChoice, ThemeChoice } from "@/lib/ipc/settings"
 
 import type { Zone } from "./manifest"
+import { rememberRegionFocus } from "./focus-regions"
 import { platform } from "./platform"
 import type { Platform } from "./shortcut"
 import type {
@@ -286,6 +287,7 @@ export const focusStore = createStore<FocusState>(NO_FOCUS)
 export function trackFocus(): () => void {
   const update = (element: Element | null) => {
     if (isMenuFocus(element)) return
+    rememberRegionFocus(element)
     const next = focusOf(element)
     const current = focusStore.state
     if (

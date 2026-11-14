@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="a162a1c9a29c" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="370b7c884d48" -->
 
 # Suivi d'achèvement des outils de bases de données
 
@@ -24,8 +24,8 @@ Les prompts historiques conservent leurs identifiants de génération.
 | Lot | Branche | Dépendance / état actuel |
 |---|---|---|
 | Recherche commune | commit documentaire initial sur #373 | Parcours, matrice, ADR proposés et maquettes sont un prérequis commun. Un commit documentaire transversal est nécessaire pour conserver ce socle sans duplication. |
-| #373 | `feat/multi-base-backend` | Implémenté et validé automatiquement sur `ce58839` ; `make qualite` réussi. Le commit du code suit la recherche `356c8d6` ; acceptation personnelle attendue. |
-| #308 | `feat/f6-navigation` | Non créée ; partira de #373 terminé pour la disposition réelle. L'inscription de la carte au focus restera optionnelle. |
+| #373 | `feat/multi-base-backend` | Implémenté et validé automatiquement sur `ce58839` ; `make qualite` réussi. Le commit `a3f5961` suit la recherche `356c8d6` ; acceptation personnelle attendue. |
+| #308 | `feat/f6-navigation` | Créée depuis `a3f5961` après un commit #373 propre. Cycle visible via registre implémenté ; Terminé : 93 tests d’actions, cinq stories navigateur, gate complet et revalidation frontend finale réussis. Acceptation personnelle/native attendue. |
 | #375 | `feat/metadata-loading` | Non créée ; héritera de #308/#373. Les lectures paresseuses et facettes existantes ne constituent pas encore la politique configurable. |
 | Carte | `feat/schema-map` | Non créée ; dépend de couverture/politique #375 et du focus #308. L'ERD de l'assistant est un rendu réutilisable, pas une carte autonome. |
 | #374 | `feat/native-backup-restore` | Non créée ; héritera de la pile terminée et réutilisera propriété, opérations et invalidation. Aucun transfert natif implémenté. |
@@ -117,6 +117,35 @@ ou publication ajoutée.
 Il s’agit de contrôles automatiques. L’acceptation personnelle reste attendue.
 Seul macOS a été exercé localement ; cette entrée ne livre ni transferts natifs
 ni les lots suivants.
+
+Le contrôle suivant a trouvé un résidu de formatage dans le test de reprise
+ajouté en fin de lot. `a75a5f2` le corrige après une vérification Prettier ciblée ;
+la branche #373 inactive a avancé de `a3f5961` vers ce descendant. Aucun historique
+réécrit ni code d’issue transporté entre branches. Le gate F6 revalide l’ensemble.
+
+## Validation courante de #308
+
+F6/Maj+F6 sont des actions du registre, placées dans View et reprises dans la
+palette et la fiche. Les zones visibles réutilisent les marqueurs shadcn de la
+barre latérale et des marqueurs explicites d’éditeur, résultats et panneaux.
+Les cartes optionnelles utilisent la même déclaration générique, sans import
+ni dépendance à leur livraison. Aucun second écouteur clavier, ouverture de
+panneau, activation de connexion ou lecture de données n’a été ajouté.
+
+93 tests d’actions/registre/dispatch et cinq stories Chromium passent.
+Elles exercent une vraie sélection CodeMirror et une grille en modes large,
+compact, panneaux fermés et sous dialogue modal. Le retour conserve sélection
+et texte. Un contexte périmé de workspace masqué est également couvert.
+TypeScript et ESLint passent. `make qualite` a passé 4 707 tests Rust et
+2 368 tests frontend, correctif de formatage commun inclus. La dernière revue
+a ajouté le garde-fou d’onglet sélectionné : un onglet mémorisé devenu inactif
+n’est plus une cible valide et ne doit pas être réactivé par F6. Sa régression
+et les 93 tests d’actions passent. Le `make front` final a passé 2 370 tests,
+formatage, lint, typage et build après ce raffinement purement UI. La cinquième
+story appelle aussi la vraie palette et vérifie le retour du focus après sa
+fermeture. `make socle` réussit sans avertissement après cette mise à jour. Les touches natives
+attendent l’instance finale dev et l’acceptation personnelle. Aucun Rust ou IPC
+n’a changé lors du dernier raffinement de focus.
 
 ## Validation et acceptation
 

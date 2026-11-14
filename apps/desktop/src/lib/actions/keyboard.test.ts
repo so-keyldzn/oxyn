@@ -360,3 +360,24 @@ describe("the context menu key", () => {
     ).toEqual(["context-menu.open"])
   })
 })
+
+describe.each(["mac", "other"] as const)("F6 navigation on %s", (on) => {
+  it("dispatches forward and backward from an editor without consuming text", () => {
+    mount('<div data-action-zone="editor"><textarea></textarea></div>')
+    const target = document.querySelector("textarea")!
+    expect(press(on, { key: "F6" }, { target }).invoked).toEqual([
+      "view.focusNext",
+    ])
+    expect(
+      press(on, { key: "F6", shiftKey: true }, { target }).invoked
+    ).toEqual(["view.focusPrevious"])
+  })
+  it("leaves both bindings inactive behind a modal", () => {
+    mount('<div role="dialog"><input /></div>')
+    const target = document.querySelector("input")!
+    expect(press(on, { key: "F6" }, { target }).invoked).toEqual([])
+    expect(
+      press(on, { key: "F6", shiftKey: true }, { target }).invoked
+    ).toEqual([])
+  })
+})

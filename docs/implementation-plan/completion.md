@@ -21,8 +21,8 @@ image-generation prompts retain the identifiers used at generation time.
 | Lot | Branch | Dependency / current status |
 |---|---|---|
 | Shared research | initial documentation commit on #373 | Journeys, engine matrix, proposed ADRs and mockups are a shared prerequisite. A documentation-only commit across the issues is necessary to retain this common design without duplicating it. |
-| #373 | `feat/multi-base-backend` | Implemented and automatically validated on `ce58839`; `make qualite` passed. Code commit follows shared research `356c8d6`; personal acceptance remains pending. |
-| #308 | `feat/f6-navigation` | Not created; will start from completed #373 for the actual workspace layout. Focus registration remains optional for a later map. |
+| #373 | `feat/multi-base-backend` | Implemented and automatically validated on `ce58839`; `make qualite` passed. Code commit `a3f5961` follows shared research `356c8d6`; personal acceptance remains pending. |
+| #308 | `feat/f6-navigation` | Created from `a3f5961` after a clean #373 commit. Registry/visible-region cycle implemented; Completed: 93 action tests, five browser interaction stories, full quality gate and final frontend revalidation passed. Personal/native OS acceptance pending. |
 | #375 | `feat/metadata-loading` | Not created; will inherit completed #308/#373. Existing lazy reads/facets are baseline implementation, not completion of configurable policy. |
 | Schema map | `feat/schema-map` | Not created; depends on metadata coverage/policy from #375 and focus registration from #308. Existing assistant ERD is reusable rendering, not a standalone map. |
 | #374 | `feat/native-backup-restore` | Not created; inherits the completed stack, reuses ownership/operation state and metadata invalidation. No native-transfer implementation yet. |
@@ -112,6 +112,35 @@ No new dependency, global configuration change or push was introduced.
 These are automatic checks, not personal acceptance. macOS is the only local
 platform exercised; native transfers and the later lots are not implemented by
 this record.
+
+The next full gate found a formatting-only residue in the late child-recovery
+regression test. Commit `a75a5f2` corrects it after a dedicated Prettier check;
+the inactive #373 branch was fast-forwarded from `a3f5961` to this descendant.
+No history was rewritten and no issue code was transported between branches.
+The full F6 gate revalidates the combined tree.
+
+## Current #308 validation
+
+F6/Shift+F6 are registry actions, placed in View and derived into the palette
+and shortcut sheet. Visible workspace regions reuse shadcn sidebar markers and
+explicit editor/result/side-panel markers. Optional maps use the same generic
+registration, with no map import or delivery dependency. No second keyboard
+listener, panel opening, activation or data read was added.
+
+93 action/registry/dispatch tests and five Chromium stories passed. The stories
+exercise a real CodeMirror selection and result grid in wide, compact and closed
+panel layouts, plus a modal. The cycle returns the exact selection and text.
+A stale hidden-workspace context is also rejected in the region tests.
+TypeScript and ESLint passed. `make qualite` passed 4,707 Rust and 2,368
+frontend tests, including the shared explorer formatting correction. A final
+review added the selected-tab guard: a remembered tab that became inactive is
+not a valid focus target and must not be reactivated by F6. Its regression and
+the 93 action tests passed. Final `make front` passed 2,370 tests, formatting,
+lint, types and build after that UI-only refinement. The fifth browser story
+also invokes the real palette and verifies it returns focus after dismissal.
+`make socle` passed with zero warnings after the ledger update. Native OS key routing still
+awaits the final dev instance and personal acceptance. No Rust source or IPC
+boundary was changed by the final focus refinement.
 
 ## Validation and acceptance gates
 

@@ -1,3 +1,4 @@
+import { setFocusEntry } from "@/lib/actions/focus-regions"
 import * as React from "react"
 import CodeMirror from "@uiw/react-codemirror"
 import {
@@ -291,6 +292,9 @@ export function SqlEditor({
     const element = zone.current
     if (!element || !view) return
     let alive = true
+    setFocusEntry(view.contentDOM, () => {
+      if (alive) view.focus()
+    })
     setZoneHandle(element, {
       owner,
       find: () => runModBinding(view, "f", "KeyF"),
@@ -316,6 +320,7 @@ export function SqlEditor({
     })
     return () => {
       alive = false
+      setFocusEntry(view.contentDOM, null)
       setZoneHandle(element, null)
     }
   }, [view, readOnly, owner?.connection, owner?.session])
@@ -433,6 +438,7 @@ export function SqlEditor({
           <div
             ref={zone}
             data-action-zone="editor"
+            data-focus-region="editor"
             // A read-only view runs nothing: the registry's Run reads this.
             data-read-only={readOnly || undefined}
             onContextMenu={onContextMenu}

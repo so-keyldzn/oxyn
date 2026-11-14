@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="ef72929d203f" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="61952716c00c" -->
 
 
 
@@ -695,8 +695,16 @@ Ce que chaque surface garantit :
 | `⌘P` | ouvrir un objet par son nom, parmi les objets déjà chargés — la portée est annoncée, comme dans la recherche du catalogue |
 | `⌘/` | la feuille des raccourcis |
 | `⌃Tab`, `⌃⇧Tab` | l'onglet suivant, le précédent (« Consoles indépendantes ») |
-| `F6`, `⇧F6` | la zone suivante, la précédente : catalogue, éditeur, résultats, panneau latéral |
+| `F6`, `⇧F6` | la zone visible suivante, la précédente : navigation, onglets, éditeur, résultats, inspecteur, assistant et carte montée |
 | `⇧F10`, touche `Menu` | le menu contextuel de l'élément focalisé, comme le clic droit |
+
+F6 et Maj+F6 passent par le registre d’actions, y compris View, palette et fiche
+des raccourcis. Le cycle suit l’ordre du document dans le workspace visible ;
+panneaux fermés/repliés et workspaces retenus masqués sont exclus. Une carte
+montée peut déclarer sa zone sans être un prérequis du raccourci. Le retour
+retrouve la dernière cible de focus valide ; CodeMirror restaure son curseur et
+sa sélection. Le cycle n’ouvre aucun panneau et n’active aucune connexion.
+Un dialogue modal conserve le focus jusqu’à sa fermeture.
 
 `⌘J` (retour à l'éditeur), `⌘B` (sidebar) et `⌘2` (grille de l'aperçu)
 gardent le sens que leur donnent « Navigation du premier workspace » et
