@@ -1,3 +1,5 @@
+import { NativeTransferTab } from "@/features/native-transfers/native-transfer-tab"
+import { useNativeTabs } from "@/features/native-transfers/use-native-tabs"
 import { SchemaMapTab } from "@/features/schema-map/schema-map-tab"
 import { useMapTabs } from "@/features/schema-map/use-map-tabs"
 import { previewKey } from "@/features/metadata/preview-store"
@@ -347,6 +349,7 @@ export function WorkspaceScreen({
     }
   }, [open.connection])
   const maps = useMapTabs(activate)
+  const native = useNativeTabs(activate)
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
 
@@ -465,6 +468,11 @@ export function WorkspaceScreen({
    */
   const closeTab = async (key: string): Promise<boolean> => {
     if (key.startsWith("console:")) return work.requestClose(key)
+    if (key.startsWith("native:")) {
+      const handle = native.handles.current.get(key)
+      if (handle && !(await handle.requestClose())) return false
+      native.close(new Set([key]))
+    }
     // Closing would unmount the export and cancel its write (UX-SPEC
     // § Retained results): the user ends or cancels it first.
     if (exporting.has(key)) {
@@ -716,6 +724,11 @@ export function WorkspaceScreen({
   )
 
   const naturalTabs: Array<WorkspaceTabItem> = [
+    ...native.entries.map((tab) => ({
+      kind: "native" as const,
+      key: tab.key,
+      title: `Transfers: ${tab.owner.name}`,
+    })),
     ...maps.entries.map((tab) => ({
       kind: "map" as const,
       key: tab.key,
@@ -807,7 +820,12 @@ export function WorkspaceScreen({
     return {
       consoles: work.entries.length,
       unsaved: costs.filter((cost) => cost.unsaved || cost.conflict).length,
-      running: costs.filter((cost) => cost.running).length + exporting.size,
+      running:
+        costs.filter((cost) => cost.running).length +
+        exporting.size +
+        native.entries.filter((entry) =>
+          native.handles.current.get(entry.key)?.running()
+        ).length,
     }
   }
   React.useEffect(
@@ -888,9 +906,11 @@ export function WorkspaceScreen({
             handle?.closeBlocked?.() ??
             (exporting.has(tab.key)
               ? "Finish or cancel the export before closing this tab."
-              : activity === "saving" || activity === "closing"
-                ? "Wait for the current save or close, or cancel it."
-                : null),
+              : native.handles.current.get(tab.key)?.running()
+                ? "Cancel the native operation and wait for its cleanup before closing this tab."
+                : activity === "saving" || activity === "closing"
+                  ? "Wait for the current save or close, or cancel it."
+                  : null),
         }
       }),
     save: (key) =>
@@ -914,6 +934,7 @@ export function WorkspaceScreen({
       setObjects((all) => all.filter((tab) => !gone.has(tab.key)))
       setRetained((all) => all.filter((tab) => !gone.has(tab.key)))
       maps.close(gone)
+      native.close(gone)
       if (activeRef.current !== null && gone.has(activeRef.current)) {
         const next = tabs.find((tab) => !gone.has(tab.key))?.key ?? null
         activeRef.current = next
@@ -996,8 +1017,9 @@ export function WorkspaceScreen({
     )
     live.add(open.session)
     maps.retainOwners(live)
+    native.retainOwners(live)
     if (
-      maps.entries.some(
+      [...maps.entries, ...native.entries].some(
         (tab) => tab.key === activeRef.current && !live.has(tab.owner.session)
       )
     ) {
@@ -1046,6 +1068,7 @@ export function WorkspaceScreen({
               selected={
                 activeObject ? addressKey(activeObject.node.address) : null
               }
+              onNativeTransfers={() => native.open(sourceOpen ?? open)}
               onSchemaMap={(node) => maps.open(sourceOpen ?? open, node)}
               onSelect={(node) => openObject(node, undefined, sourceOpen)}
               onOpen={(node, target) => openObject(node, target, sourceOpen)}
@@ -1154,6 +1177,23 @@ export function WorkspaceScreen({
           />
         }
       >
+        {native.entries.map((tab) => (
+          <TabsContent
+            key={tab.key}
+            value={tabPanelValue(tab.key)}
+            keepMounted
+            className="h-full min-h-0"
+          >
+            <NativeTransferTab
+              open={tab.owner}
+              onActivity={native.changed}
+              handleRef={(handle) => {
+                if (handle) native.handles.current.set(tab.key, handle)
+                else native.handles.current.delete(tab.key)
+              }}
+            />
+          </TabsContent>
+        ))}
         {maps.entries.map((tab) => (
           <TabsContent
             key={tab.key}

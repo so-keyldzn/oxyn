@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="16abefd7ccc2" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="1eec52a8519d" -->
 
 # Recherche sur les schémas : matrice des moteurs
 
@@ -118,7 +118,7 @@ charge et absence constatée de liens sont des états différents.
 |---|---|---|
 | Profil serveur multi-base (#373) | Profils et découverte/ouverture PostgreSQL implémentés ; hiérarchies natives indépendantes | Découverte PostgreSQL d’abord ; politiques, caches, sessions et identifiants indépendants. Migration et ouverture propriétaire validées dans le bilan. [D01][d01]. |
 | Introspection configurable (#375) | Facettes indépendantes, cache borné et préréglages manuels par connexion/périmètre natif ; pages de préchargement explicites uniquement (validation dans le registre d’achèvement) | Politique commune aux neuf drivers, limitée à leurs facettes disponibles. Aucune exemption générale pour les fichiers locaux. [D02][d02] consigne les déclencheurs explicites et la persistance de préférence. |
-| Export/restauration natifs (#374) | Aucun wrapper `pg_dump`/`pg_restore` trouvé dans le code applicatif ; l'export de résultats conservés est distinct | Adaptateur PostgreSQL proposé uniquement. Compatibilité des variantes et autres moteurs à étudier séparément ; ne pas proposer les outils PostgreSQL simplement parce qu'un driver parle ce protocole. [D04][d04] consigne la frontière des tâches ; le transport d'authentification reste un prérequis. |
+| Export/restauration natifs (#374) | Frontière de tâches natives commune et adaptateur PostgreSQL implémentés ; export de résultats conservés distinct | Adaptateur PostgreSQL initial restreint uniquement. Compatibilité des variantes et autres moteurs à étudier séparément ; ne pas proposer les outils PostgreSQL simplement parce qu'un driver parle ce protocole. [D04][d04] consigne la frontière des tâches ; les modes d’authentification non résolus restent indisponibles. |
 | Navigation F6 (#308) | Cycle des zones visibles implémenté dans le registre et testé dans le navigateur | Action commune indépendante du driver ; inclut la carte focalisée. |
 | Cartes enregistrées / export d'image | Placement et rendu ERD existants ; positions manuelles désactivées et actions de réorganisation/export indisponibles | [D03][d03] d'abord ; enregistrer les choix d'affichage séparément des métadonnées et des valeurs échantillonnées. |
 
@@ -299,3 +299,18 @@ en mémoire privée restent distincts. Les autres lignes ont une couverture
 statique/par fournisseurs simulés, pas une nouvelle certification réelle de
 chaque version. Contrôles, suppression de fichier, mesures de rendu et limites
 de plateforme sont dans le [bilan](completion.md).
+
+## Périmètre des transferts natifs implémentés
+
+Les neuf drivers partagent historique, politique/audit, droits, annulation,
+progression et résultats ; les adaptateurs indisponibles ne lisent pas la racine
+des métadonnées. Seul PostgreSQL possède l’adaptateur initial : IP de boucle locale
+sans mot de passe, export archive personnalisée/SQL et restauration d’archive
+personnalisée. TLS/SSH/distant/mot de passe et restauration SQL indisponibles.
+Redshift et autres variantes ne sont pas activés par le seul driver PostgreSQL.
+SQLite, DuckDB, Turso, MySQL/MariaDB, ClickHouse, MongoDB, Redis/Valkey et
+Elasticsearch/OpenSearch n’ont pas encore d’adaptateur de transfert natif. Leurs
+exports de résultats et fonctions de schéma restent indépendants ; aucune
+approximation SQL/copie de fichier n’est présentée comme sauvegarde native.
+Un adaptateur doit prouver sauvegarde cohérente, authentification, destination
+et annulation propres au moteur à travers la frontière commune.

@@ -40,6 +40,7 @@ oxyn-llm      = { path = "crates/oxyn-llm" }
 oxyn-ai       = { path = "crates/oxyn-ai" }
 oxyn-plugin   = { path = "crates/oxyn-plugin" }
 oxyn-embed    = { path = "crates/oxyn-embed" }
+oxyn-transfer             = { path = "crates/oxyn-transfer" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
@@ -65,6 +66,7 @@ http-body-util = "0.1.5"
 # Aligned on the version `agent-client-protocol` already pulls: a second copy
 # of a system-call crate in the tree would bring nothing. `fs` opens a user's
 # agent file without following a link nor waiting on a FIFO (ADR-0049 § 4).
+# `process` owns native transfer groups without raw system calls (ADR-0083).
 rustix        = { version = "0.38.44", features = ["process", "fs"] }
 futures       = "0.3.34"
 indexmap      = { version = "2.14.2", features = ["serde"] }

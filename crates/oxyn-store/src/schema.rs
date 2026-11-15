@@ -859,6 +859,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "metadata_loading_policies",
         sql: include_str!("schema/metadata_loading.sql"),
     },
+    Migration {
+        version: 22,
+        name: "native_transfer_jobs",
+        sql: include_str!("schema/native_transfers.sql"),
+    },
 ];
 
 /// Schema version this binary can produce.

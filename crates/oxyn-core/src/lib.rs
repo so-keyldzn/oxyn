@@ -80,6 +80,8 @@ pub mod event;
 pub mod ids;
 pub mod library;
 pub mod metadata_loading;
+pub mod native_transfer;
+pub use native_transfer::*;
 pub mod schema_map;
 pub use schema_map::{MapObjectRef, SchemaMapRequest};
 pub mod server_profile;
@@ -117,8 +119,8 @@ pub use error::{ErrorClass, MissingModule, OxynError, Result};
 pub use event::Event;
 pub use ids::{
     AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,
-    DriverId, IdParseError, ResultId, ServerProfileId, SessionId, StatementHandle, WindowId,
-    WorkspaceId,
+    DriverId, IdParseError, NativeGrantId, NativeTransferId, ResultId, ServerProfileId, SessionId,
+    StatementHandle, WindowId, WorkspaceId,
 };
 pub use policy::{ConnectionFacts, Decision, DefaultPolicy, PolicyGate, Preview};
 pub use preview::{PreviewShape, PreviewSort};

@@ -220,9 +220,9 @@ Adding a full visual table/view editor is outside this research scope.
 
 ## J07 — Export a PostgreSQL database
 
-**Entry:** proposed native export action on a supported database.
+**Entry:** `Database transfers` on the explorer source.
 
-**Proposed flow:** identify source; choose an installed executable, supported
+**Implemented flow:** identify source; choose an installed executable, supported
 format and destination; review options; start; show progress without inventing
 a percentage; cancel or receive a confirmed completion and file location.
 Do not conflate this with exporting a grid's retained rows.
@@ -235,13 +235,13 @@ destination is not overwritten silently.
 **Acceptance:** no shell command text or secrets appear in IPC/logs; successful
 completion requires process success and finalized output. Closing the progress
 surface has an explicit job-lifecycle rule, not an orphaned process.
-**Decision:** D04. PostgreSQL is a proposed first adapter, not a shipped feature.
+**Decision:** D04. PostgreSQL is the initial restricted adapter; validation is recorded in the completion ledger.
 
 ## J08 — Restore into a deliberately selected database
 
-**Entry:** proposed restore action; file and target are both explicit.
+**Entry:** Restore archive in Database transfers; file and target are explicit.
 
-**Proposed flow:** inspect supported format/options; show target identity and
+**Implemented flow:** inspect supported format/options; show target identity and
 destructive effects; authorize through the bus and required native confirmation;
 run as a tracked job; report its outcome; invalidate affected metadata/previews.
 The reviewed target must be the actual target even if the archive names another.
@@ -316,7 +316,7 @@ They own the design choices, while these journeys retain the acceptance work.
 | D01 | [0079 — Server grouping without shared authority](../adr/0080-group-database-connections-under-server-profiles.md) | Core/store model; driver discovery; executor sessions; host credentials; J01/J06/J09. Independent child credentials; no server-wide grant in this revision. |
 | D02 | [0080 — Independent facets and explicit prefetch](../adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Catalog model; executor policy; driver reads; desktop consumers; J02/J03/J06. Preference changes start no bulk read. |
 | D03 | [0081 — Maps with explicit metadata provenance](../adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Catalog projection; host orchestration; shared renderer; J04/J05/J09. View persistence is separate from metadata. |
-| D04 | [0082 — Authorized native transfer jobs](../adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Executor policy/audit; proposed oxyn-transfer boundary; desktop dialogs; J07/J08/J09. Authentication transport remains an entry gate. |
+| D04 | [0083 — Authorized native transfer jobs](../adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Executor policy/audit; oxyn-transfer boundary; desktop dialogs; J07/J08/J09. Unresolved authentication modes remain unavailable. |
 
 Existing metadata reads use `RefreshCatalogScope`; painting a cached graph
 needs no execution command. Discovery and native transfers need explicit bus
@@ -386,3 +386,17 @@ SQLite/DuckDB native smoke results and other-engine validation limits are
 recorded in the engine matrix and completion ledger. The existing SQ01–SQ06
 source-identity cases remain applicable; private-memory and deleted owners must
 never turn a map load into creation of an empty replacement database.
+
+## J07/J08/J09 implementation revalidation
+
+The retained explorer transfer tab now implements the common preparation,
+progress, history and reconciliation journeys. Initial execution is restricted
+to the PostgreSQL mode documented in ADR-0083 and the engine matrix. Host pickers
+issue opaque capabilities; preparing runs only local tool/archive checks. Every
+restore uses exact backend destination text and host confirmation. Closing asks
+before cancelling and waits for owned cleanup; switching does not cancel. A
+restarted job is historical/interrupted, never resumed. Existing files are always
+refused rather than overwritten, and SQL-script restore is not offered. SQLite
+and every other unsupported adapter retain an explanatory unavailable state,
+without root introspection or an invented backup fallback. Validation evidence
+and remaining platform/manual limits live in the completion ledger.

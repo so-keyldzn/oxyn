@@ -111,7 +111,7 @@ unsupported and known-empty links are different states.
 |---|---|---|
 | Multi-database server profile (#373) | Server profiles and PostgreSQL discovery/opening implemented; native hierarchies remain independent | PostgreSQL discovery first; independent per-base policy/cache/sessions/credentials. Migration and owned opening validated in the completion ledger; other native hierarchies are retained. [D01][d01]. |
 | Configurable introspection (#375) | Independent facets, bounded cache and manual per-connection/native-scope presets; explicit preload pages only (validation in completion ledger) | Common policy for all nine drivers, restricted to their supported facets. No blanket local-file exemption. [D02][d02] records explicit prefetch triggers and preference persistence. |
-| Native database export/restore (#374) | No `pg_dump`/`pg_restore` wrapper found in application sources; retained-result export is different | Proposed PostgreSQL adapter only. Compatibility with variants and additional engines requires separate research; do not offer PostgreSQL tools merely because a driver speaks its protocol. [D04][d04] records the job boundary; authentication transport remains an entry gate. |
+| Native database export/restore (#374) | Common native job boundary and PostgreSQL adapter implemented; retained-result export is different | Initial restricted PostgreSQL adapter only. Compatibility with variants and additional engines requires separate research; do not offer PostgreSQL tools merely because a driver speaks its protocol. [D04][d04] records the job boundary; unresolved authentication modes remain unavailable. |
 | F6 navigation (#308) | Registry-driven visible-region cycle implemented and browser-tested | Common workspace action, independent of driver; include a focused map when present. |
 | Saved maps / image export | ERD layout and rendering exist; manual positions are disabled and re-layout/image-export actions are unavailable | [D03][d03] first; persist view choices separately from metadata and sampled values. |
 
@@ -281,3 +281,17 @@ remain distinct. Other rows have static capability/provider-fixture coverage,
 not a new live certification of every engine/version. Gate details, deleted-file
 coverage, render measurements and remaining platform limits live in the
 [completion ledger](completion.md).
+
+## Native transfer implementation scope
+
+All nine drivers share job history, policy/audit, grants, cancellation, progress
+and outcome UI; unavailable adapters perform no root metadata read. PostgreSQL
+is the only initial native adapter: direct literal-loopback/passwordless mode,
+custom-archive and SQL export, custom-archive restore. TLS/SSH/remote/password
+modes and SQL-script restore are unavailable. Redshift and other wire-compatible
+variants are not enabled by the PostgreSQL driver alone. SQLite, DuckDB, Turso,
+MySQL/MariaDB, ClickHouse, MongoDB, Redis/Valkey and Elasticsearch/OpenSearch do
+not yet have native transfer adapters. Their existing retained-result export and
+schema features remain independent; no SQL or file-copy approximation is labelled
+a native backup. Adapter additions must prove engine-specific consistent backup,
+authentication, destination binding and cancellation through the common boundary.

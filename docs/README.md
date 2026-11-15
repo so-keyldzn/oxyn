@@ -109,7 +109,7 @@ To locate the boards and their states before implementation, see
 | [0080](adr/0080-group-database-connections-under-server-profiles.md) | Group database connections under server profiles without sharing authority | accepted |
 | [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Load catalog facets independently and make bulk prefetch explicit | accepted |
 | [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Project schema maps from catalog metadata with explicit provenance | accepted |
-| [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Run native database transfers as authorized, owned jobs | proposed |
+| [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Run native database transfers as authorized, owned jobs | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

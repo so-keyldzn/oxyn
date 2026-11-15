@@ -453,6 +453,72 @@ pub enum Command {
         /// Exact observed revision, zero for a missing policy.
         expected_revision: u64,
     },
+    /// Read capability-driven native transfer availability on an existing owner.
+    ReadNativeTransferSupport {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact live source owner.
+        session: SessionId,
+    },
+    /// Inspect a host-issued executable snapshot; never an arbitrary path/argv.
+    InspectNativeTool {
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+        /// Opaque native-selected executable capability.
+        grant: crate::NativeGrantId,
+    },
+    /// Release one unused host capability, without database or process execution.
+    RevokeNativeSelection {
+        /// Original host window.
+        owner: crate::WindowId,
+        /// Exact owned selection; never a path.
+        grant: crate::NativeGrantId,
+    },
+    /// Prepare a fixed host-granted transfer; no target writes begin here.
+    PrepareNativeTransfer {
+        /// Structured source/window-bound request; no paths or argv.
+        request: Box<crate::NativeTransferRequest>,
+    },
+    /// Export the exact prepared database to its no-clobber destination.
+    ExportDatabase {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Restore an archive only after human approval naming its actual target.
+    RestoreDatabase {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Discard only this owner's unused prepared job and capabilities.
+    DiscardNativeTransfer {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Read bounded native job history; never resume an interrupted operation.
+    ReadNativeTransfers {
+        /// Existing connection; history access never reopens it.
+        connection: ConnectionId,
+    },
+    /// Record the human's explicit inspection without rewriting the observed outcome.
+    ReconcileNativeTransfer {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+    },
+
     /// Load a bounded local schema map without rows or automatic inference.
     LoadSchemaMap {
         /// Bounded native identities on the exact live owner; no query text.
@@ -722,6 +788,7 @@ impl Command {
     #[must_use]
     pub fn intent(&self) -> StatementIntent {
         match self {
+            Self::RestoreDatabase { .. } => StatementIntent::Ddl,
             Self::Execute { request, .. } => request.intent,
             Self::Connect { .. }
             | Self::Disconnect { .. }
@@ -741,6 +808,14 @@ impl Command {
             | Self::ReadWorkspacePreferences { .. }
             | Self::PreloadMetadata { .. }
             | Self::LoadSchemaMap { .. }
+            | Self::ReadNativeTransferSupport { .. }
+            | Self::InspectNativeTool { .. }
+            | Self::RevokeNativeSelection { .. }
+            | Self::PrepareNativeTransfer { .. }
+            | Self::ExportDatabase { .. }
+            | Self::DiscardNativeTransfer { .. }
+            | Self::ReadNativeTransfers { .. }
+            | Self::ReconcileNativeTransfer { .. }
             | Self::ReadMetadataPolicy { .. }
             | Self::WriteMetadataPolicy { .. }
             | Self::WriteWorkspacePreferences { .. }
@@ -787,6 +862,13 @@ impl Command {
             Self::ReadHistory { filter } => filter.connection,
             Self::PreloadMetadata { request } => Some(request.connection),
             Self::LoadSchemaMap { request } => Some(request.connection),
+            Self::PrepareNativeTransfer { request } => Some(request.connection),
+            Self::ReadNativeTransferSupport { connection, .. }
+            | Self::ExportDatabase { connection, .. }
+            | Self::RestoreDatabase { connection, .. }
+            | Self::DiscardNativeTransfer { connection, .. }
+            | Self::ReadNativeTransfers { connection }
+            | Self::ReconcileNativeTransfer { connection, .. } => Some(*connection),
             Self::ReadMetadataPolicy { connection }
             | Self::WriteMetadataPolicy { connection, .. }
             | Self::DiscoverDatabases { connection }
@@ -813,7 +895,9 @@ impl Command {
             | Self::CreateConnection { config }
             | Self::UpdateConnection { config }
             | Self::TestConnection { config } => Some(config.id),
-            Self::ListQueryDocuments { .. }
+            Self::InspectNativeTool { .. }
+            | Self::RevokeNativeSelection { .. }
+            | Self::ListQueryDocuments { .. }
             | Self::SaveQueryDocument { .. }
             | Self::CloseQueryDocument { .. }
             | Self::DeleteQueryDocument { .. }
@@ -901,6 +985,8 @@ impl Command {
                 | Self::PreviewRelation { .. }
                 | Self::Export { .. }
                 | Self::TestConnection { .. }
+                | Self::ExportDatabase { .. }
+                | Self::RestoreDatabase { .. }
         )
     }
 
@@ -946,6 +1032,15 @@ impl Command {
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
             Self::PreloadMetadata { .. } => "PreloadMetadata",
             Self::LoadSchemaMap { .. } => "LoadSchemaMap",
+            Self::ReadNativeTransferSupport { .. } => "ReadNativeTransferSupport",
+            Self::InspectNativeTool { .. } => "InspectNativeTool",
+            Self::RevokeNativeSelection { .. } => "RevokeNativeSelection",
+            Self::PrepareNativeTransfer { .. } => "PrepareNativeTransfer",
+            Self::ExportDatabase { .. } => "ExportDatabase",
+            Self::RestoreDatabase { .. } => "RestoreDatabase",
+            Self::DiscardNativeTransfer { .. } => "DiscardNativeTransfer",
+            Self::ReadNativeTransfers { .. } => "ReadNativeTransfers",
+            Self::ReconcileNativeTransfer { .. } => "ReconcileNativeTransfer",
             Self::ReadMetadataPolicy { .. } => "ReadMetadataPolicy",
             Self::WriteMetadataPolicy { .. } => "WriteMetadataPolicy",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",

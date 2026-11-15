@@ -652,6 +652,12 @@ impl RefreshSignal {
                 _ => vec![Self::RowsChanged { connection }],
             },
             oxyn_core::Event::HistoryRecorded => vec![Self::HistoryRecorded { connection }],
+            oxyn_core::Event::DatabaseMayHaveChanged => vec![
+                Self::CatalogInvalidated {
+                    connection: connection.clone(),
+                },
+                Self::RowsChanged { connection },
+            ],
             oxyn_core::Event::CatalogUpdated => vec![Self::CatalogChanged { connection }],
             _ => Vec::new(),
         }

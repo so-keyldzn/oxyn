@@ -3540,3 +3540,53 @@ Sources: [UUID 1.27.0 registry record](https://crates.io/api/v1/crates/uuid/1.27
 [Cargo packaging](https://doc.rust-lang.org/cargo/commands/cargo-package.html):
 normalized package manifests omit path overrides and verification builds the
 archive against versioned dependencies. This check is retained without publishing.
+
+## Native PostgreSQL tools — checked 2026-11-15
+
+The local default `pg_dump`/`pg_restore` are 14.18; the alternate installed
+`/opt/homebrew/opt/libpq/bin` pair reports 17.4. Both predate the fixes for
+[CVE-2025-8714](https://www.postgresql.org/support/security/CVE-2025-8714/) and
+[CVE-2025-8715](https://www.postgresql.org/support/security/CVE-2025-8715/).
+They were invoked only with `--version` in the native-tool research; no real
+source or archive was processed with them. Private copies also passed that
+version probe on this macOS, proving only that these installed binaries can
+start from a private location with their installed libraries.
+
+[PostgreSQL 17.12](https://www.postgresql.org/docs/release/17.12/) was released
+2026-11-12 and includes further archive-reader hardening. Its
+[official source archive](https://ftp.postgresql.org/pub/source/v17.12/)
+was downloaded into an isolated test build directory and verified against the
+published SHA256:
+`b46f61048797e9cf1728dd4ac459831f5126c4745581f729500541c86e59a8ac`.
+No global Homebrew package is upgraded. The build/proof status belongs in the
+implementation ledger, not in this version evidence.
+
+The [libpq 17 connection contract](https://www.postgresql.org/docs/17/libpq-connect.html)
+defines `require_auth=none`; it rejects an authentication challenge but does not
+itself exclude TLS-certificate or GSS-encrypted authentication. The restricted
+initial mode therefore also disables both transports. Libpq's default password,
+service and certificate locations cannot be treated as confined authentication.
+The [pg_dump compatibility contract](https://www.postgresql.org/docs/17/app-pgdump.html)
+refuses newer server majors. Format acceptance by pg_restore is not proof that
+an archive is safe or semantically compatible with a destination server.
+
+The upstream [17.4 dump/restore signal handlers](https://github.com/postgres/postgres/blob/REL_17_4/src/bin/pg_dump/parallel.c)
+request `PQcancel` on SIGINT/SIGTERM/SIGQUIT; that attempt is not an authoritative
+proof that a remote statement stopped. Server-observed fixture tests remain
+necessary. Existing rustix 0.38.44 source exposes macOS/Linux `waitid` with
+`EXITED|NOWAIT|NOHANG`; its `renameat_with(NOREPLACE)` is Linux-only. No new
+process-management package is selected.
+
+
+The accepted client baselines are 17.12 or newer within major 17, and 18.7 or
+newer within major 18, from the [17.12](https://www.postgresql.org/docs/release/17.12/)
+and [18.7](https://www.postgresql.org/docs/release/18.7/) release notes checked on
+2026-11-15. This is a deliberately narrow supported-client policy, not a claim
+that all older supported PostgreSQL branches are unpatched. Only 17.12 was built
+and exercised here; 18.7 compatibility has no local execution proof.
+
+Apple's [XNU process-group signal implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c),
+checked 2026-11-15, excludes zombies from group signal targets and can return
+EPERM when no permitted live target remains. The macOS cleanup path accepts that
+case only after observing its unreaped leader exit and EOF on inherited pipes;
+it never treats EPERM for a live leader/pipe writer as successful cleanup.

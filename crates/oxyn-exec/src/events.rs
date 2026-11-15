@@ -64,8 +64,10 @@ impl ExecEvent {
 
 /// The broadcast of execution events.
 ///
-/// Cloned through `Arc` with the [`Executor`](crate::Executor) that carries it;
-/// [`subscribe`](Self::subscribe) returns an independent receiver per subscriber.
+/// Clones retain the same broadcaster, so an owned native worker can publish
+/// after its caller disappears. [`subscribe`](Self::subscribe) returns an
+/// independent receiver per subscriber.
+#[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<ExecEvent>,
 }

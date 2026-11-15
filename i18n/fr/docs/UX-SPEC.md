@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3ae1c651f5cc" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3e1798ecae67" -->
 
 
 
@@ -2413,3 +2413,28 @@ Ouvrir le panneau de l'assistant charge un modèle prêt avant la première
 question, si bien que son chargement à froid ne compte pas dans la borne de
 2 secondes de cette question. Tant que l'option est désactivée, ouvrir le
 panneau ne fait rien.
+
+## Onglet de transfert natif de base
+
+`Database transfers` dans l’explorateur ouvre un onglet retenu par connexion/
+session originale, sans démarrer d’exécutable. Disponibilité et historique borné
+sont des lectures attachées à la source. Moteurs/transports indisponibles affichent
+leur raison dans la même vue ; l’export de grille reste distinct.
+
+Choisir export/restauration, format proposé, outil installé fiable et nouveau
+fichier de sortie ou archive fiable via les sélecteurs natifs. Préparer fixe
+sélections/options sans exécution sur la cible. Toute nouvelle archive efface
+l’acquittement de confiance. La revue affiche connexion, destination native
+exacte, nom de fichier, outil/version et options de propriété/privilèges. Toute
+restauration exige ensuite la confirmation native, même Local. Aucune commande
+éditable ni repli vers une restauration SQL.
+
+L’onglet affiche étapes/octets observés et historique sûr borné, jamais de
+pourcentage inventé ou journal brut. Masquer/changer conserve la tâche ; fermer
+une tâche active propose par défaut de garder ouvert et attend annulation/
+nettoyage avant fermeture. Fenêtre/source/arrêt possèdent aussi le nettoyage.
+Résultats distincts : refus, échec avant démarrage, échec, réussite, annulation,
+modifications partielles possibles, inconnu et interrompu. Aucun bouton ne rejoue
+une restauration incertaine. L’inspection humaine marque le rapprochement sans
+remplacer l’observation ; les sources possiblement modifiées invalident métadonnées
+et aperçus.

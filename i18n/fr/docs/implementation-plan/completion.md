@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="4a9fc8c53980" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="de9ca44a551d" -->
 
 # Suivi d'achèvement des outils de bases de données
 
@@ -28,7 +28,7 @@ Les prompts historiques conservent leurs identifiants de génération.
 | #308 | `feat/f6-navigation` | Créée depuis `a3f5961` après un commit #373 propre. Cycle visible via registre implémenté ; Terminé : 93 tests d’actions, cinq stories navigateur, gate complet et revalidation frontend finale réussis. Acceptation personnelle/native attendue. |
 | #375 | `feat/metadata-loading` | Créée depuis `4c80bfa` (#308), propre et validé. Implémentation commune selon capacités terminée et validée automatiquement : make qualite passe 4733 tests Rust / 2391 frontend. Acceptation personnelle après intégration finale sur dev. |
 | Carte des schémas | `feat/schema-map` | Créée proprement depuis `40329e4` (#375). Onglet autonome, projection hôte commune, navigation propriétaire et voisins/échantillonnage explicites implémentés. Terminée et validée automatiquement : make qualite passe 4 753 tests Rust / 2 415 frontend, documentation et quatre archives de paquets. Acceptation personnelle après intégration finale dev. |
-| #374 | `feat/native-backup-restore` | Non créée ; héritera de la pile terminée et réutilisera propriété, opérations et invalidation. Aucun transfert natif implémenté. |
+| #374 | `feat/native-backup-restore` | Créée proprement depuis `2f24e30` (carte) ; pile complète héritée sans duplication. Implémentation et validation natives terminées ; intégration dev après le commit natif propre. |
 
 Cette pile linéaire volontaire évite les doublons de commits. Avant chaque
 bascule : commits cohérents, bilan de validation et worktree propre. Vérifier
@@ -360,3 +360,168 @@ points de composition existants gardent leur responsabilité ; projection,
 placement, chargement, propriété, validation IPC et présentation sont séparés.
 Acceptation personnelle non obtenue ; pas d'intégration dev/main ni de push.
 Ce contrôle remplace l'état d'attente consigné pendant les vérifications ci-dessus.
+
+## Plan des transferts natifs — 2026-11-15
+
+La branche part du commit carte propre et validé `2f24e30`. `main` et `dev`
+restent sur `ce58839`. Core porte commandes humaines typées et états lisibles.
+`oxyn-transfer` possède capacités de fichiers/outils privés, adaptateurs,
+processus/groupes, flux bornés et publication sans écrasement. L'exécuteur garde
+vérifications d'autorité, audit, cycle persistant, annulation/attente et
+invalidation après modification possible ; le store ajoute des enregistrements
+versionnés bornés. Desktop possède sélecteurs natifs, confirmation critique et
+baux de fenêtre. Onglet/contrôleur shadcn expose les mêmes descripteurs et états
+pour chaque moteur, avec motifs explicites d'indisponibilité.
+
+Restauration mutante toujours confirmée par l'hôte, même locale ; agents exclus
+de l'inspection/exécution. Ni chemins ni argv bruts ne donnent autorité au
+webview. Masquer conserve la tâche ; fermer attend son nettoyage. Fermer source
+ou fenêtre rejoint ses tâches. Au redémarrage : interrompu/inconnu, sans rejeu.
+
+ADR-0083 proposée précise premier mode utile d'authentification et décisions
+Unix/fichiers. Mot de passe/TLS/SSH et restauration SQL psql restent indisponibles.
+Clients corrigés préparés séparément pour essais, sans modifier Homebrew global.
+Activation après tests d'authentification synthétique, arguments, outils absents/
+incompatibles, fichiers/permissions, descendants, annulation, confidentialité et
+export custom/SQL puis restauration d'archive sur PostgreSQL jetable. Terminer
+par contrôle complet, revues, contrats bilingues et commit propre ; ensuite
+seulement intégrer/revalider dev et lancer la nouvelle instance personnelle.
+
+
+## Implémentation et revue des transferts natifs
+
+Le parcours commun core/store/exécuteur/interface est implémenté ; seul
+PostgreSQL possède l’adaptateur initial dans le mode restreint de l’ADR-0083.
+L’historique conserve identité d’outil, nom de fichier, options de restauration,
+étape, octets, dates et résultat initial, sans arguments, chemins, secrets ou stderr
+brut. Droits préparés/actifs et historique lisible restent séparés ; aucun droit
+exécutable n’est reconstruit au redémarrage.
+
+Les revues locales invariants/frontière/sécurité/interface ont corrigé :
+enregistrement du réveil des attentes concurrentes de nettoyage ; droits de
+sélecteur arrivant après fermeture source/fenêtre ; nettoyage des réponses tardives
+d’interface ; recontrôles lecture seule/destination ; admission des mutations et
+fermeture des aperçus ; contrôle d’identité de publication ; options persistées ;
+contrôles rognés en disposition compacte. Le contrôleur retenu coordonne états,
+requêtes et fermeture sur 432 lignes ; politique outils/processus/fichiers
+et présentation pure ont leurs modules. L’orchestration workspace compose seulement
+les onglets attachés à leur source et leurs handles d’activité/fermeture.
+
+Le premier contrôle complet a passé ses 2 433 tests frontend, types/lint/build,
+puis arrêté sur des diagnostics Clippy de la frontière native. Construction de
+commande regroupée dans un site vidant l’environnement, attente bornée de worker
+documentée et fixture d’orphelin conservant l’assertion de récolte système. Aucun
+lint global, assertion ou délai de test assoupli. Un contrôle ultérieur doit
+valider l’arbre final avant commit/intégration.
+
+Corrections de fixtures jetables, pas de produit : la console PostgreSQL ne
+propose pas de transaction explicite ; le verrou utilise une instruction DO,
+dont l’annulation reste ambiguë et non rejouable. La remise à zéro de la table
+de restauration exige d’approuver la revue de risque DROP ordinaire, sans
+confondre NeedsApproval et exécution terminée. L’aller-retour lit maintenant la
+page de résultat bornée retenue et vérifie les valeurs restaurées.
+
+Restent non vérifiés : exécution Linux, possession de processus Windows,
+transports distant/TLS/SSH/mot de passe, restauration SQL, autres adaptateurs,
+client PostgreSQL 18, gros volumes réels et acceptation utilisateur. Aucune de ces
+preuves n’est déduite d’une compilation locale ou de l’interface commune.
+
+
+## Acceptation personnelle sur l’instance dev intégrée
+
+Utiliser uniquement les fichiers/bases jetables du `fixtures.json` de lancement.
+La nouvelle fenêtre doit indiquer Temporary workspace et son identité de build
+correspondre au commit dev intégré propre. L’acceptation reste en attente du
+retour utilisateur ; les contrôles automatiques ne constituent pas ce retour.
+
+1. **Navigation/propriété :** connecter les fichiers SQLite homonymes A/B. Lancer
+   un petit SELECT dans A puis modifier un brouillon sans enregistrer. Répéter
+   activations et A→B→A : retrouver exactement brouillon, résultat et console de A ;
+   la première console de B reste vide.
+2. **Multi-base :** sur le PostgreSQL jetable, créer un groupe serveur, sélectionner/
+   développer sans activer, découvrir les bases puis ouvrir explicitement un enfant.
+   Répéter l’activation et annuler découverte/ouverture. Une cible enregistrée en
+   erreur conserve son entrée locale et se rouvre après correction.
+3. **Focus :** sélectionner du texte ; F6 et Maj+F6 parcourent les zones visibles
+   puis retrouvent la sélection. Refaire en compact, panneau fermé, carte et dialogue.
+   Aucun workspace ou panneau masqué ne vole le focus.
+4. **Métadonnées :** changer Minimal/Structure/Étendu et une dérogation de namespace.
+   Enregistrer seul ne précharge pas la base. Demander un préchargement borné,
+   l’annuler, examiner séparément non lu/vide/périmé/indisponible/erreur.
+5. **Carte :** charger explicitement un périmètre SQLite/PostgreSQL, inspecter la FK
+   composite, filtrer/déplacer/zoomer, passer à la liste accessible puis Data/Structure/
+   DDL. Changer A/B conserve l’identité ; les gestes visuels ne lisent pas de lignes.
+6. **Export :** sélectionner le `pg_dump` corrigé, archive personnalisée ou SQL et
+   nouveau fichier. Préparer, inspecter puis lancer ; vérifier le fichier terminé.
+   Un chemin existant est refusé. SQLite et autres adaptateurs indisponibles expliquent
+   leur limite.
+7. **Restauration :** sélectionner `pg_restore` corrigé et l’archive, acquitter la
+   confiance, préparer la base jetable vide de destination. Annuler une fois la
+   confirmation native : rien ne démarre. Préparer à nouveau et vérifier la cible
+   exacte avant confirmation. Lecture seule refusée, scripts SQL indisponibles.
+8. **Résultats/fermeture :** inspecter réussite ou résultat partiel possible d’une
+   restauration volontairement répétée. Aucun rejeu automatique. Masquer conserve
+   la tâche ; fermer propose par défaut de garder ouvert et attend annulation/
+   nettoyage demandés. L’inspection humaine conserve le résultat initial.
+
+
+Le deuxième contrôle complet a passé 2 434 tests frontend et Clippy workspace,
+puis arrêté après 2 693 réussites Rust sur la régression existante de déconnexion
+catalogue hors runtime (2 082 cas non exécutés, 213 ignorés). Le nettoyage natif
+appelait un worker exigeant un runtime avant d’achever l’annulation catalogue.
+La correction réutilise le repli d’arrêt hors runtime de l’écrivain local audité
+pour persistance et libération associée ; les appels GUI utilisent toujours le
+pool bloquant. Le test existant et ses assertions d’annulation/nettoyage sont
+conservés. Un nouveau contrôle complet valide cette correction.
+
+La frontière native passe également Clippy croisé `x86_64-pc-windows-gnu`,
+toutes cibles/fonctionnalités et avertissements refusés. Imports, dépendances et
+tests Unix sont conditionnés. Cela contrôle `oxyn-transfer` et sa dépendance
+core ; ni l’application Windows complète ni l’exécution native Windows ne sont
+validées. La possession des processus Windows reste explicitement indisponible.
+Le composant a été installé via la chaîne Rust épinglée, sans modifier sa version
+sélectionnée ni la configuration globale de Codex.
+
+
+## Validation finale #374 — 2026-11-15
+
+Le `make qualite` final passe 4 779 tests Rust (213 explicitement ignorés),
+2 438 tests frontend, formatage, Clippy workspace sans avertissement, types,
+stories/accessibilité, build frontend, doctests/rustdoc et vérification indépendante
+de quatre paquets. Le frontend comprend 17 stories natives et six tests de
+contrôleur : historique non lu/échoué distinct de vide connu, lectures de
+disponibilité/historique annulables et annulées au démontage, conservation en
+onglet masqué et propriété synchrone pendant les mises à jour React groupées.
+Deux contrôles préliminaires ont échoué sur fermeture et liste exhaustive des
+tables lisibles, corrigées sans affaiblir les assertions. Les passages diagnostiques
+utilisant encore d’anciens artefacts ne valident pas un source modifié.
+
+Contrôles complémentaires : clients/serveur PostgreSQL 17.12 corrigés isolés,
+exports archive/SQL, valeurs restaurées lues en page bornée, refus de confirmation
+native et autre fenêtre, changements lecture seule/destination après préparation,
+annulation d’un dump bloqué observée dans pg_stat_activity avant libération du
+verrou, invalidation après restauration possiblement partielle, absence de rejeu
+et rapprochement explicite conservant le résultat. La sonde d’authentification
+accepte la fixture locale sans mot de passe et refuse le défi SCRAM sans archive.
+Les 14 tests frontière fichiers/processus/adaptateur passent ; leur harnais de
+sous-processus reste explicitement ignoré lors des exécutions ordinaires.
+Clippy croisé Windows GNU passe pour frontière et core ; exécution native Windows
+indisponible. Linux partage le runner Unix mais n’a pas été exécuté localement.
+Seul macOS dispose de preuves locales d’exécution et visuelles.
+
+La revue finale corrige aussi nettoyage à capacité pleine, droit d’outil non
+retourné après inspection annulée, lecture JSON bornée au démarrage et libération
+d’une préparation dont la console a changé de fenêtre ou disparu. La libération
+reste attachée aux tâche/connexion/fenêtre originales, sans accès à la session
+déplacée ni autorité d’exécution. Les workers source/fenêtre/arrêt sont rejoints.
+Revues invariants/frontière/sécurité/organisation/interface sans blocage restant
+dans le périmètre implémenté.
+
+`cargo-deny` et `cargo-about` absents : audits Rust sécurité/licences et régénération
+des notices non réalisés. Audit npm et 415 licences de production passent.
+Suites génériques de serveurs et modèle de référence embedding non configurés ;
+fixture PostgreSQL native explicite exécutée séparément. Diagnostics navigateur
+ResizeObserver/React act existants toujours visibles, sans suppression, tests verts.
+Gros volumes, application Windows complète, exécution Linux, transports distant/
+TLS/SSH/mot de passe, restauration SQL et autres adaptateurs natifs ne sont pas
+validés ni implicites. Aucune acceptation utilisateur enregistrée.

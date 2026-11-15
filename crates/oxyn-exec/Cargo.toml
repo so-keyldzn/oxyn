@@ -18,6 +18,7 @@ oxyn-data.workspace = true
 oxyn-driver.workspace = true
 oxyn-query.workspace = true
 oxyn-store.workspace = true
+oxyn-transfer.workspace = true
 async-trait.workspace = true
 arrow.workspace = true
 # Already in the graph through oxyn-store: the launch start bounds which

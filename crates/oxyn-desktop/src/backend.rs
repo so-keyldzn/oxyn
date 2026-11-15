@@ -72,6 +72,7 @@ pub(crate) struct Inner {
     /// of a conversation, on the same executor as the interface
     /// ([ADR-0004](../../../docs/adr/0004-command-bus.md)).
     pub(crate) executor: Arc<Executor>,
+    pub(crate) native_runner: Arc<oxyn_transfer::TransferRunner>,
     /// The only authority on which database types exist
     /// ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
     pub(crate) drivers: Arc<DriverRegistry>,
@@ -348,7 +349,13 @@ impl Backend {
         let local = recovery::LocalWork::begin(&store, workspace)?;
         let layouts = adopt_layouts(&store, workspace, local.session);
 
+        store
+            .native_transfers()
+            .interrupt_unfinished(workspace)
+            .context("recovering interrupted native transfers")?;
+        let native_runner = Arc::new(oxyn_transfer::TransferRunner::new());
         let executor = Executor::builder(Arc::clone(&store), gate)
+            .with_native_runner(Arc::clone(&native_runner))
             .with_drivers(Arc::clone(&drivers))
             .with_credentials(Arc::clone(&credentials) as Arc<_>)
             .with_workspace(workspace)
@@ -376,6 +383,7 @@ impl Backend {
         let backend = Self {
             inner: Arc::new(Inner {
                 executor: Arc::new(executor),
+                native_runner,
                 drivers,
                 policy,
                 credentials,
@@ -958,6 +966,21 @@ impl Backend {
         if !approved {
             return reject("Operation rejected");
         }
+        if inner
+            .executor
+            .approvals()
+            .peek(command)
+            .is_some_and(|pending| {
+                matches!(
+                    pending.command,
+                    Command::RestoreDatabase { .. } | Command::ExportDatabase { .. }
+                )
+            })
+        {
+            return Err(IpcError::invalid(
+                "Native database transfer decisions require their destination-bound host review",
+            ));
+        }
         // A connection's creation, edit or deletion completes on its own path:
         // approved here, its secrets and the policy would never follow it.
         if inner.pending_connections.lock().contains_key(&command)
@@ -1222,6 +1245,7 @@ mod library;
 mod local_commands;
 mod metadata;
 mod metadata_loading;
+mod native_transfers;
 mod object_operations;
 mod proposal;
 mod recovery;

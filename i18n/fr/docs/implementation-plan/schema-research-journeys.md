@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="c78d6022611a" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="54119915a35a" -->
 
 # Recherche sur les schémas : parcours utilisateur
 
@@ -242,9 +242,9 @@ de tables/vues sort de ce périmètre de recherche.
 
 ## J07 — Exporter une base PostgreSQL
 
-**Entrée :** action d'export natif proposée sur une base prise en charge.
+**Entrée :** `Database transfers` sur la source de l’explorateur.
 
-**Parcours proposé :** identifier la source ; choisir un exécutable installé,
+**Parcours implémenté :** identifier la source ; choisir un exécutable installé,
 un format pris en charge et une destination ; revoir les options ; démarrer ;
 afficher la progression sans pourcentage inventé ; annuler ou obtenir une
 confirmation de fin et l'emplacement du fichier. Distinguer ce parcours de
@@ -259,13 +259,13 @@ destination existante n'est pas écrasée silencieusement.
 journaux ; réussir exige la réussite du processus et la finalisation du fichier.
 Fermer la surface de progression suit une règle explicite de cycle de vie de
 tâche, sans processus orphelin.
-**Décision :** D04. PostgreSQL est un premier adaptateur proposé, pas livré.
+**Décision :** D04. PostgreSQL est le premier adaptateur restreint ; validation consignée au bilan.
 
 ## J08 — Restaurer dans une base délibérément choisie
 
-**Entrée :** action de restauration proposée ; fichier et cible sont explicites.
+**Entrée :** Restore archive dans Database transfers ; fichier et cible explicites.
 
-**Parcours proposé :** examiner format/options pris en charge ; montrer
+**Parcours implémenté :** examiner format/options pris en charge ; montrer
 l'identité cible et les effets destructeurs ; autoriser par le bus et la
 confirmation native requise ; exécuter comme tâche suivie ; rapporter l'issue ;
 invalider métadonnées et aperçus concernés. La cible revue doit être la cible
@@ -348,7 +348,7 @@ travail d'acceptation.
 | D01 | [0079 — Regroupement serveur sans autorité partagée](../adr/0080-group-database-connections-under-server-profiles.md) | Modèle core/store ; découverte driver ; sessions de l'exécuteur ; identifiants de l'hôte ; J01/J06/J09. Identifiants indépendants par enfant ; pas d'autorisation serveur globale dans cette révision. |
 | D02 | [0080 — Facettes indépendantes et préchargement explicite](../adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Modèle du catalogue ; politique de l'exécuteur ; lectures des drivers ; consommateurs desktop ; J02/J03/J06. Changer la préférence ne lance pas de lecture en masse. |
 | D03 | [0081 — Cartes à provenance explicite](../adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Projection du catalogue ; orchestration par l'hôte ; rendu partagé ; J04/J05/J09. Persistance d'affichage distincte des métadonnées. |
-| D04 | [0082 — Tâches de transfert natif autorisées](../adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Politique/audit dans l'exécuteur ; frontière oxyn-transfer proposée ; dialogues desktop ; J07/J08/J09. Transport d'authentification encore soumis à un prérequis. |
+| D04 | [0083 — Tâches de transfert natif autorisées](../adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Politique/audit dans l'exécuteur ; frontière oxyn-transfer ; dialogues desktop ; J07/J08/J09. Transport d'authentification encore soumis à un prérequis. |
 
 Les lectures existantes utilisent `RefreshCatalogScope` ; dessiner un graphe
 en cache ne nécessite aucune commande d'exécution. Découverte et transferts
@@ -424,3 +424,17 @@ métadonnées structurées. Pas de disposition persistée ni de réouverture de 
 Résultats SQLite/DuckDB et limites des autres moteurs figurent dans matrice et
 bilan. SQ01–SQ06 restent applicables ; mémoire privée et propriétaires supprimés
 ne doivent jamais provoquer la création d'une base vide de remplacement.
+
+## Revalidation de J07/J08/J09
+
+L’onglet retenu de l’explorateur réalise les parcours communs de préparation,
+progression, historique et rapprochement. L’exécution initiale est limitée au
+mode PostgreSQL de l’ADR-0083 et de la matrice. Les sélecteurs natifs délivrent des
+droits opaques ; préparer ne fait que les contrôles locaux outil/archive. Toute
+restauration utilise la destination exacte du backend et la confirmation native.
+Fermer demande avant d’annuler et attend le nettoyage ; changer d’onglet n’annule
+pas. Après redémarrage, une tâche devient historique/interrompue, jamais reprise.
+Les fichiers existants sont toujours refusés ; la restauration SQL n’est pas
+proposée. SQLite et les autres adaptateurs indisponibles gardent une explication,
+sans introspection racine ni sauvegarde de substitution. Les preuves de validation
+et limites de plateforme/acceptation sont dans le bilan.

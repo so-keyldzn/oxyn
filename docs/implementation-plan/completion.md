@@ -25,7 +25,7 @@ image-generation prompts retain the identifiers used at generation time.
 | #308 | `feat/f6-navigation` | Created from `a3f5961` after a clean #373 commit. Registry/visible-region cycle implemented; Completed: 93 action tests, five browser interaction stories, full quality gate and final frontend revalidation passed. Personal/native OS acceptance pending. |
 | #375 | `feat/metadata-loading` | Created from #308 commit `4c80bfa` after a clean validated commit. Completed and automatically validated: shared capability-driven policies/facets/preload, explicit inference and shadcn controls; make qualite passed 4,733 Rust / 2,391 frontend tests. Personal acceptance awaits final dev integration. |
 | Schema map | `feat/schema-map` | Created clean from #375 commit `40329e4`. Standalone tab, shared host projection, original-owner navigation and explicit neighbor/sampling controls implemented. Completed and automatically validated: make qualite passed 4,753 Rust / 2,415 frontend tests, documentation and four package archives. Personal acceptance awaits final dev integration. |
-| #374 | `feat/native-backup-restore` | Not created; inherits the completed stack, reuses ownership/operation state and metadata invalidation. No native-transfer implementation yet. |
+| #374 | `feat/native-backup-restore` | Created clean from schema-map commit `2f24e30`; the complete stack is inherited without duplication. Native transfer implementation and complete validation finished; dev integration follows the clean native commit. |
 
 This intentional linear stack avoids duplicating common commits. Each branch
 must have coherent commits, a validation ledger and a clean working tree before
@@ -354,3 +354,171 @@ Personal acceptance is **not obtained**. The final manual checklist will cover
 F6/Shift+F6, discovery/opening, repeated activations, A→B→A, drafts, errors/cancel,
 metadata levels, standalone map and disposable PostgreSQL export/restore.
 Wait for the user's report before claiming manual approval.
+
+## Native transfer implementation plan — 2026-11-15
+
+The completed map commit is `2f24e30`. The new native branch starts from that
+clean, quality-checked commit. `main` and `dev` remain at `ce58839`.
+
+Core owns typed human-only inspection/export/restore commands and readable job
+states. A focused `oxyn-transfer` boundary owns host-granted private tool/file
+snapshots, engine adapters, process groups, bounded pipe draining and no-clobber
+publication. Executor owns authority rechecks, audit, persistent job lifecycle,
+cancellation/join and possible-write invalidation; store adds a bounded versioned
+job record. Desktop owns native pickers/critical confirmation and window leases.
+A shadcn tab/controller renders common descriptors and progress for every engine;
+unsupported adapters or authentication modes have explicit reasons.
+
+Restore is mutating and always reviewed by the host, including local targets.
+Agents cannot inspect/run native tools. Neither raw argv nor file paths grant
+execution from a webview. Jobs stay owned while a tab is hidden; closing waits
+for cancellation cleanup, and source/window shutdown joins them. After restart,
+unfinished records are interrupted/unknown and never replayed.
+
+The initial useful authentication mode and Unix/file-publication decisions are
+specified in proposed ADR-0083. Password/TLS/SSH modes and psql script restore
+remain unavailable. Corrected PostgreSQL clients are prepared in an isolated
+location for validation; no global Homebrew installation is changed. Enablement
+requires synthetic-authentication, argument, missing/incompatible-tool, file,
+permission, process/descendant, cancellation, confidentiality and disposable
+PostgreSQL custom/plain-export plus archive-restore tests. Finish with full
+quality/local reviews, English/French contracts and a clean committed branch,
+then perform the separately required dev integration/revalidation and launch.
+
+
+## Native transfer implementation and review
+
+The engine-neutral core/store/executor/UI path is implemented; the initial adapter
+is PostgreSQL only, with the restricted authentication/transport scope of
+ADR-0083. History retains tool identity, selected basename, fixed restore options,
+observed stage, bytes, timestamps and original outcome without argv, paths,
+credentials or raw stderr. Ready/active capability records stay separate from
+readable history and never reconstruct executable authority after restart.
+
+Local invariant, boundary, security and UI review found and corrected: missing
+wake registration for concurrent native cleanup joiners; late native-picker grant
+insertion after source/window retirement; late UI selection/preparation cleanup;
+read-only/destination rechecks; restore mutation admission and retained-preview
+cleanup; no-clobber stage identity checks; persisted restore options; and clipped
+controls in compact layouts. The retained controller composes state/query/close
+coordination at 432 lines; tool/process/file policy and pure
+presentation remain separate modules. Existing workspace orchestration only
+composes source-owned retained tabs and their running/close handles.
+
+The first complete gate passed its 2,433 frontend tests, types/lint/build, then
+stopped at native boundary Clippy diagnostics. Native command construction was
+consolidated into one environment-clearing site, bounded blocking-worker polling
+was explicitly documented, and the intentional orphan fixture keeps its OS-reaping
+assertion. No global lint, test assertion or timeout was weakened. A later gate
+must validate the final tree before committing or integrating.
+
+Disposable fixture corrections are not product fixes: a PostgreSQL console does
+not offer explicit transactions, so the lock fixture uses one DO statement;
+its cancellation is conservatively ambiguous and non-retryable. Resetting the
+disposable restore table must actually approve the ordinary DROP risk review,
+not mistake NeedsApproval for completed execution. The round-trip assertion now
+reads the retained bounded result page and checks the actual restored values.
+
+Unverified limits remain: Linux execution and Windows process ownership, remote/
+TLS/SSH/password transport, SQL-script restoration, other native adapters,
+PostgreSQL 18 client execution, real large-database throughput, and user acceptance.
+These are not inferred from successful local compilation or the common UI.
+
+
+## Personal acceptance on the integrated dev instance
+
+Use only disposable files/databases described by the launch's `fixtures.json`.
+The freshly launched window must say Temporary workspace and its build identity
+must match the clean integrated dev commit. Personal acceptance remains pending
+until the user reports it; automatic checks do not supply that report.
+
+1. **Navigation/ownership:** connect the two same-named SQLite files A/B. Execute
+   a small SELECT in A, then edit an unsaved draft. Repeat activation and A→B→A:
+   retrieve A's exact draft, result and console; B's first console stays empty.
+2. **Multi-base:** on the disposable PostgreSQL source, create a server group,
+   select/expand without activation, discover databases, then explicitly open a
+   child. Repeat activation and cancel a discovery/opening. A failed saved target
+   stays local to its entry and can be opened again after correcting it.
+3. **Focus:** select text in the editor; F6 and Shift+F6 traverse visible regions
+   and return its selection. Repeat with a compact layout, closed side panel,
+   map tab and a modal. Hidden workspaces/panels never steal focus.
+4. **Metadata:** change Minimal/Structure/Extended and a namespace override.
+   Saving alone does not preload the database. Request one bounded preload,
+   cancel it, and inspect unread/empty/stale/unsupported/failed facets separately.
+5. **Map:** load one SQLite/PostgreSQL scope explicitly, inspect the composite FK,
+   filter/pan/zoom, switch to the accessible list and navigate to Data/Structure/
+   DDL. Switching A/B must preserve source identity; visual gestures read no rows.
+6. **Export:** select the corrected `pg_dump`, custom archive or SQL and a new
+   output file. Prepare, inspect and start; verify the completed file. An existing
+   path is refused. SQLite and other unavailable native adapters explain why.
+7. **Restore:** select corrected `pg_restore` and the completed archive, acknowledge
+   trust, and prepare the disposable empty restore database. Cancel the host
+   confirmation once; nothing starts. Prepare anew and verify its exact target
+   before confirming. Read-only targets are refused; SQL scripts stay unavailable.
+8. **Outcomes/closing:** inspect recorded success or a deliberately repeated
+   restore's possible-partial outcome. No operation is automatically replayed.
+   Hiding keeps native work; closing active work defaults to Keep open and waits
+   for requested cancellation/cleanup. Human inspection retains the original result.
+
+
+The second full gate passed 2,434 frontend tests and workspace Clippy, then
+stopped after 2,693 Rust passes at the existing off-runtime catalog-disconnect
+regression (2,082 cases not run, 213 skipped). Native cleanup had called a
+runtime-required local worker before completing ordinary catalog cancellation.
+The fix reuses the audited local writer's existing off-runtime shutdown fallback
+for job persistence and associated resource release; GUI calls still use the
+blocking pool. The existing test and its cancellation/cleanup assertions are
+preserved. A fresh complete gate validates this correction.
+
+The native boundary also passes cross-target Clippy for
+`x86_64-pc-windows-gnu` with all targets/features and warnings denied. Unix
+imports/dependencies/tests are conditional. This checks `oxyn-transfer` and its
+core dependency, not the complete Windows desktop or native execution there;
+Windows native process ownership remains explicitly unavailable. The component
+was installed through the pinned Rust toolchain for this check, without changing
+its selected version or global Codex settings.
+
+
+## Final #374 validation — 2026-11-15
+
+Final `make qualite` passed 4,779 Rust tests (213 explicitly skipped), 2,438
+frontend tests, formatting, warnings-denied workspace Clippy, types, browser
+stories/accessibility, frontend build, doctests/rustdoc and four independent
+package-verification builds. The final frontend pass includes 17 native stories
+and six controller tests: unread/failed history is distinct from known empty,
+availability/history reads have independent cancel controls and cancel on
+unmount, hidden tabs preserve work, and synchronous ownership survives batched
+React updates during closing. Two preliminary full passes failed on the new
+shutdown path and the exhaustive readable-table list; both were corrected without
+weakening their assertions. Later diagnostic passes that still used earlier test
+artifacts are not counted as validation of a changed source.
+
+Additional final checks: the corrected isolated PostgreSQL 17.12 clients and
+server passed custom archive/SQL export, bounded result-value round trip, native
+host refusal, foreign-window refusal, post-preparation read-only/destination
+changes, blocked-dump cancellation observed in pg_stat_activity before releasing
+the fixture lock, possible-partial restore invalidation, no replay, and explicit
+reconciliation preserving the original result. The synthetic authentication probe
+accepted the local passwordless fixture and refused the SCRAM challenge without
+producing an archive. The native boundary's 14 file/process/adapter tests passed;
+its subprocess-only harness remains explicitly ignored by ordinary runs.
+Windows GNU cross-target Clippy passed for the boundary and core; Windows native
+execution remains unavailable. Linux shares the Unix runner but was not executed
+locally. Only macOS has local execution/visual evidence.
+
+The final review additionally corrected cleanup under full native capacity,
+unreturned raw tool grants after cancelled inspection, startup JSON parsing of
+oversized/corrupt records, and releasing a prepared plan after its source console
+moves or retires. Release is bound to the original job/connection/window and does
+not grant access to a moved session or execution. Source/window/shutdown workers
+remain joined. Invariant, boundary, security, organization and UI reviews have no
+remaining blocker within the implemented scope.
+
+`cargo-deny` and `cargo-about` were absent: Rust advisory/license audits and
+notice regeneration were not performed. npm audit and all 415 production npm
+licenses passed. Generic server URL suites and the embedding reference model
+were unset; the explicit disposable native PostgreSQL fixture above ran separately.
+Existing ResizeObserver/React act browser diagnostics remain visible, unsuppressed,
+with all tests passing. Large-database throughput, complete Windows desktop,
+Linux execution, remote/TLS/SSH/password modes, SQL restoration and other native
+engine adapters are not validated or implied. No user acceptance is recorded.

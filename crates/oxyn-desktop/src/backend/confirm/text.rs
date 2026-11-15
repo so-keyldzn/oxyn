@@ -17,7 +17,9 @@ use oxyn_core::{Command, ConnectionConfig, Environment, ExternalAgentConfig};
 use oxyn_driver::DriverMetadata;
 use oxyn_exec::PendingCommand;
 
+mod native_transfer;
 mod sample;
+pub(crate) use native_transfer::restore_database;
 pub(crate) use sample::{SampleDescription, SampleDestination, sample};
 
 /// The label of the button that refuses. The confirming label must differ:

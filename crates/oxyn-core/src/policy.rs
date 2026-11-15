@@ -346,7 +346,16 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent()
             && matches!(
                 cmd,
-                Command::LoadSchemaMap { .. }
+                Command::ReadNativeTransferSupport { .. }
+                    | Command::InspectNativeTool { .. }
+                    | Command::RevokeNativeSelection { .. }
+                    | Command::PrepareNativeTransfer { .. }
+                    | Command::ExportDatabase { .. }
+                    | Command::RestoreDatabase { .. }
+                    | Command::DiscardNativeTransfer { .. }
+                    | Command::ReadNativeTransfers { .. }
+                    | Command::ReconcileNativeTransfer { .. }
+                    | Command::LoadSchemaMap { .. }
                     | Command::PreloadMetadata { .. }
                     | Command::ReadMetadataPolicy { .. }
                     | Command::WriteMetadataPolicy { .. }
@@ -358,7 +367,7 @@ impl PolicyGate for DefaultPolicy {
             )
         {
             return Decision::deny(
-                "only the human may inspect or change local navigation and loading preferences",
+                "only the human may manage local navigation, loading preferences or native transfers",
             );
         }
         if actor.is_agent()
@@ -517,6 +526,16 @@ impl PolicyGate for DefaultPolicy {
                 "an agent is strictly read-only on \"{}\" (production)",
                 Self::display_name(cmd, facts.as_ref())
             ));
+        }
+
+        if matches!(cmd, Command::RestoreDatabase { .. }) {
+            return Decision::approval(
+                format!(
+                    "database restoration on \"{}\" requires a destination-bound human review",
+                    Self::display_name(cmd, facts.as_ref())
+                ),
+                Self::preview(cmd, facts.as_ref()),
+            );
         }
 
         // ── Approvals ───────────────────────────────────────────────────────

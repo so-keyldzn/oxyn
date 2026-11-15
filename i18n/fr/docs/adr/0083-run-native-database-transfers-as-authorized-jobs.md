@@ -1,14 +1,14 @@
-<!-- oxyn-translation source="docs/adr/0083-run-native-database-transfers-as-authorized-jobs.md" sha256="68ae3ba4d5c9" -->
+<!-- oxyn-translation source="docs/adr/0083-run-native-database-transfers-as-authorized-jobs.md" sha256="4484d7ea0b34" -->
 
 # ADR-0083 — Exécuter les transferts natifs comme tâches autorisées et possédées
 
-**Statut :** proposé · **Date :** 2026-11-13
+**Statut :** accepté · **Date :** 2026-11-15
 
 **Précise :** [ADR-0004](0004-command-bus.md) sur les commandes de transfert
 natif et [ADR-0035](0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md)
-sur les I/O possédées et l'issue auditée. Cette proposition définit une frontière,
-pas l'autorisation d'exécuter un outil ni l'affirmation que l'authentification
-est résolue.
+sur les I/O possédées et l’issue auditée. Le commit d’implémentation active
+uniquement le mode restreint vérifié ci-dessous, sans autorité générale de
+processus ou d’authentification.
 
 ## Contexte
 
@@ -100,6 +100,18 @@ revues, horodatages et issue expurgée ; aucun identifiant d'authentification ni
 journal brut. Après redémarrage, les tâches inachevées sont montrées comme
 interrompues, jamais rejouées.
 
+L’unique construction de commande native est `files/tool.rs::confined_command` :
+elle vide immédiatement l’environnement et fixe HOME/répertoire courant/services
+privés. Son expectation locale `clippy::disallowed_methods` consigne cette
+frontière I-03. `process.rs::poll_pause` documente de même l’attente bornée sur
+worker bloquant, exception à l’interdiction d’attente sur le thread UI ; aucun
+point d’entrée async/UI ne l’appelle directement. Aucun lint global n’est assoupli.
+Inspection bornée à cinq secondes, précontrôle d’archive à soixante secondes et
+exécution à vingt-quatre heures ; l’annulation conserve la possession jusqu’au
+nettoyage. L’autorité d’une préparation expire après cinq minutes. Ce sont des
+bornes fixes manuelles, pas des seuils automatiques ni une certification de
+performance.
+
 ## Conséquences
 
 * **+** Les outils natifs suivent la même autorité d'exécution que les autres écritures.
@@ -130,3 +142,52 @@ de sécurité ou nouvelle bibliothèque nécessite une décision revue avant usa
 | Assimiler sortie ou annulation du processus à un rollback | N'établit pas ce que la destination a appliqué |
 | Écrire un fichier temporaire de mot de passe comme détail technique | Contredit l'interdiction actuelle des secrets en clair sur disque |
 | Partager un lanceur générique avec les fournisseurs IA | Couple des frontières de confiance distinctes et encourage une autorité trop large |
+
+## Frontière de première implémentation (2026-11-15)
+
+Tâches, politique/audit, capacités de fichiers, annulation, progression,
+résultats et invalidation sont indépendants du moteur. Le premier adaptateur
+est PostgreSQL ; partager son protocole ne suffit pas à activer une variante.
+Autres moteurs, authentifications et plateformes non prouvées exposent une
+indisponibilité explicite via la même interface.
+
+Le premier mode vise une cible locale directe à IP littérale de boucle locale,
+TLS explicitement désactivé, sans routage SSH. `require_auth=none`, chiffrement
+GSS désactivé, environnement effacé, HOME/répertoire privés et configurations
+mot de passe/service isolées empêchent les replis ambiants. Aucun mot de passe
+sauvegardé n'est résolu. Un serveur exigeant une authentification est refusé.
+Ce mode ne sera proposé qu'après preuve sur des sources jetables. Distant,
+TLS/SSH/mot de passe et restauration de script SQL restent indisponibles sans
+preuve distincte de confinement et de destination.
+
+Les clients 14.18 et 17.4 installés ne constituent pas une base de sécurité
+acceptable ; les [notes datées](../RESEARCH-NOTES.md) renvoient aux avis du
+fournisseur et à la version corrigée retenue pour les essais isolés. Les outils
+choisis deviennent des copies exécutables privées, validées pour rôle/version
+et conservées jusqu'à la fin des processus possédés. Ni arguments arbitraires
+ni remplacement au chemin original ne sont autorisés. Une copie non exécutable
+avec ses dépendances installées reste indisponible, sans repli silencieux.
+
+Sous Unix, groupe neuf et `waitid(WNOWAIT)` observent le processus chef sans
+libérer son PID. L'annulation laisse d'abord au gestionnaire PostgreSQL le temps
+d'envoyer sa requête serveur, puis termine les membres restants avant de
+récolter le chef. Les flux sont drainés avec bornes d'octets/temps. Pas de
+récolteur détaché ni journal brut illimité. macOS et Linux partagent cette
+implémentation Unix ; une plateforme sans
+implémentation de possession des processus reste indisponible. Les preuves locales
+et plateformes non vérifiées sont consignées dans le bilan. Une perte de
+l’application produit un état interrompu/inconnu,
+jamais une preuve de rollback ni la réutilisation sûre d'un PID enregistré.
+
+L'export prépare un fichier dans un répertoire privé sous un descripteur de
+répertoire destination conservé. Après succès et synchronisation, un lien dur
+sans écrasement publie atomiquement ; la préparation est supprimée et la
+persistance du répertoire contrôlée. Chemins existants et liens symboliques
+sont refusés. Un système sans liens durs échoue explicitement, sans écrasement.
+
+Toute restauration, même locale, utilise la confirmation hôte existante. Son
+texte nomme destination réelle, archive, outil et options fixes sans certifier
+l'archive. Une approbation webview ordinaire ne contourne pas ce parcours.
+Destination, lecture seule, identités de fichiers/outils et propriété sont
+revérifiées avant exécution. Toute restauration possiblement appliquée invalide
+métadonnées/aperçus et reste non réconciliée après échec/interruption, sans rejeu.

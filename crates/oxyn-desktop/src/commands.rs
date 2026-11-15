@@ -294,6 +294,7 @@ pub mod location;
 pub mod menu;
 pub mod metadata;
 pub mod metadata_loading;
+pub mod native_transfers;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;

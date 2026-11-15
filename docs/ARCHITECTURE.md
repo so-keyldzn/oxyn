@@ -158,7 +158,7 @@ or a parameter the driver does not declare.
 
 ## 3. The Cargo workspace
 
-22 crates, as they exist — 13 under `crates/`, 9 drivers under `drivers/`, the
+23 crates, as they exist — 14 under `crates/`, 9 drivers under `drivers/`, the
 members of the workspace being `crates/*` and `drivers/*` — plus the
 `apps/desktop` front end ([§2 bis](#2-bis-the-tauri-interface)):
 
@@ -176,6 +176,7 @@ oxyn/
 │   ├── oxyn-driver/              # Driver / Session / Cursor traits, registry, DSN
 │   ├── oxyn-query/               # dialects, intent classification, splitting, formatting
 │   ├── oxyn-exec/                # scheduler: Policy gate, cancellation, log
+│   ├── oxyn-transfer/            # owned native transfers, file/tool grants, engine adapters
 │   ├── oxyn-store/               # local SQLite state: workspaces, history, audit
 │   ├── oxyn-secrets/             # OS keychain, credentials
 │   ├── oxyn-llm/                 # model provider abstraction
@@ -1219,7 +1220,7 @@ their global local scope; documents are filtered by workspace.
 └──────────────────────────────────────────────────────────┘
 ```
 
-**One process, and one short-lived child.** Before anything else — journal,
+**One host process and owned child processes.** Before anything else — journal,
 store, runtime, window — `main.rs` checks whether it was launched with the
 internal argument `--convert-embedding-model <root>`: then it is the
 conversion child of the local embedding model, converts, and exits with an
@@ -1228,8 +1229,9 @@ model is downloaded, so that the conversion's 1.45 GB peak, and what the
 system allocator keeps of it, leave with that process
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
 parent awaits it on the runtime without blocking a thread; external agents
-are the other processes Oxyn starts
-([ADR-0026](adr/0026-agents-externes-acp.md)).
+also run as owned processes ([ADR-0026](adr/0026-agents-externes-acp.md)).
+Native database tools run on their own bounded blocking workers through
+`oxyn-transfer` ([ADR-0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md)).
 
 **A single runtime.** `main.rs` builds a multi-thread Tokio runtime and
 hands it to Tauri (`tauri::async_runtime::set`): the `async` commands and
@@ -1378,3 +1380,24 @@ guided this split remains this one: **each phase delivers a tool that is complet
 | AI context too big or too expensive | Medium | Compaction + table selection; `Metadata` tier by default |
 | An agent breaks a production database | **Critical** | Policy gate §7.2; systematic reclassification §8; strict refusal in production; tamper-proof log |
 | Scope of the vision vs. reality | High | The phasing of [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md): each phase delivers a tool that is complete in itself |
+
+## Native database transfers
+
+[ADR-0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) defines a
+separate `oxyn-transfer` boundary, depending on `oxyn-core` and existing OS/file
+libraries, never on Tauri, credentials or persistence. `oxyn-exec` and
+`oxyn-desktop` depend on it. Core job/grant/format/outcome vocabulary, store
+migration 22 and source-owned UI are engine-neutral; the first native adapter is
+PostgreSQL. An unsupported engine is a capability result, without root metadata
+introspection or a protocol-based tool fallback.
+
+The executor retains at most eight native blocking workers, one per connection,
+and eight ready plans (five-minute preparation TTL). Caller abandonment cancels
+its child token; window/source/shutdown cleanup joins the owned handles. Restore
+holds ordinary connection mutation admission through worker cleanup and closes
+retained previews before execution. Grants are owner-bound, files additionally
+source/session-bound, and only the prepared file selection is consumed. History
+has a versioned readable JSON payload bounded to 64 KiB per job and reads at most
+100 rows. Memory-only progress reads do not repeatedly create audited commands.
+Startup marks unfinished jobs interrupted or failed before start; it never
+reconstructs executable plans, trusts persisted PIDs or replays a restore.

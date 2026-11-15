@@ -2287,3 +2287,27 @@ files` and `Preparing the model` otherwise.
 Opening the assistant panel loads a ready model ahead of the first question,
 so that its cold load does not count against that question's 2-second bound.
 While the option is off, opening the panel does nothing.
+
+## Native database transfer tab
+
+`Database transfers` on the explorer opens one retained tab per original
+connection/session, without starting an executable. Availability and bounded
+history are explicit source-owned reads. Unsupported engines/transports show a
+reason through the same view; result-grid export remains separate.
+
+Choose export/restore, an offered format, trusted installed tool and new output
+file or trusted archive through host pickers. Preparing fixes selections and
+options; it does not execute against the target. Every new archive clears its
+trust acknowledgement. Ready review shows the connection, exact native target,
+filename, tool/version and ownership/privilege options. Restore then requires the
+native host confirmation even on Local. There is no editable command or SQL
+restore fallback.
+
+The tab shows observed stages/bytes and bounded safe history, never invented
+completion percentages or raw logs. Hiding/switching preserves work; closing
+active work defaults to Keep open and waits for cancellation/cleanup before
+closing. Window/source shutdown also owns cleanup. Outcomes distinguish refusal,
+failure before start, failure, success, cancellation, possible partial changes,
+unknown and interrupted. No button replays an uncertain restore. Human inspection
+marks reconciliation without replacing the original outcome; potentially changed
+sources invalidate metadata and previews.

@@ -182,6 +182,12 @@ impl Store {
         crate::metadata_loading::MetadataPolicies::new(self)
     }
 
+    /// Readable native job records; never credentials, argv or raw logs.
+    #[must_use]
+    pub fn native_transfers(&self) -> crate::native_transfers::NativeTransfers<'_> {
+        crate::native_transfers::NativeTransfers::new(self)
+    }
+
     /// The execution history.
     #[must_use]
     pub fn history(&self) -> History<'_> {

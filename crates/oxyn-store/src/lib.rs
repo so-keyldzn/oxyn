@@ -102,6 +102,7 @@ pub mod error;
 pub mod history;
 pub mod journal;
 pub mod metadata_loading;
+pub mod native_transfers;
 pub mod server_profiles;
 pub mod store;
 pub mod workspaces;
@@ -240,6 +241,7 @@ mod tests {
                 "documents",
                 "external_agents",
                 "metadata_loading_policies",
+                "native_transfer_jobs",
                 "query_history",
                 "schema_version",
                 "server_profile_members",

@@ -1,11 +1,12 @@
 # ADR-0083 — Run native database transfers as authorized, owned jobs
 
-**Status:** proposed · **Date:** 2026-11-13
+**Status:** accepted · **Date:** 2026-11-15
 
 **Refines:** [ADR-0004](0004-command-bus.md) on native transfer commands and
 [ADR-0035](0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) on
-owned I/O and audit outcomes. This proposal defines a boundary, not an
-authorization to run a tool or an assertion that authentication is solved.
+owned I/O and audit outcomes. The implementing commit enables only the
+restricted, verified mode below; it grants no general process or authentication
+authority.
 
 ## Context
 
@@ -88,6 +89,68 @@ changed the target, not only after a reported success.
 The persistent job record contains identity, reviewed non-secret options,
 timestamps and sanitized outcome; it carries no credential or raw process log.
 After restart, unfinished jobs are shown as interrupted, never replayed.
+
+## Initial implementation boundary (2026-11-15)
+
+The common job, policy/audit, grant, cancellation, progress, outcome and
+invalidation contracts are engine-independent. The initial native adapter is
+PostgreSQL; another wire-compatible product is not enabled by its driver ID.
+Other engines and unproven authentication/platform modes return explicit
+unavailability, through the same UI and status model.
+
+The first authentication mode is a directly configured local PostgreSQL target
+with a literal loopback IP, explicitly disabled TLS, and no SSH routing. The
+adapter sets `require_auth=none`, disables GSS encryption, clears the inherited
+environment, isolates HOME/cwd and redirects password/service configuration to
+its own empty/private locations. It never resolves a saved password. A server
+requiring authentication is refused, never served by ambient credentials.
+This mode is offered only after the disposable authentication tests pass.
+Remote/TLS/SSH/password modes and SQL-script restoration remain unavailable
+until their destination-bound confinement has separate proof.
+
+Installed 14.18 and 17.4 clients are unsuitable security baselines; dated
+[verification notes](../RESEARCH-NOTES.md) record the vendor advisories and the
+corrected release selected for isolated validation. Tool selections become
+private executable snapshots, validated for role/version and retained until
+owned processes finish. They grant neither an arbitrary argument vector nor
+use of a replacement at the original path. A snapshot that cannot run with its
+installed dependencies is unavailable; no silent original-path fallback occurs.
+
+Unix process ownership uses a fresh process group and `waitid(WNOWAIT)` to
+observe the leader without reaping/reusing its PID. Cancellation first gives
+PostgreSQL its native signal-handler opportunity to request server cancellation,
+then terminates remaining group members before the leader is reaped. All pipes
+are drained with byte/time bounds. There is no detached reaper or unbounded
+raw log. macOS and Linux share this Unix implementation; platforms without a
+process-tree implementation stay unavailable. Local execution evidence and
+unverified platforms are recorded in the completion ledger. Application
+process loss is an interrupted/unknown job, not proof that a remote write rolled
+back or a stored PID still belongs to the same process.
+
+Exports stage in a private directory under a held destination-directory handle.
+After successful tool exit and file synchronization, a no-clobber hard link
+publishes the file atomically; staging is then removed and directory durability
+checked. Existing paths, including symlinks, are refused. Unsupported hard-link
+filesystems fail explicitly. No overwrite fallback is permitted.
+
+Every restore requires the existing host-confirmation port, including local
+connections. Backend-composed text names the actual destination, input archive,
+selected tool and fixed options, without certifying archive safety. Ordinary
+webview approval cannot bypass this path. Destination settings, read-only state,
+file/tool identities and ownership are rechecked before execution. Any possibly
+applied restore invalidates metadata/previews and remains unreconciled on
+failure or interruption; it is never retried automatically.
+
+The only native command-construction site is `files/tool.rs::confined_command`:
+it immediately clears ambient environment and fixes private HOME/cwd/service
+locations. Its statement-local `clippy::disallowed_methods` expectation records
+this I-03 boundary. `process.rs::poll_pause` similarly documents its bounded
+blocking-worker timer exception to the UI-thread sleep prohibition; it cannot be
+called through an async/UI entry point. No global lint refusal is relaxed.
+Inspection has a five-second deadline, archive preflight sixty seconds and native
+execution twenty-four hours; cancellation retains ownership through cleanup.
+A ready plan's authority expires after five minutes. These are manual fixed
+bounds, not automatic workload thresholds or a performance certification.
 
 ## Consequences
 

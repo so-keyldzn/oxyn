@@ -84,13 +84,18 @@ impl LocalWork {
             .context("recording the application session")?;
         // Unreadable counts as unresolved: the warning only asks to inspect,
         // while its absence would vouch for writes nobody could read (I-13).
-        let unresolved_write = store
-            .history()
-            .any_requires_reconciliation()
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "history unreadable; assuming a write needs inspection");
-                true
-            });
+        let unresolved_native = store.native_transfers().any_requires_reconciliation(workspace).unwrap_or_else(|error| {
+            tracing::warn!(%error, "native history unreadable; assuming a write needs inspection");
+            true
+        });
+        let unresolved_write = unresolved_native
+            || store
+                .history()
+                .any_requires_reconciliation()
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "history unreadable; assuming a write needs inspection");
+                    true
+                });
         Ok(Self {
             session,
             previous,
@@ -114,7 +119,14 @@ impl LocalWork {
 pub(crate) const fn is_local_write(command: &Command) -> bool {
     matches!(
         command,
-        Command::CreateDatabaseConnection { .. }
+        Command::InspectNativeTool { .. }
+            | Command::RevokeNativeSelection { .. }
+            | Command::PrepareNativeTransfer { .. }
+            | Command::ExportDatabase { .. }
+            | Command::RestoreDatabase { .. }
+            | Command::DiscardNativeTransfer { .. }
+            | Command::ReconcileNativeTransfer { .. }
+            | Command::CreateDatabaseConnection { .. }
             | Command::SaveServerProfile { .. }
             | Command::RemoveServerProfile { .. }
             | Command::SetServerProfileMembership { .. }

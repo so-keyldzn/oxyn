@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a4abca553a81" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0ae1fafba8ba" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3595,3 +3595,48 @@ Sources : [UUID 1.27.0](https://crates.io/api/v1/crates/uuid/1.27.0),
 [empaquetage Cargo](https://doc.rust-lang.org/cargo/commands/cargo-package.html) :
 les manifestes normalisés retirent les chemins locaux et la vérification compile
 l’archive avec les dépendances versionnées. Ce contrôle est conservé sans publication.
+
+## Outils PostgreSQL natifs — vérification du 2026-11-15
+
+Les outils locaux par défaut sont en 14.18 ; ceux de
+`/opt/homebrew/opt/libpq/bin` indiquent 17.4. Ces versions précèdent les correctifs
+[CVE-2025-8714](https://www.postgresql.org/support/security/CVE-2025-8714/) et
+[CVE-2025-8715](https://www.postgresql.org/support/security/CVE-2025-8715/).
+Seul `--version` a été exécuté, sans source ni archive réelle. Leurs copies
+privées démarrent aussi sur ce macOS avec les bibliothèques installées ; cela
+ne prouve pas la sécurité d'une opération.
+
+[PostgreSQL 17.12](https://www.postgresql.org/docs/release/17.12/), publié le
+2026-11-12, durcit encore la lecture d'archives. La [source officielle](https://ftp.postgresql.org/pub/source/v17.12/)
+a été téléchargée dans un espace de construction isolé et son SHA256 vérifié :
+`b46f61048797e9cf1728dd4ac459831f5126c4745581f729500541c86e59a8ac`.
+Aucun paquet Homebrew global n'est mis à jour. L'état de compilation/preuve est
+consigné dans le bilan d'implémentation, séparément de ces faits de version.
+
+Le [contrat libpq 17](https://www.postgresql.org/docs/17/libpq-connect.html)
+définit `require_auth=none`, qui refuse un défi d'authentification mais n'exclut
+pas seul certificats TLS ou GSS chiffré. Le premier mode désactive donc les deux
+transports. Fichiers ambiants de mots de passe/services/certificats ne constituent
+pas une authentification confinée. [pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)
+refuse les serveurs de version majeure plus récente. Lire le format d'une
+archive ne prouve ni sa sécurité ni sa compatibilité sémantique avec la cible.
+
+Les [gestionnaires de signaux 17.4](https://github.com/postgres/postgres/blob/REL_17_4/src/bin/pg_dump/parallel.c)
+tentent `PQcancel` sur SIGINT/SIGTERM/SIGQUIT, sans preuve autoritative d'arrêt
+serveur ; les tests jetables doivent l'observer. Le rustix 0.38.44 existant
+expose `waitid(EXITED|NOWAIT|NOHANG)` sous macOS/Linux ; son renommage NOREPLACE
+est réservé à Linux. Aucun nouveau paquet de gestion des processus n'est choisi.
+
+
+Les clients acceptés sont 17.12 ou ultérieur de la branche 17, et 18.7 ou ultérieur
+de la branche 18, selon les notes [17.12](https://www.postgresql.org/docs/release/17.12/)
+et [18.7](https://www.postgresql.org/docs/release/18.7/) vérifiées le 2026-11-15.
+Ce périmètre volontairement restreint ne signifie pas que toutes les branches plus
+anciennes sont non corrigées. Seul 17.12 a été compilé et exécuté ici ; aucune
+preuve locale d’exécution pour 18.7.
+
+L’[implémentation XNU des signaux aux groupes](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c),
+vérifiée le 2026-11-15, exclut les zombies et peut retourner EPERM sans cible
+vivante autorisée. Le nettoyage macOS accepte uniquement ce cas après avoir
+observé la sortie du chef non récolté et EOF sur les pipes hérités ; jamais EPERM
+pour un chef ou un producteur encore vivant.

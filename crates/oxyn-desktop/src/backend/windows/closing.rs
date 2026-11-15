@@ -174,6 +174,9 @@ impl Backend {
     /// ([I-13](../../../../../CLAUDE.md#i-13)).
     pub(crate) async fn release_window(&self, window: WindowKey) {
         let owned = self.inner.windows.forget(window);
+        if let Err(error) = self.inner.executor.stop_native_owner(window.id()).await {
+            tracing::error!(error=%error,"native window cleanup did not settle");
+        }
         // A move it never adopted goes with it, bound values included. Taken
         // once the window is forgotten: a move prepared meanwhile sees it gone
         // and takes itself back.

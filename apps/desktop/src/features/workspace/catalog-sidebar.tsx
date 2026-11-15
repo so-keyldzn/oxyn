@@ -77,6 +77,7 @@ export function CatalogSidebar({
   onOpen,
   onNewConsole,
   onSchemaMap,
+  onNativeTransfers,
   onLeave,
   sourceSelector,
   sessionScoped = false,
@@ -90,6 +91,7 @@ export function CatalogSidebar({
   sessionScoped?: boolean
   selected: string | null
   onSchemaMap?: (node?: CatalogNode) => void
+  onNativeTransfers?: () => void
   onSelect: (node: CatalogNode) => void
   /** Opens a relation on a given tab; without it, the menu selects the node. */
   onOpen?: (node: CatalogNode, target: OpenTarget) => void
@@ -272,6 +274,16 @@ export function CatalogSidebar({
           onClick={() => onSchemaMap()}
         >
           View schema map
+        </Button>
+      )}
+      {onNativeTransfers && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="mx-2"
+          onClick={onNativeTransfers}
+        >
+          Database transfers
         </Button>
       )}
       <CatalogPanel

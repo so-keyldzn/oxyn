@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="280008a1aaf6" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="3a7b00418e2a" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -164,7 +164,7 @@ référence, ou un paramètre que le pilote ne déclare pas.
 
 ## 3. Le workspace Cargo
 
-22 crates, telles qu'elles existent — 13 sous `crates/`, 9 drivers sous
+23 crates, telles qu'elles existent — 14 sous `crates/`, 9 drivers sous
 `drivers/`, les membres du workspace étant `crates/*` et `drivers/*` — plus le
 front `apps/desktop` ([§2 bis](#2-bis-linterface-tauri)) :
 
@@ -182,6 +182,7 @@ oxyn/
 │   ├── oxyn-driver/              # traits Driver / Session / Cursor, registre, DSN
 │   ├── oxyn-query/               # dialectes, classification d'intention, découpage, formatage
 │   ├── oxyn-exec/                # ordonnanceur : Policy gate, annulation, journal
+│   ├── oxyn-transfer/            # transferts natifs possédés, droits fichiers/outils, adaptateurs
 │   ├── oxyn-store/               # état local SQLite : workspaces, historique, audit
 │   ├── oxyn-secrets/             # trousseau OS, identifiants
 │   ├── oxyn-llm/                 # abstraction des fournisseurs de modèles
@@ -1246,7 +1247,7 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Un processus, et un enfant de courte durée.** Avant toute chose — journal,
+**Un processus hôte et des enfants possédés.** Avant toute chose — journal,
 store, runtime, fenêtre —, `main.rs` vérifie s'il a été lancé avec l'argument
 interne `--convert-embedding-model <racine>` : il est alors l'enfant de
 conversion du modèle d'embeddings local, convertit, et se termine avec un code
@@ -1255,8 +1256,9 @@ modèle est téléchargé, pour que le pic de 1,45 Go de la conversion, et ce qu
 l'allocateur du système en garde, partent avec ce processus
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Le
 parent l'attend sur le runtime sans bloquer de thread ; les agents externes
-sont les autres processus qu'Oxyn lance
-([ADR-0026](adr/0026-agents-externes-acp.md)).
+sont aussi des processus possédés ([ADR-0026](adr/0026-agents-externes-acp.md)).
+Les outils natifs de bases utilisent leurs workers bloquants bornés via
+`oxyn-transfer` ([ADR-0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md)).
 
 **Un seul runtime.** `main.rs` construit un runtime Tokio multi-thread et le
 confie à Tauri (`tauri::async_runtime::set`) : les commandes `async` et
@@ -1408,3 +1410,25 @@ guidait ce découpage reste celui-ci : **chaque phase livre un outil complet en 
 | Contexte IA trop gros ou trop coûteux | Moyenne | Compaction + sélection de tables ; niveau `Metadata` par défaut |
 | Un agent casse une base de production | **Critique** | Policy gate §7.2 ; reclassification systématique §8 ; refus strict en production ; journal inviolable |
 | Périmètre de la vision vs. réalité | Élevée | Le phasage d'[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md) : chaque phase livre un outil complet en soi |
+
+## Transferts natifs de bases
+
+L’[ADR-0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) définit
+la frontière `oxyn-transfer`, qui dépend de `oxyn-core` et des bibliothèques
+système/fichiers existantes, jamais de Tauri, des secrets ou de la persistance.
+`oxyn-exec` et `oxyn-desktop` en dépendent. Vocabulaire des tâches/droits/formats/
+résultats, migration 22 et interface attachée à la source sont communs aux
+moteurs ; le premier adaptateur natif est PostgreSQL. Un moteur indisponible
+retourne sa capacité sans introspection racine ni repli lié au protocole.
+
+L’exécuteur conserve au plus huit workers natifs bloquants, un par connexion,
+et huit préparations (expiration après cinq minutes). L’abandon de l’appelant
+annule son jeton enfant ; fenêtre/source/arrêt rejoignent les tâches possédées.
+La restauration conserve l’admission de mutation ordinaire jusqu’au nettoyage
+et ferme les aperçus retenus avant exécution. Les droits appartiennent à la
+fenêtre, les fichiers aussi à la source/session ; seule la sélection de fichier
+préparée est consommée. L’historique JSON versionné lisible est borné à 64 Kio par
+tâche et 100 lignes par lecture. La progression en mémoire ne crée pas de commandes
+auditées répétitives. Au démarrage, les tâches inachevées deviennent interrompues
+ou échouées avant démarrage : aucun plan exécutable ni PID persisté n’est repris,
+aucune restauration n’est rejouée.
