@@ -448,12 +448,12 @@ width; changing the window width does not re-run its read.
 
 ### Manual metadata loading
 
-`Metadata loading…` in the active source’s explorer opens per-connection
+`Metadata preferences…` in the active source’s explorer opens per-connection
 preferences and exact observed catalog/namespace overrides. Minimal preloads
 names, Structure adds supported descriptions/indexes/outgoing keys, Extended
 adds supported definitions. Saving starts no preload and closes no editor.
 Opening a view still requests its own required facets, regardless of the preset.
-The dialog separately offers preload, explicit next page and cancellation, and
+A collapsed Advanced section offers optional preload, explicit next page and cancellation, and
 shows actual fresh/stale/unread/unavailable/failed coverage. A page is limited
 to 128 relations and 60 seconds; larger scopes remain partial. Changing the
 policy stops superseded preloads. An error does not silently retry a save.
@@ -1043,7 +1043,7 @@ the table. The bar wraps on narrow windows and remains reachable by keyboard.
 
 For views and other SQL relations without a proven paging key, MongoDB collections/views/time-series, Hrana 3 Turso relations, ClickHouse, Elasticsearch/OpenSearch and iterable Redis collections, pages follow one retained read ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). The footer says the read stays open between pages and closing the preview releases it. Previous returns the same rows; refresh, filter, sort, size change and reconnection discard continuation and start at page one. Expiry or the history budget produces an explicit error with refresh available. Redis strings and JSON documents have one value; probabilistic structure summaries are not member collections. Older OpenSearch without `_shard_doc` visits index/shard partitions successively; sorting keeps the bounded first-page preview; the footer asks to clear the sort to browse native pages. Future partitions may reflect concurrent changes. OpenSearch 2.0–2.3 keeps its original first-page preview because PIT was introduced in 2.4. No preview issues a total-hit or row count. Single values and structural summaries have no pager. A record source without supported continuation has only a `Preview rows` limit selector and an explanation, with no `Page N` or Previous/Next controls. Routines and metadata-only objects do not gain automatic execution. Availability errors are displayed with retry only when classified transient; the query key includes the session and displayed result, so stale availability never attaches to replacement rows.
 
-**Session-local objects.** The catalog’s `Browse session` selector can inspect an open console. Its temporary objects, private-memory data and attachments are read on that session. MySQL does not enumerate temporary tables, so `Open table by name…` asks for database and table separately, without SQL quoting. Session-local object tabs include the owner in their identity, are not restored after restart and do not move to a new window on their own. Closing the console removes them. Moving the console requires closing its occupied data previews first. Actions that need a fresh execution session are unavailable there; the owning console remains the path for these operations.
+**Session-local objects.** A console’s context menu offers `Browse this console session` when its session can expose metadata. The sidebar has no permanent session selector. While active, a compact indicator names the console and offers `Return to connection browsing`. Choosing this mode changes only the explorer source, never the active connection or console, and executes no script. Returning preserves still-live session-owned tabs. Catalog search (⌘/Ctrl+P) follows the same explorer session, including its cache key and opened-object owner; changing owners rejects late hits from the previous scope. If the console disappears or moves to another window, a quiet status explains the return to connection browsing; affected reads and owner-bound views are retired without closing a session or transaction. Its temporary objects, private-memory data and attachments are read on that session. MySQL does not enumerate temporary tables, so `Open table by name…` asks for database and table separately, without SQL quoting. Session-local object tabs include the owner in their identity, are not restored after restart and do not move to a new window on their own. Closing the console removes them. Moving the console requires closing its occupied data previews first. Actions that need a fresh execution session are unavailable there; the owning console remains the path for these operations.
 
 An original-session preview keeps its source occupied between pages. Conflicting work says to close the data tab or wait for the current operation; it never appears to load forever. Initial columns are read before that reservation. Refresh, filter, sort and page-size changes release the previous source before preparing the replacement; existing received rows can still have other readers. Closing a data tab releases its source explicitly, while a React remount or merely selecting another tab does not close it. Losing a PostgreSQL/MySQL physical session after private state may exist requires an explicit reconnect; a fresh connection never masquerades as the original context. SQL preview reads remain owned while pending when a view hides or remounts; an explicit close or Stop still cancels them. Metadata reads likewise belong to their window and session, not to the sidebar or facet component. Remounts join the pending command and retain its Cancel action. An invalidation queues a fresh read after the current one rather than cancelling the physical owner; explicit cancellation also prevents a queued replacement from starting. Closing the window or source cancels its backend work.
 
@@ -1872,8 +1872,10 @@ as text.
 
 `View schema map` opens a retained workspace tab from the explorer's current
 source or a catalog/namespace/object menu. Source and original session stay
-attached to that tab. Opening the tab performs no native introspection; choose
-a native scope and load it explicitly. Containers are read one level at a time.
+attached to that tab. Opening the visible tab or choosing its native scope starts
+a bounded demand read without a separate Load gesture (ADR-0084). Containers are
+read one level at a time; a sole child may advance automatically, and ambiguous
+children require a choice. No other database or document sample is preloaded.
 Filters affect loaded names, native paths and kinds locally. The canvas has
 pan/zoom controls and a keyboard-accessible object/link list; F6 participates
 only while the tab is visible. Selection reveals an inspector rather than rows.

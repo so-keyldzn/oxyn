@@ -14,7 +14,7 @@ import type { CatalogNode, OpenConnection } from "@/lib/ipc/types"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { hasCapability } from "@/features/session"
 
-/** A retained tab's controller: no native read is started by drawing or selecting. */
+/** Opening/selecting a scope demands its bounded map; visual gestures stay local. */
 export function SchemaMapTab({
   open,
   active,
@@ -49,6 +49,7 @@ export function SchemaMapTab({
     error: null,
   })
   const operation = React.useRef<string | null>(null)
+  const attempted = React.useRef<string | null>(null)
   const live = React.useRef(true)
   const shown = React.useRef(active)
   shown.current = active
@@ -79,7 +80,16 @@ export function SchemaMapTab({
     if (active) return
     setReview(null)
     const id = operation.current
-    if (id) void backend.cancel(id).catch(() => undefined)
+    if (id) {
+      operation.current = null
+      attempted.current = null
+      void backend.cancel(id).catch(() => undefined)
+      setState((previous) => ({
+        ...previous,
+        loading: false,
+        cancelling: false,
+      }))
+    }
   }, [active])
   const generation = () =>
     client.fetchQuery({
@@ -188,6 +198,55 @@ export function SchemaMapTab({
       }
     }
   }
+  const demandKey = JSON.stringify(scope ?? { catalog: null, namespace: null })
+  const demand = React.useRef(load)
+  demand.current = load
+  React.useEffect(() => {
+    if (!active || attempted.current === demandKey) return
+    let abandoned = false
+    // StrictMode's discarded effect must not issue a second native demand.
+    void Promise.resolve().then(() => {
+      if (abandoned || !live.current || !shown.current) return
+      attempted.current = demandKey
+      void demand.current(false)
+    })
+    return () => {
+      abandoned = true
+    }
+  }, [active, demandKey])
+  React.useEffect(() => {
+    if (!active || seeds.current.length || operation.current) return
+    if (scope === null && state.data && !state.data.chooseNamespace) {
+      setScope({ catalog: null, namespace: null })
+      return
+    }
+    const children = scopes.filter(
+      (choice) =>
+        choice.scope.namespace !== null &&
+        (scope?.catalog == null || choice.scope.catalog === scope.catalog)
+    )
+    const oneCatalog =
+      new Set(scopes.map((choice) => choice.scope.catalog)).size <= 1
+    const choice =
+      scope === null &&
+      scopes.length === 1 &&
+      (!state.data || state.data.chooseNamespace)
+        ? scopes[0]
+        : state.data?.chooseNamespace &&
+            scope?.namespace == null &&
+            children.length === 1 &&
+            (scope?.catalog != null || oneCatalog)
+          ? children[0]
+          : undefined
+    if (
+      choice &&
+      scopeKey(choice.scope) !==
+        scopeKey(scope ?? { catalog: null, namespace: null })
+    ) {
+      setScope(choice.scope)
+      setState({ data: null, loading: false, error: null })
+    } else if (choice && scope === null) setScope(choice.scope)
+  }, [active, tree.data, state.data, state.loading, scope])
   const cancel = async () => {
     const id = operation.current
     if (!id) return
@@ -270,7 +329,14 @@ export function SchemaMapTab({
         definitionSupported={hasCapability(open, "OBJECT_DEFINITION")}
         onScope={(key) => {
           const choice = scopes.find((candidate) => candidate.key === key)
-          if (choice) {
+          if (
+            choice &&
+            scopeKey(choice.scope) !==
+              scopeKey(scope ?? { catalog: null, namespace: null })
+          ) {
+            const previous = operation.current
+            operation.current = null
+            if (previous) void backend.cancel(previous).catch(() => undefined)
             setScope(choice.scope)
             seeds.current = []
             setSelected(null)

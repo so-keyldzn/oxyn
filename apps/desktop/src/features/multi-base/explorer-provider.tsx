@@ -34,9 +34,13 @@ import {
 } from "./use-server-explorer"
 
 const ExplorerContext = React.createContext<MultiBaseExplorerProps | null>(null)
-export function ExplorerNavigation() {
+export function ExplorerNavigation({
+  onSkipToCatalog,
+}: { onSkipToCatalog?: () => void } = {}) {
   const props = React.useContext(ExplorerContext)
-  return props ? <MultiBaseExplorer {...props} /> : null
+  return props ? (
+    <MultiBaseExplorer {...props} onSkipToCatalog={onSkipToCatalog} />
+  ) : null
 }
 
 /** One navigation owner per window, independent from retained workspace lifetimes. */
@@ -124,6 +128,7 @@ export function ExplorerProvider({ children }: { children: React.ReactNode }) {
       id,
       name: held?.name ?? row.name,
       location: row.location,
+      driver: held?.driver ?? row.driver,
       error: baseErrors[`connection:${id}`],
       environment: held?.environment ?? row.environment,
       readOnly: held?.readOnly ?? row.readOnly,

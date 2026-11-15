@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn } from "storybook/test"
+import { expect, fn, waitFor } from "storybook/test"
 import { DatabaseConnectionDialog } from "./database-connection-dialog"
 import { postgresDriver, savedConnections } from "./fixtures"
 
@@ -85,5 +85,45 @@ export const Accounts: Story = {
         hasStoredSecrets: true,
       },
     ],
+  },
+}
+
+export const AccountFormScrollStaysAboveActions: Story = {
+  play: async ({ canvasElement }) => {
+    const { within } = await import("storybook/test")
+    const dialog = within(canvasElement.ownerDocument.body).getByRole("dialog")
+    const root = dialog.querySelector<HTMLElement>('[data-slot="scroll-area"]')
+    const viewport = dialog.querySelector<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    const actions = dialog.querySelector<HTMLElement>(
+      '[data-slot="connection-form-actions"]'
+    )
+    if (!root || !viewport || !actions)
+      throw new globalThis.Error(
+        "The account form needs bounded scrolling and persistent actions"
+      )
+    const footerTop = actions.getBoundingClientRect().top
+    const footerOffset = actions.offsetTop
+    expect(viewport.clientHeight).toBeGreaterThan(0)
+    expect(viewport.getBoundingClientRect().height).toBeLessThanOrEqual(
+      root.getBoundingClientRect().height + 1
+    )
+    expect(viewport.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      footerTop + 1
+    )
+    viewport.scrollTop = viewport.scrollHeight
+    const lastChoice = [
+      ...viewport.querySelectorAll<HTMLElement>('[role="radio"]'),
+    ].at(-1)
+    if (!lastChoice)
+      throw new globalThis.Error("Privacy choices must remain reachable")
+    await waitFor(() => {
+      const choice = lastChoice.getBoundingClientRect()
+      const bounds = viewport.getBoundingClientRect()
+      expect(choice.top).toBeGreaterThanOrEqual(bounds.top)
+      expect(choice.bottom).toBeLessThanOrEqual(bounds.bottom)
+      expect(actions.offsetTop).toBe(footerOffset)
+    })
   },
 }

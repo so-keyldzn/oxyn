@@ -1,4 +1,6 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 import { BackendErrorAlert } from "./backend-error-alert"
 import type { BackendFailure } from "./backend-error-alert"
 import { Button } from "@/components/ui/button"
@@ -26,6 +28,11 @@ import {
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Progress } from "@/components/ui/progress"
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
 import { Separator } from "@/components/ui/separator"
 import type {
   MetadataLevel,
@@ -85,6 +92,8 @@ export function MetadataLoadingDialog({
   onCancel: () => void
   onClose: () => void
 }) {
+  const [advanced, setAdvanced] = React.useState(report !== null)
+  const showPreload = advanced || running
   const label = React.useId()
   const scopeLabel = React.useId()
   const overrideLabel = React.useId()
@@ -119,10 +128,11 @@ export function MetadataLoadingDialog({
         showCloseButton={false}
       >
         <DialogHeader>
-          <DialogTitle>Metadata loading</DialogTitle>
+          <DialogTitle>Metadata preferences</DialogTitle>
           <DialogDescription>
-            <bdi>{connection}</bdi> · Preferences do not start reads or change
-            open editors. Each view still reads the facets it needs.
+            <bdi>{connection}</bdi> · Schemas and object details load as you
+            explore. No preparation is required. These preferences only control
+            optional cache warming.
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -231,13 +241,15 @@ export function MetadataLoadingDialog({
           </FieldGroup>
         )}
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={saving || running}
-            onClick={onReload}
-          >
-            Read saved preferences
-          </Button>
+          {(!policy || needsReload || error) && (
+            <Button
+              variant="outline"
+              disabled={saving || running}
+              onClick={onReload}
+            >
+              Read saved preferences
+            </Button>
+          )}
           <Button disabled={!policy || saving || needsReload} onClick={onSave}>
             {saving ? "Saving…" : "Save preferences"}
           </Button>
@@ -248,95 +260,115 @@ export function MetadataLoadingDialog({
             preload.
           </p>
         )}
-        <Separator />
-        <p className="text-sm text-muted-foreground">
-          Preload uses saved preferences for the selected scope: up to 128
-          relations’ details per page. Stop is requested after 60 seconds;
-          protocol cleanup may take longer. Names keep the catalog’s existing
-          limits. Interactive reads take priority. No document samples are read.
-        </p>
-        {report && (
-          <div className="flex flex-col gap-2" role="status" aria-live="polite">
-            <p className="text-sm">
-              {[report.scope.catalog, report.scope.namespace]
-                .filter((name) => name !== null)
-                .join(" / ") || "Source"}{" "}
-              · {report.state} · {report.level} · {report.loaded} read,{" "}
-              {report.cached} already cached, {report.failed} failed,{" "}
-              {report.unavailable} unsupported or requiring sampling.
-            </p>
-            <Progress
-              aria-label="Metadata page progress"
-              max={Math.max(1, report.planned)}
-              value={Math.min(
-                report.planned,
-                report.loaded +
-                  report.cached +
-                  report.failed +
-                  report.unavailable
-              )}
+        <Collapsible open={showPreload} onOpenChange={setAdvanced}>
+          <CollapsibleTrigger
+            render={<Button variant="ghost" className="justify-start" />}
+          >
+            Advanced: optional preload
+            <HugeiconsIcon
+              icon={showPreload ? ArrowDown01Icon : ArrowRight01Icon}
+              data-icon="inline-end"
+              strokeWidth={2}
             />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col gap-3 pt-3">
+            <Separator />
             <p className="text-sm text-muted-foreground">
-              {report.knownRelations ?? "Unknown"} known relations;{" "}
-              {report.unreadRelations} outside this page.{" "}
-              {report.metadataBytes.toLocaleString()} encoded metadata bytes;{" "}
-              {report.elapsedMs.toLocaleString()} ms. Bytes count published
-              patches, not current cache size or network traffic.
+              Optional: keep metadata for this scope ready in the cache. Normal
+              exploration loads what you need without this step. Work is bounded
+              and cancellable; browsing takes priority. Document sampling is
+              never started here.
             </p>
-            {report.availableFacets === null ? (
-              <p className="text-sm text-muted-foreground">
-                Facet coverage is not measured yet.
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Coverage at page end: {report.availableFacets} fresh,{" "}
-                {report.staleFacets} stale and {report.unreadFacets}{" "}
-                unread/evicted supported facets in this page.
-              </p>
+            {report && (
+              <div
+                className="flex flex-col gap-2"
+                role="status"
+                aria-live="polite"
+              >
+                <p className="text-sm">
+                  {[report.scope.catalog, report.scope.namespace]
+                    .filter((name) => name !== null)
+                    .join(" / ") || "Source"}{" "}
+                  · {report.state} · {report.level} · {report.loaded} read,{" "}
+                  {report.cached} already cached, {report.failed} failed,{" "}
+                  {report.unavailable} unsupported or requiring sampling.
+                </p>
+                <Progress
+                  aria-label="Metadata page progress"
+                  max={Math.max(1, report.planned)}
+                  value={Math.min(
+                    report.planned,
+                    report.loaded +
+                      report.cached +
+                      report.failed +
+                      report.unavailable
+                  )}
+                />
+                <p className="text-sm text-muted-foreground">
+                  {report.knownRelations ?? "Unknown"} known relations;{" "}
+                  {report.unreadRelations} outside this page.{" "}
+                  {report.metadataBytes.toLocaleString()} encoded metadata
+                  bytes; {report.elapsedMs.toLocaleString()} ms. Bytes count
+                  published patches, not current cache size or network traffic.
+                </p>
+                {report.availableFacets === null ? (
+                  <p className="text-sm text-muted-foreground">
+                    Facet coverage is not measured yet.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Coverage at page end: {report.availableFacets} fresh,{" "}
+                    {report.staleFacets} stale and {report.unreadFacets}{" "}
+                    unread/evicted supported facets in this page.
+                  </p>
+                )}
+                {report.stopped && (
+                  <p className="text-sm">
+                    {report.stopped === "policyChanged"
+                      ? "Saved preferences changed."
+                      : report.stopped === "deadline"
+                        ? "The preload time budget ended."
+                        : report.stopped === "sourceClosed"
+                          ? "The owning source closed."
+                          : report.stopped === "sourceChanged"
+                            ? "The source metadata generation changed."
+                            : report.stopped === "continuationUnavailable"
+                              ? "The next page cannot be represented within the identifier limit."
+                              : "Preload was stopped."}{" "}
+                    Completed reads remain cached.
+                  </p>
+                )}
+                {report.samplingRequired > 0 && (
+                  <p className="text-sm">
+                    {report.samplingRequired} descriptions need explicit
+                    inference from the object’s Structure tab.
+                  </p>
+                )}
+                {report.failures.length > 0 && (
+                  <ul className="list-inside list-disc text-sm">
+                    {report.failures.map((failure, index) => (
+                      <li key={index}>
+                        <bdi>
+                          {failure.relation ??
+                            (failure.facet === "names"
+                              ? "Scope names"
+                              : "Object name omitted")}
+                        </bdi>
+                        : {failure.facet} not read.
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {report.omittedFailures > 0 && (
+                  <p>{report.omittedFailures} further failures omitted.</p>
+                )}
+              </div>
             )}
-            {report.stopped && (
-              <p className="text-sm">
-                {report.stopped === "policyChanged"
-                  ? "Saved preferences changed."
-                  : report.stopped === "deadline"
-                    ? "The preload time budget ended."
-                    : report.stopped === "sourceClosed"
-                      ? "The owning source closed."
-                      : report.stopped === "sourceChanged"
-                        ? "The source metadata generation changed."
-                        : report.stopped === "continuationUnavailable"
-                          ? "The next page cannot be represented within the identifier limit."
-                          : "Preload was stopped."}{" "}
-                Completed reads remain cached.
-              </p>
+            {running && !report && (
+              <p role="status">Starting metadata preload…</p>
             )}
-            {report.samplingRequired > 0 && (
-              <p className="text-sm">
-                {report.samplingRequired} descriptions need explicit inference
-                from the object’s Structure tab.
-              </p>
-            )}
-            {report.failures.length > 0 && (
-              <ul className="list-inside list-disc text-sm">
-                {report.failures.map((failure, index) => (
-                  <li key={index}>
-                    <bdi>
-                      {failure.relation ??
-                        (failure.facet === "names"
-                          ? "Scope names"
-                          : "Object name omitted")}
-                    </bdi>
-                    : {failure.facet} not read.
-                  </li>
-                ))}
-              </ul>
-            )}
-            {report.omittedFailures > 0 && (
-              <p>{report.omittedFailures} further failures omitted.</p>
-            )}
-          </div>
-        )}
-        {running && !report && <p role="status">Starting metadata preload…</p>}
+          </CollapsibleContent>
+        </Collapsible>
         <DialogFooter>
           <Button
             variant="outline"
@@ -346,31 +378,36 @@ export function MetadataLoadingDialog({
           >
             Close
           </Button>
-          {running ? (
-            <Button variant="outline" disabled={cancelling} onClick={onCancel}>
-              {cancelling ? "Cancelling…" : "Cancel preload"}
-            </Button>
-          ) : (
-            <>
+          {showPreload &&
+            (running ? (
               <Button
                 variant="outline"
-                disabled={
-                  !policy || !selected || saving || needsReload || dirty
-                }
-                onClick={() => onPreload(false)}
+                disabled={cancelling}
+                onClick={onCancel}
               >
-                Preload scope
+                {cancelling ? "Cancelling…" : "Cancel preload"}
               </Button>
-              {report?.next && (
+            ) : (
+              <>
                 <Button
-                  disabled={saving || needsReload || dirty}
-                  onClick={() => onPreload(true)}
+                  variant="outline"
+                  disabled={
+                    !policy || !selected || saving || needsReload || dirty
+                  }
+                  onClick={() => onPreload(false)}
                 >
-                  Load next page
+                  Preload scope
                 </Button>
-              )}
-            </>
-          )}
+                {report?.next && (
+                  <Button
+                    disabled={saving || needsReload || dirty}
+                    onClick={() => onPreload(true)}
+                  >
+                    Load next page
+                  </Button>
+                )}
+              </>
+            ))}
         </DialogFooter>
       </DialogContent>
     </Dialog>

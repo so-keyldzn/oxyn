@@ -6,7 +6,8 @@ import {
   Add01Icon,
   Cancel01Icon,
   CodeIcon,
-  DashboardSquare01Icon,
+  ChartRelationshipIcon,
+  DatabaseSync01Icon,
   Files01Icon,
   Layers01Icon,
   TableIcon,
@@ -63,7 +64,13 @@ function stateOf(tab: WorkspaceTabItem): keyof typeof STATE_LABEL | null {
 
 function iconOf(tab: WorkspaceTabItem): IconSvgElement {
   if (tab.kind === "console") return CodeIcon
-  if (tab.kind !== "object") return DashboardSquare01Icon
+  if (tab.kind !== "object") {
+    return tab.kind === "map"
+      ? ChartRelationshipIcon
+      : tab.kind === "native"
+        ? DatabaseSync01Icon
+        : TableIcon
+  }
   if (tab.objectKind.includes("view")) return ViewIcon
   // The catalog tree's icon for the same kind: a document collection.
   if (tab.objectKind === "collection") return Files01Icon

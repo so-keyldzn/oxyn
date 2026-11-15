@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="1eec52a8519d" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-engines.md" sha256="0b25d0f517a0" -->
 
 # Recherche sur les schémas : matrice des moteurs
 
@@ -314,3 +314,15 @@ exports de résultats et fonctions de schéma restent indépendants ; aucune
 approximation SQL/copie de fichier n’est présentée comme sauvegarde native.
 Un adaptateur doit prouver sauvegarde cohérente, authentification, destination
 et annulation propres au moteur à travers la frontière commune.
+
+
+## Précision de lecture visible — 2026-11-15
+
+L’[ADR-0084](../adr/0084-load-visible-schema-scopes-on-demand.md) fait évoluer
+J03/J04/J05 : ouvrir la carte visible ou choisir son périmètre lance la lecture
+bornée sans bouton Charger. Une ambiguïté native demande un choix ; seul un enfant
+listé unique peut être suivi automatiquement. Commun à tous les moteurs existants,
+sans parcours massif, lien deviné, échantillon implicite ou réouverture SQLite/
+DuckDB. Actualisation, annulation et couverture partielle conservées. Préchargement
+global facultatif sous Avancé, sans prérequis pour structure, définitions,
+complétion ou cartes.

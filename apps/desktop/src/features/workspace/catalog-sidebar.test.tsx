@@ -71,6 +71,26 @@ vi.mock("@/components/ui/sidebar", () => ({
     <div>{children}</div>
   ),
   SidebarRail: () => null,
+  useSidebar: () => ({ setOpen: () => undefined }),
+  SidebarGroup: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  SidebarMenu: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  SidebarMenuItem: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  SidebarMenuButton: ({
+    children,
+    onClick,
+  }: {
+    children: React.ReactNode
+    onClick?: () => void
+  }) => <button onClick={onClick}>{children}</button>,
+}))
+vi.mock("@/components/oxyn/catalog-source-tools", () => ({
+  CatalogSourceTools: () => null,
 }))
 vi.mock("@/components/oxyn/catalog-panel", () => ({
   CatalogPanel: ({

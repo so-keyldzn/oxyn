@@ -400,3 +400,15 @@ refused rather than overwritten, and SQL-script restore is not offered. SQLite
 and every other unsupported adapter retain an explanatory unavailable state,
 without root introspection or an invented backup fallback. Validation evidence
 and remaining platform/manual limits live in the completion ledger.
+
+
+## Visible-demand refinement — 2026-11-15
+
+[ADR-0084](../adr/0084-load-visible-schema-scopes-on-demand.md) changes J03/J04/J05
+interaction: opening the visible map or choosing a scope starts its bounded
+demand without a separate Load gesture. Native levels remain explicit when
+ambiguous; only a sole listed child may advance automatically. This applies to
+all existing engines without eager traversal, inferred links, implicit samples
+or reopening SQLite/DuckDB sources. Refresh, cancel and partial coverage remain.
+Bulk prefetch is optional under Advanced in metadata preferences, never a
+prerequisite for structure, definitions, completion or maps.

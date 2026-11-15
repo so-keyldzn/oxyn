@@ -48,10 +48,10 @@ export const Initial: Story = {
   args: { state: nativeViewFixture({ support: null, historyKnown: false }) },
   play: async ({ canvasElement, args }) => {
     const c = within(canvasElement)
-    await expect(c.getByText("Read native transfer availability")).toBeVisible()
+    await expect(c.getByText("Choose your transfer")).toBeVisible()
     await expect(args.onStart).not.toHaveBeenCalled()
     await userEvent.click(
-      c.getByRole("button", { name: "Read availability and history" })
+      c.getByRole("button", { name: "Refresh transfer status" })
     )
     await expect(args.onReload).toHaveBeenCalled()
   },
@@ -370,7 +370,7 @@ export const ReadingAvailabilityAndHistory: Story = {
     const c = within(canvasElement)
     await expect(c.queryByText("No native transfers yet")).toBeNull()
     await userEvent.click(
-      c.getByRole("button", { name: "Cancel availability/history reads" })
+      c.getByRole("button", { name: "Cancel status refresh" })
     )
     await expect(args.onCancelRead).toHaveBeenCalledTimes(1)
     await expect(args.onStart).not.toHaveBeenCalled()

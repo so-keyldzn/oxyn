@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react"
 import { QueryClientProvider } from "@tanstack/react-query"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createQueryClient } from "@/lib/query-client"
 import { backend } from "@/lib/ipc/client"
 import type { OpenConnection } from "@/lib/ipc/types"
@@ -24,6 +24,21 @@ const opened = (connection: string) =>
     readOnly: true,
     console: { session: `${connection}-console` },
   }) as OpenConnection
+
+// JSDOM has no layout; model the bounded list viewport rather than replacing its behavior.
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
+      return this.tagName === "LI" ? 32 : 160
+    }
+  )
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(320)
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return new DOMRect(0, 0, 320, this.tagName === "LI" ? 32 : 160)
+    }
+  )
+})
 
 afterEach(() => {
   cleanup()
@@ -67,7 +82,7 @@ describe("the window explorer integration", () => {
     )
     const row = (id: string) =>
       screen.getByRole("button", {
-        name: new RegExp(`^${id}.*Saved destination`),
+        name: new RegExp(`^${id} —`),
       })
     fireEvent.click(row("a"))
     expect(session.state.open?.connection).toBe("b")

@@ -143,7 +143,7 @@ export function SchemaMapView({
         </div>
       </div>
       <FieldGroup className="flex-row flex-wrap items-end gap-3">
-        <Field className="min-w-48 flex-1" data-disabled={state.loading}>
+        <Field className="min-w-48 flex-1">
           <FieldTitle id={scopeLabel}>Native scope</FieldTitle>
           <Select
             items={scopes.map((scope) => ({
@@ -151,13 +151,12 @@ export function SchemaMapView({
               label: scope.label,
             }))}
             value={scopeKey}
-            disabled={state.loading}
             onValueChange={(key) => {
               if (key !== null) onScope(key)
             }}
           >
             <SelectTrigger aria-labelledby={scopeLabel} className="w-full">
-              <SelectValue placeholder="Read available scopes first" />
+              <SelectValue placeholder="Choose a database or schema" />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
@@ -170,20 +169,13 @@ export function SchemaMapView({
             </SelectContent>
           </Select>
         </Field>
-        <Button disabled={state.loading} onClick={() => onLoad(false)}>
-          {selectionLabel
-            ? `Load ${selectionLabel}`
-            : scopeKey === null
-              ? "Read available scopes"
-              : "Load selected scope"}
-        </Button>
         {selectionLabel && onLoadScope && (
           <Button
             variant="outline"
             disabled={state.loading}
             onClick={onLoadScope}
           >
-            Load whole selected scope
+            Show entire scope
           </Button>
         )}
         <Field className="min-w-48 flex-1">
@@ -205,8 +197,8 @@ export function SchemaMapView({
       )}
       {state.loading && (
         <p role="status" className="text-sm text-muted-foreground">
-          Reading bounded metadata on the original session. Documentary samples
-          are excluded.
+          Reading this scope’s structure on the original connection. No records
+          are sampled.
         </p>
       )}
       {(state.stale ||
@@ -222,21 +214,20 @@ export function SchemaMapView({
             {projection.coverage.drawnObjects} of{" "}
             {projection.coverage.knownObjects} known objects
           </Badge>
-          <Badge variant="outline">
-            {projection.coverage.omittedObjects} objects omitted
-          </Badge>
-          <Badge variant="outline">
-            {projection.coverage.omittedFields} fields omitted
-          </Badge>
-          <Badge variant="outline">
-            {projection.coverage.omittedLinks} links omitted
-          </Badge>
-          <Badge variant="outline">
-            {projection.coverage.unreadObjects} unread descriptions
-          </Badge>
-          <Badge variant="outline">
-            {projection.coverage.unresolvedLinks} unloaded endpoints
-          </Badge>
+          {[
+            [projection.coverage.omittedObjects, "objects not shown"],
+            [projection.coverage.omittedFields, "fields not shown"],
+            [projection.coverage.omittedLinks, "links not shown"],
+            [projection.coverage.unreadObjects, "structures not read"],
+            [projection.coverage.unresolvedLinks, "links outside this map"],
+            [projection.coverage.staleObjects, "outdated structures"],
+          ].map(([count, label]) =>
+            typeof count === "number" && count > 0 ? (
+              <Badge key={label} variant="outline">
+                {count} {label}
+              </Badge>
+            ) : null
+          )}
         </div>
       )}
       {data && (data.issues.length > 0 || data.stopped) && (
@@ -277,12 +268,12 @@ export function SchemaMapView({
                       ? "No observed object to draw"
                       : data
                         ? "No objects reported in this scope"
-                        : "Choose a scope to draw its metadata"}
+                        : "Choose a database or schema"}
             </EmptyTitle>
             <EmptyDescription>
               {data?.chooseNamespace
-                ? "Only the selected container level was read. Select its schema/database and load it explicitly."
-                : "Objects remain useful without foreign keys. No rows are read by drawing, panning, filtering or selecting."}
+                ? "Only the selected container level was read. Select its schema/database to show the map."
+                : "Objects remain useful without foreign keys. Panning, filtering and object selection read no rows. Scope selection reads only bounded metadata."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -382,15 +373,35 @@ export function SchemaMapView({
           )}
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        Foreign keys are reported constraints, not name-based guesses. Native
-        membership and field nesting have separate meanings. Incoming links
-        cover loaded objects only.{" "}
-        {projection?.dependenciesSupported
-          ? ""
-          : "Structured technical dependencies are unavailable from the current provider contract."}{" "}
-        No complete database schema is claimed.
-      </p>
+      <Collapsible className="text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p>Loaded scope only · this is not a complete database map.</p>
+          <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+            How to read this map
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent className="flex flex-col gap-1 pt-2">
+          <p>
+            Foreign keys are reported constraints, never guesses based on names.
+            Database membership and nested fields are shown as different kinds
+            of structure.
+          </p>
+          <p>
+            Incoming links cover loaded objects only. Objects and links outside
+            the selected scope may not appear.
+          </p>
+          {!projection?.dependenciesSupported && (
+            <p>
+              Technical dependencies are not reported by the current database
+              driver.
+            </p>
+          )}
+          <p>
+            Moving, filtering and inspecting objects reads no rows. Documentary
+            sampling always requires a separate confirmation.
+          </p>
+        </CollapsibleContent>
+      </Collapsible>
     </section>
   )
 }

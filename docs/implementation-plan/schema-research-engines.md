@@ -295,3 +295,15 @@ not yet have native transfer adapters. Their existing retained-result export and
 schema features remain independent; no SQL or file-copy approximation is labelled
 a native backup. Adapter additions must prove engine-specific consistent backup,
 authentication, destination binding and cancellation through the common boundary.
+
+
+## Visible-demand refinement — 2026-11-15
+
+[ADR-0084](../adr/0084-load-visible-schema-scopes-on-demand.md) changes J03/J04/J05
+interaction: opening the visible map or choosing a scope starts its bounded
+demand without a separate Load gesture. Native levels remain explicit when
+ambiguous; only a sole listed child may advance automatically. This applies to
+all existing engines without eager traversal, inferred links, implicit samples
+or reopening SQLite/DuckDB sources. Refresh, cancel and partial coverage remain.
+Bulk prefetch is optional under Advanced in metadata preferences, never a
+prerequisite for structure, definitions, completion or maps.

@@ -6,6 +6,8 @@ import { previewKey } from "@/features/metadata/preview-store"
 import { previews } from "@/features/metadata/preview-state"
 import { OpenSessionTable } from "@/components/oxyn/open-session-table"
 import { CatalogSource } from "@/components/oxyn/catalog-source"
+import { useCatalogBrowsing } from "./use-catalog-browsing"
+import { sessionViewRetirement } from "./session-view-retirement"
 import * as React from "react"
 import {
   disconnectRequests,
@@ -245,7 +247,6 @@ export function WorkspaceScreen({
   React.useEffect(() => {
     if (focusAssistant > 0) visibleAssistantField()?.focus()
   }, [focusAssistant])
-  const [catalogSource, setCatalogSource] = React.useState("")
   const [objects, setObjects] = React.useState<Array<ObjectTab>>([])
   const [retained, setRetained] = React.useState<Array<ResultTab>>([])
   /** Result tabs with an export under way: they do not close meanwhile. */
@@ -352,6 +353,15 @@ export function WorkspaceScreen({
   const native = useNativeTabs(activate)
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
+  const browsing = useCatalogBrowsing(
+    open,
+    work.entries.map((entry) => ({
+      key: entry.key,
+      session: entry.session,
+      title: work.meta[entry.key]?.title ?? entry.seed.title,
+    })),
+    hasCatalog
+  )
 
   const asideItem =
     inspectors.find((item) => item.id === asideActive) ?? inspectors[0]
@@ -716,10 +726,19 @@ export function WorkspaceScreen({
   // click in the tree does.
   useActionSource(
     "catalog",
-    visible && hasCatalog(open) ? { connection: open.connection } : null,
+    visible && hasCatalog(browsing.owner ?? open)
+      ? {
+          connection: open.connection,
+          session: (browsing.owner ?? open).session,
+        }
+      : null,
     {
       openObject: (object) =>
-        openObject({ ...relatedNode(object.address), ...object, loaded: true }),
+        openObject(
+          { ...relatedNode(object.address), ...object, loaded: true },
+          undefined,
+          browsing.owner
+        ),
     }
   )
 
@@ -962,6 +981,7 @@ export function WorkspaceScreen({
         toTheRight: right.length,
         saved: handle?.closeReasons().hasSavedCopy ?? false,
         moveBlocked: moveBlocked(key),
+        browseBlocked: isConsole ? browsing.reason(key) : null,
       },
       actions: {
         close: () => void closeTab(key),
@@ -981,6 +1001,9 @@ export function WorkspaceScreen({
         // saved query to show.
         revealInLibrary: isConsole ? () => setLeftView("library") : undefined,
         openInNewWindow: () => void moveToWindow(key),
+        browseSession: () => {
+          if (browsing.browse(key)) setLeftView("catalog")
+        },
       },
     }
   }
@@ -990,39 +1013,21 @@ export function WorkspaceScreen({
     (entry) => entry.key === lastConsole.current
   )
 
-  const sourceEntry = work.entries.find(
-    (entry) => entry.session?.session === catalogSource
-  )
-  const sourceOpen = sourceEntry?.session
-    ? {
-        ...open,
-        session: sourceEntry.session.session,
-        capabilities: sourceEntry.session.capabilities,
-        readOnly: sourceEntry.session.readOnly,
-      }
-    : undefined
-  const sourceChoices = work.entries.flatMap((entry) =>
-    entry.session
-      ? [{ id: entry.session.session, label: entry.seed.title || "Console" }]
-      : []
-  )
+  const sourceOpen = browsing.owner
   React.useEffect(() => {
-    const live = new Set(
+    const { live, retired } = sessionViewRetirement(
+      open.session,
       work.entries.flatMap((entry) =>
         entry.session ? [entry.session.session] : []
-      )
+      ),
+      [...objectsRef.current, ...maps.entries, ...native.entries]
     )
     setObjects((current) =>
       current.filter((tab) => !tab.owner || live.has(tab.owner.session))
     )
-    live.add(open.session)
     maps.retainOwners(live)
     native.retainOwners(live)
-    if (
-      [...maps.entries, ...native.entries].some(
-        (tab) => tab.key === activeRef.current && !live.has(tab.owner.session)
-      )
-    ) {
+    if (activeRef.current !== null && retired.has(activeRef.current)) {
       const next = work.entries[0]?.key ?? null
       activeRef.current = next
       if (next) activate(next)
@@ -1042,28 +1047,30 @@ export function WorkspaceScreen({
               open={sourceOpen ?? open}
               sessionScoped={sourceOpen !== undefined}
               sourceSelector={
-                <>
-                  <CatalogSource
-                    value={sourceOpen ? catalogSource : ""}
-                    choices={sourceChoices}
-                    onChange={setCatalogSource}
-                  />
-                  {sourceOpen && open.driver === "mysql" && (
-                    <OpenSessionTable
-                      onOpen={(database, table) =>
-                        openObject(
-                          relatedNode({
-                            catalog: null,
-                            namespace: database,
-                            relation: table,
-                          }),
-                          undefined,
-                          sourceOpen
-                        )
-                      }
+                browsing.name !== null || browsing.notice !== null ? (
+                  <>
+                    <CatalogSource
+                      name={browsing.name}
+                      notice={browsing.notice}
+                      onReturn={browsing.returnToConnection}
                     />
-                  )}
-                </>
+                    {sourceOpen && open.driver === "mysql" && (
+                      <OpenSessionTable
+                        onOpen={(database, table) =>
+                          openObject(
+                            relatedNode({
+                              catalog: null,
+                              namespace: database,
+                              relation: table,
+                            }),
+                            undefined,
+                            sourceOpen
+                          )
+                        }
+                      />
+                    )}
+                  </>
+                ) : undefined
               }
               selected={
                 activeObject ? addressKey(activeObject.node.address) : null

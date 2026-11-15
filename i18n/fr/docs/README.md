@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="602972d1be4c" -->
+<!-- oxyn-translation source="docs/README.md" sha256="d150aa3c2de8" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -27,6 +27,10 @@ Ils sont écrits en anglais, et chacun a son miroir français dans
 | [RESEARCH-NOTES.md](RESEARCH-NOTES.md) | toute version et valeur externe, avec sa source et sa date |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | l'ordre des phases et leurs portes de sortie — le seul document du reste à faire |
 | [RELEASE.md](RELEASE.md) | builds des paquets GitHub, configuration de la signature Apple et publication des brouillons |
+
+
+L’[audit UI et lecture à la demande](implementation-plan/ui-polish-audit.md)
+consigne les changements sidebar/session et les mesures de volume.
 
 ## Décisions d'architecture (ADR)
 
@@ -114,6 +118,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Charger les facettes indépendamment et rendre le préchargement explicite | accepté |
 | [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Construire les cartes de schéma depuis des métadonnées de provenance explicite | accepté |
 | [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Exécuter les transferts natifs comme tâches autorisées et possédées | accepté |
+| [0084](adr/0084-load-visible-schema-scopes-on-demand.md) | Charger à la demande les périmètres de schéma visibles | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

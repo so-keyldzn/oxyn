@@ -24,6 +24,9 @@ They are written in English, and each has a French mirror in
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | the order of the phases and their exit gates — the only document of the remaining work |
 | [RELEASE.md](RELEASE.md) | GitHub package builds, Apple signing setup and draft publication |
 
+[UI audit and demand-loading polish](implementation-plan/ui-polish-audit.md) records
+the screenshot-driven sidebar/session changes and measured volume checks.
+
 ## Architecture decisions (ADRs)
 
 To locate the boards and their states before implementation, see
@@ -110,6 +113,7 @@ To locate the boards and their states before implementation, see
 | [0081](adr/0081-load-catalog-facets-independently-with-explicit-prefetch.md) | Load catalog facets independently and make bulk prefetch explicit | accepted |
 | [0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md) | Project schema maps from catalog metadata with explicit provenance | accepted |
 | [0083](adr/0083-run-native-database-transfers-as-authorized-jobs.md) | Run native database transfers as authorized, owned jobs | accepted |
+| [0084](adr/0084-load-visible-schema-scopes-on-demand.md) | Load visible schema scopes on demand | proposed |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

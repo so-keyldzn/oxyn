@@ -82,6 +82,8 @@ export interface CatalogObject {
 export interface CatalogSourceState {
   /** The connection whose loaded catalog ⌘P searches. */
   connection: string
+  /** Exact explorer owner; omitted only by connection-only legacy consumers. */
+  session?: string
 }
 
 export interface CatalogSourceActions {

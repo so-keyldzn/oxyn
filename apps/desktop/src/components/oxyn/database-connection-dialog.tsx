@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils"
 import { ConnectionForm } from "./connection-form"
 import type { ConnectionPrefill } from "./connection-form"
 import { BackendErrorAlert } from "./backend-error-alert"
@@ -38,10 +39,15 @@ export function DatabaseConnectionDialog(p: DatabaseConnectionDialogProps) {
       }}
     >
       <DialogContent
-        className="flex max-h-[90vh] flex-col overflow-y-auto sm:max-w-2xl"
+        className={cn(
+          "flex max-h-[90vh] flex-col sm:max-w-2xl",
+          p.candidates.length === 0 && !p.saved
+            ? "h-[min(90vh,52rem)] overflow-hidden"
+            : "overflow-y-auto"
+        )}
         showCloseButton={!p.submitting}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             Open database · <bdi>{p.database}</bdi>
           </DialogTitle>

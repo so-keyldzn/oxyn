@@ -13,10 +13,11 @@ import { SchemaMapTab } from "./schema-map-tab"
 import { mapFixture } from "@/components/oxyn/schema-map-fixtures"
 import type { SchemaMapView } from "@/components/oxyn/schema-map-view"
 import type { SchemaMapLoaded, SchemaMapRequest } from "@/lib/ipc/schema-map"
-import type { OpenConnection } from "@/lib/ipc/types"
+import type { CatalogNode, OpenConnection } from "@/lib/ipc/types"
 
 const ipc = vi.hoisted(() => ({
   next: 0,
+  nodes: [] as Array<CatalogNode>,
   cancel: vi.fn(async (_id: string) => undefined),
   sample: vi.fn(),
   reads: [] as Array<{
@@ -42,7 +43,10 @@ vi.mock("@/lib/ipc/schema-map", () => ({
   },
 }))
 vi.mock("@/lib/ipc/metadata", () => ({
-  metadata: { catalogTree: async () => [], refreshRelationFacet: ipc.sample },
+  metadata: {
+    catalogTree: async () => ipc.nodes,
+    refreshRelationFacet: ipc.sample,
+  },
 }))
 vi.mock("@/features/metadata/refresh-signals", () => ({
   useRefreshSignal: () => undefined,
@@ -60,6 +64,16 @@ vi.mock("@/components/oxyn/schema-map-view", () => ({
         Refresh map
       </button>
       <button onClick={props.onCancel}>Cancel map</button>
+      <button
+        onClick={() =>
+          props.onScope(
+            props.scopes.find((choice) => choice.scope.catalog === "other")
+              ?.key ?? ""
+          )
+        }
+      >
+        Other scope
+      </button>
       <p>{props.state.error?.message}</p>
       <p>{props.state.data?.projection.source.session}</p>
       <p>{props.state.loading ? "Reading" : "Idle"}</p>
@@ -79,34 +93,44 @@ function fixture(session = "fixture-owner") {
   map.projection.source.session = session
   return map
 }
-function show(session = "fixture-owner") {
+function show(session = "fixture-owner", active = true) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
+  const frame = (visible: boolean) => (
     <StrictMode>
       <QueryClientProvider client={client}>
         <SchemaMapTab
           open={owner(session)}
-          active
+          active={visible}
           initialScope={null}
           onOpenObject={vi.fn()}
         />
       </QueryClientProvider>
     </StrictMode>
   )
+  const rendered = render(frame(active))
+  return {
+    ...rendered,
+    setActive: (visible: boolean) => rendered.rerender(frame(visible)),
+  }
 }
 beforeEach(() => {
   ipc.reads.length = 0
+  ipc.nodes = []
   ipc.next = 0
   ipc.cancel.mockClear()
   ipc.sample.mockClear()
 })
 afterEach(cleanup)
-it("mounting, including StrictMode, does not load native metadata or sample rows", async () => {
+it("opening a visible map loads one bounded demand, including StrictMode, without sampling", async () => {
   show()
-  await waitFor(() => expect(screen.getByText("Idle")).toBeTruthy())
-  expect(ipc.reads).toHaveLength(0)
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  expect(ipc.reads[0]?.request).toMatchObject({
+    scope: { catalog: null, namespace: null },
+    refresh: false,
+    expand: null,
+  })
   expect(ipc.sample).not.toHaveBeenCalled()
 })
 it("coalesces repeated clicks while loading and retains the exact original owner", async () => {
@@ -161,4 +185,59 @@ it("refuses a response for another session and preserves the previous map after 
   })
   expect(screen.getByText("original file removed")).toBeTruthy()
   expect(screen.getByText("fixture-owner")).toBeTruthy()
+})
+
+it("switching scope cancels the previous demand and rejects its late response", async () => {
+  ipc.nodes = ["first", "other"].map(
+    (name) =>
+      ({
+        kind: "catalog",
+        name,
+        address: { catalog: name, namespace: null, relation: null },
+        children: [],
+        holdsRecords: false,
+        system: false,
+        comment: null,
+        loaded: false,
+        stale: false,
+        virtualTable: null,
+        shadowOf: null,
+      }) satisfies CatalogNode
+  )
+  show()
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  const old = ipc.reads[0]
+  fireEvent.click(screen.getByText("Other scope"))
+  await waitFor(() => expect(ipc.reads).toHaveLength(2))
+  expect(ipc.cancel).toHaveBeenCalledWith(old?.id)
+  expect(ipc.reads[1]?.request.scope.catalog).toBe("other")
+  await act(async () => {
+    old?.resolve(fixture("late-owner"))
+  })
+  expect(screen.queryByText("late-owner")).toBeNull()
+  await act(async () => {
+    ipc.reads[1]?.resolve(fixture())
+  })
+  expect(screen.getByText("fixture-owner")).toBeTruthy()
+  expect(ipc.sample).not.toHaveBeenCalled()
+})
+
+it("a hidden retained map does not demand metadata and cancels only its own visible read", async () => {
+  const view = show("fixture-owner", false)
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(ipc.reads).toHaveLength(0)
+  view.setActive(true)
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  const first = ipc.reads[0]
+  view.setActive(false)
+  expect(ipc.cancel).toHaveBeenCalledWith(first?.id)
+  await act(async () => {
+    first?.resolve(fixture("hidden-late"))
+  })
+  expect(screen.queryByText("hidden-late")).toBeNull()
+  view.setActive(true)
+  await waitFor(() => expect(ipc.reads).toHaveLength(2))
+  expect(ipc.sample).not.toHaveBeenCalled()
 })

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="54119915a35a" -->
+<!-- oxyn-translation source="docs/implementation-plan/schema-research-journeys.md" sha256="5d0366b52e06" -->
 
 # Recherche sur les schémas : parcours utilisateur
 
@@ -438,3 +438,15 @@ Les fichiers existants sont toujours refusés ; la restauration SQL n’est pas
 proposée. SQLite et les autres adaptateurs indisponibles gardent une explication,
 sans introspection racine ni sauvegarde de substitution. Les preuves de validation
 et limites de plateforme/acceptation sont dans le bilan.
+
+
+## Précision de lecture visible — 2026-11-15
+
+L’[ADR-0084](../adr/0084-load-visible-schema-scopes-on-demand.md) fait évoluer
+J03/J04/J05 : ouvrir la carte visible ou choisir son périmètre lance la lecture
+bornée sans bouton Charger. Une ambiguïté native demande un choix ; seul un enfant
+listé unique peut être suivi automatiquement. Commun à tous les moteurs existants,
+sans parcours massif, lien deviné, échantillon implicite ou réouverture SQLite/
+DuckDB. Actualisation, annulation et couverture partielle conservées. Préchargement
+global facultatif sous Avancé, sans prérequis pour structure, définitions,
+complétion ou cartes.

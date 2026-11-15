@@ -76,6 +76,8 @@ export interface TabMenuState {
   saved: boolean
   /** Why the tab cannot open in a new window now, or `null` (ADR-0043). */
   moveBlocked: string | null
+  /** Why this console cannot currently be browsed; no physical context change. */
+  browseBlocked?: string | null
 }
 
 export interface TabMenuActions {
@@ -84,6 +86,7 @@ export interface TabMenuActions {
   closeRight?: () => void
   closeAll?: () => void
   duplicate?: () => void
+  browseSession?: () => void
   rename?: () => void
   revealInLibrary?: () => void
   openInNewWindow?: () => void

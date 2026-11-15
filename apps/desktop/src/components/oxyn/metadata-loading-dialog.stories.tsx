@@ -73,6 +73,9 @@ export const Initial: Story = {
       overrides: [],
     })
     await expect(args.onPreload).not.toHaveBeenCalled()
+    await expect(
+      screen.queryByRole("button", { name: "Read saved preferences" })
+    ).toBeNull()
     await userEvent.click(
       screen.getByRole("button", { name: "Save preferences" })
     )
@@ -84,6 +87,9 @@ export const Reading: Story = { args: { policy: null } }
 export const Empty: Story = {
   args: { scopes: [], scopeKey: null },
   play: async () => {
+    await userEvent.click(
+      screen.getByRole("button", { name: "Advanced: optional preload" })
+    )
     await expect(
       screen.getByRole("button", { name: "Preload scope" })
     ).toBeDisabled()
@@ -175,6 +181,9 @@ export const Error: Story = {
 export const Unsaved: Story = {
   args: { dirty: true },
   play: async () => {
+    await userEvent.click(
+      screen.getByRole("button", { name: "Advanced: optional preload" })
+    )
     await expect(
       screen.getByRole("button", { name: "Preload scope" })
     ).toBeDisabled()
@@ -206,5 +215,23 @@ export const Evicted: Story = {
     await waitFor(() =>
       expect(screen.getByText(/184 unread\/evicted/)).toBeVisible()
     )
+  },
+}
+
+export const OptionalPreloadStartsCollapsed: Story = {
+  play: async ({ args }) => {
+    await expect(
+      screen.queryByRole("button", { name: "Preload scope" })
+    ).toBeNull()
+    await waitFor(() =>
+      expect(screen.getByText(/No preparation is required/)).toBeVisible()
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Advanced: optional preload" })
+    )
+    await expect(
+      screen.getByRole("button", { name: "Preload scope" })
+    ).toBeVisible()
+    await expect(args.onPreload).not.toHaveBeenCalled()
   },
 }

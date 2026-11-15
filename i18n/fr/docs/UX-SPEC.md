@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3e1798ecae67" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="32f61070e084" -->
 
 
 
@@ -483,13 +483,14 @@ relance pas sa lecture.
 
 ### Chargement manuel des métadonnées
 
-`Metadata loading…` dans l’explorateur de la source active ouvre les préférences
+`Metadata preferences…` dans l’explorateur de la source active ouvre les préférences
 de connexion et les dérogations exactes de catalogue/espace de noms observé.
 Minimal précharge les noms ; Structure ajoute descriptions, index et clés
 sortantes pris en charge ; Étendu ajoute les définitions disponibles. Enregistrer
 ne précharge rien et ne ferme aucun éditeur. Chaque vue demande toujours ses
-propres facettes nécessaires, indépendamment du préréglage. Le dialogue sépare
-préchargement, page suivante explicite et annulation, et montre la couverture
+propres facettes nécessaires, indépendamment du préréglage. Une section Avancé
+repliée présente le préchargement facultatif, la page suivante et l’annulation,
+et montre la couverture
 fraîche, périmée, non lue, indisponible ou échouée. Une page est bornée à
 128 relations et 60 secondes ; les grands périmètres restent partiels. Modifier
 la politique arrête les préchargements remplacés. Une erreur ne rejoue aucun
@@ -1112,7 +1113,7 @@ table. La barre se replie sur une fenêtre étroite et reste accessible au clavi
 
 Pour les vues et autres relations SQL sans clé de pagination prouvée, les collections/vues/séries temporelles MongoDB, les relations Turso Hrana 3, ClickHouse, Elasticsearch/OpenSearch et les collections Redis parcourables, les pages suivent une lecture conservée ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). La barre indique que la lecture reste ouverte entre les pages et que fermer l’aperçu la libère. Previous retrouve les mêmes lignes ; actualisation, filtre, tri, taille et reconnexion abandonnent la continuation et repartent à la première page. L’expiration ou le budget d’historique produit une erreur explicite, avec possibilité d’actualiser. Les chaînes et documents JSON Redis ont une seule valeur ; les résumés de structures probabilistes ne sont pas des collections de membres. L’ancien OpenSearch sans `_shard_doc` visite successivement les partitions index/shard ; le tri conserve l’aperçu borné de première page et la barre demande de l’effacer pour parcourir les pages natives. Les futures partitions peuvent refléter des modifications concurrentes. OpenSearch 2.0–2.3 conserve son aperçu initial sur la première page, PIT étant apparu en 2.4. Aucun aperçu ne demande un comptage global de lignes ou de résultats. Les valeurs uniques et résumés structurels n’ont pas de barre de pagination. Une source de lignes sans continuation disponible ne présente qu’un sélecteur de limite `Preview rows` et une explication, sans `Page N` ni Previous/Next. Les routines et objets de métadonnées ne deviennent pas exécutés automatiquement. Les erreurs de disponibilité sont visibles, avec reprise uniquement si elles sont classées transitoires ; la clé de requête comprend la session et le résultat affiché pour qu’une ancienne disponibilité ne s’applique jamais à de nouvelles lignes.
 
-**Objets locaux à une session.** Le sélecteur `Browse session` du catalogue peut inspecter une console ouverte. Objets temporaires, données privées en mémoire et attachements sont lus sur cette session. MySQL n’énumère pas les tables temporaires : `Open table by name…` demande séparément base et table, sans quoting SQL. L’identité d’un onglet local inclut son propriétaire ; il n’est pas restauré après redémarrage et ne se déplace pas seul vers une autre fenêtre. Fermer la console le retire. Déplacer la console exige d’abord de fermer ses aperçus de données occupés. Les actions qui nécessitent une autre session d’exécution y sont indisponibles ; la console propriétaire reste leur chemin.
+**Objets locaux à une session.** Le menu contextuel d’une console compatible propose `Browse this console session`. Aucun sélecteur permanent : un indicateur compact nomme la console et propose `Return to connection browsing`. Ce mode change seulement la source de l’explorateur, jamais la connexion ou console active, et n’exécute aucun script. Le retour manuel conserve les onglets d’une session vivante. La recherche catalogue (⌘/Ctrl+P) suit cette session, avec sa clé de cache et le propriétaire des objets ouverts ; changer de propriétaire rejette les résultats tardifs de l’ancien périmètre. Si la console disparaît ou change de fenêtre, un statut discret explique le retour normal ; les lectures et vues concernées sont nettoyées sans fermer de session ou transaction. Objets temporaires, données privées en mémoire et attachements sont lus sur cette session. MySQL n’énumère pas les tables temporaires : `Open table by name…` demande séparément base et table, sans quoting SQL. L’identité d’un onglet local inclut son propriétaire ; il n’est pas restauré après redémarrage et ne se déplace pas seul vers une autre fenêtre. Fermer la console le retire. Déplacer la console exige d’abord de fermer ses aperçus de données occupés. Les actions qui nécessitent une autre session d’exécution y sont indisponibles ; la console propriétaire reste leur chemin.
 
 Un aperçu original garde sa source occupée entre les pages. Un travail incompatible demande de fermer l’onglet de données ou d’attendre l’opération courante ; il ne semble jamais charger indéfiniment. Les colonnes initiales sont lues avant cette réservation. Actualiser, filtrer, trier ou changer la taille libère l’ancienne source avant le remplacement ; les lignes déjà reçues peuvent garder d’autres lecteurs. Fermer un onglet de données libère explicitement sa source ; un remontage React ou un simple changement d’onglet ne la ferme pas. Perdre une connexion physique PostgreSQL/MySQL après qu’un état privé a pu exister nécessite une reconnexion explicite ; une connexion neuve ne se fait jamais passer pour ce contexte. Les lectures SQL en cours restent détenues lorsque leur vue est masquée ou remontée ; fermer explicitement l’onglet ou utiliser Stop les annule toujours. Les lectures de métadonnées appartiennent également à leur fenêtre et à leur session, pas au composant de barre latérale ou de facette. Un remontage rejoint la commande en cours et conserve son action Cancel. Une invalidation met une nouvelle lecture en attente derrière la précédente au lieu d’annuler son propriétaire physique ; une annulation explicite empêche aussi le remplacement en attente de démarrer. Fermer la fenêtre ou la source annule ses opérations backend.
 
@@ -1983,8 +1984,10 @@ c'est une entrée hostile, rendue comme du texte.
 
 `View schema map` ouvre un onglet conservé depuis la source de l'explorateur ou
 le menu d'un catalogue/espace/objet. Source et session d'origine restent
-attachées à cet onglet. L'ouverture ne lance aucune introspection native ;
-choisir puis charger un périmètre est explicite, un niveau natif à la fois.
+attachées à cet onglet. Ouvrir la carte visible ou choisir son périmètre déclenche
+la lecture bornée sans bouton Charger supplémentaire (ADR-0084). Les niveaux
+natifs sont lus un par un ; un enfant unique peut être suivi, une ambiguïté exige
+un choix. Aucune autre base ni échantillon n’est préchargé.
 Les filtres de nom, chemin et type restent locaux. Canevas, déplacement, zoom,
 liste accessible d'objets/liens et F6 de l'onglet visible sont disponibles.
 Sélectionner affiche l'inspecteur sans lire de lignes.
@@ -2438,3 +2441,12 @@ modifications partielles possibles, inconnu et interrompu. Aucun bouton ne rejou
 une restauration incertaine. L’inspection humaine marque le rapprochement sans
 remplacer l’observation ; les sources possiblement modifiées invalident métadonnées
 et aperçus.
+
+
+### Précision ADR-0084 : lecture du schéma à la demande
+
+L’ouverture de la carte visible et le choix du périmètre déclenchent la lecture
+bornée, sans bouton Charger supplémentaire. Un enfant unique peut être suivi ;
+les ambiguïtés exigent un choix. Aucun autre préchargement ni échantillonnage
+implicite. Les préférences de métadonnées présentent le préchargement global
+facultatif dans une section Avancé repliée, sans prérequis pour explorer.

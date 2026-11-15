@@ -511,6 +511,11 @@
     { "id": "tab.closeOthers", "label": "Close others", "zone": "tabs" },
     { "id": "tab.closeRight", "label": "Close to the right", "zone": "tabs" },
     { "id": "tab.closeAll", "label": "Close all", "zone": "tabs" },
+    {
+      "id": "tab.browseSession",
+      "label": "Browse this console session",
+      "zone": "tabs"
+    },
     { "id": "tab.duplicate", "label": "Duplicate", "zone": "tabs" },
     { "id": "tab.rename", "label": "Rename…", "zone": "tabs" },
     {

@@ -1,6 +1,24 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  MoreHorizontalIcon,
+  Search01Icon,
+  ArrowReloadHorizontalIcon,
+} from "@hugeicons/core-free-icons"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import { TextInput } from "./text-field"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { ExplorerConnectionList } from "./explorer-connection-list"
 import { Spinner } from "@/components/ui/spinner"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -11,13 +29,13 @@ import {
 } from "@/components/ui/empty"
 import { BackendErrorAlert } from "./backend-error-alert"
 import type { BackendFailure } from "./backend-error-alert"
-import { EnvironmentBadge } from "./environment-badge"
 import type { Environment } from "@/lib/ipc/types"
 
 export interface ExplorerConnection {
   id: string
   name: string
   location: string | null
+  driver?: string | null
   environment: Environment
   readOnly: boolean
   state: "active" | "open" | "saved" | "opening" | "cancelling"
@@ -62,117 +80,134 @@ export interface MultiBaseExplorerProps {
   onRemoveGroup: (group: string) => void
   onAttach: (group: string) => void
   onRefresh: () => void
+  onSkipToCatalog?: () => void
 }
 
 /** Navigation selection never changes the active workspace or its protections. */
 export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
   const prefix = React.useId()
-  const row = (connection: ExplorerConnection, grouped = false) => {
-    const key = `connection:${connection.id}`
-    return (
-      <li key={connection.id} className="flex min-w-0 flex-col gap-1">
-        <Button
-          variant={p.selected === key ? "secondary" : "ghost"}
-          className="h-auto w-full justify-start whitespace-normal"
-          aria-pressed={p.selected === key}
-          onClick={() => p.onSelect(key)}
-          onDoubleClick={() => p.onActivate(connection.id)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault()
-              p.onActivate(connection.id)
-            }
-          }}
-        >
-          <span className="flex min-w-0 flex-col items-start gap-1">
-            <bdi>{connection.name}</bdi>
-            <span className="text-xs text-muted-foreground">
-              Saved destination: <bdi>{connection.location}</bdi>
-            </span>
-            <span className="flex flex-wrap gap-1">
-              <EnvironmentBadge environment={connection.environment} />
-              <Badge variant="outline">
-                {connection.state === "active"
-                  ? "Active"
-                  : connection.state === "open"
-                    ? "Open"
-                    : connection.state === "cancelling"
-                      ? "Cancelling"
-                      : connection.state === "opening"
-                        ? "Opening"
-                        : "Saved"}
-              </Badge>
-              {connection.readOnly && (
-                <Badge variant="outline">Read only</Badge>
-              )}
-            </span>
-            {connection.transaction && (
-              <span className="text-xs">{connection.transaction}</span>
-            )}
-          </span>
-        </Button>
-        {connection.state === "opening" || connection.state === "cancelling" ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={connection.state === "cancelling"}
-            onClick={() => p.onCancel(key)}
-          >
-            Cancel opening
-          </Button>
-        ) : (
-          p.selected === key && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => p.onActivate(connection.id)}
-            >
-              Open workspace
-            </Button>
-          )
-        )}
-        {p.selected === key && (
-          <div className="flex flex-wrap gap-1">
-            {(connection.state === "active" || connection.state === "open") && (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => p.onDisconnect(connection.id)}
-              >
-                Disconnect
-              </Button>
-            )}
-            {grouped && (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => p.onUnlink(connection.id)}
-              >
-                Ungroup
-              </Button>
-            )}
-          </div>
-        )}
-        {connection.error && (
-          <BackendErrorAlert
-            title="Connection not opened"
-            error={connection.error}
-          />
-        )}
-      </li>
+  const savedViewport = React.useRef<HTMLDivElement>(null)
+  const [filterOpen, setFilterOpen] = React.useState(false)
+  const [filter, setFilter] = React.useState("")
+  const filterId = React.useId()
+  const searchTrigger = React.useRef<HTMLButtonElement>(null)
+  const query = filter.trim().toLocaleLowerCase()
+  const matches = (connection: ExplorerConnection) =>
+    !query ||
+    `${connection.name} ${connection.location ?? ""}`
+      .toLocaleLowerCase()
+      .includes(query)
+  const groups = p.groups
+    .map((group) => ({
+      ...group,
+      members: group.name.toLocaleLowerCase().includes(query)
+        ? group.members
+        : group.members.filter(matches),
+    }))
+    .filter(
+      (group) =>
+        !query ||
+        group.members.length > 0 ||
+        group.name.toLocaleLowerCase().includes(query)
     )
+  const ungrouped = p.ungrouped.filter(matches)
+  const count =
+    p.ungrouped.length +
+    p.groups.reduce((total, group) => total + group.members.length, 0)
+  const nameCounts = new Map<string, number>()
+  for (const connection of [
+    ...p.ungrouped,
+    ...p.groups.flatMap((group) => group.members),
+  ]) {
+    nameCounts.set(connection.name, (nameCounts.get(connection.name) ?? 0) + 1)
   }
   return (
     <section
       aria-label="Multi-base explorer"
-      className="flex min-h-0 flex-col gap-2 border-b p-3 group-data-[collapsible=icon]:hidden"
+      className="flex max-h-[min(28dvh,16rem)] min-h-0 shrink-0 flex-col gap-1 border-b px-2 pt-8 pb-2 group-data-[collapsible=icon]:hidden"
     >
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium">Connections</h2>
-        <Button size="xs" variant="ghost" onClick={p.onRefresh}>
-          Refresh list
-        </Button>
+        <h2 className="text-sm font-medium">
+          Connections{!p.loading && count > 0 ? ` · ${count}` : ""}
+        </h2>
+        <div className="flex gap-1">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            ref={searchTrigger}
+            aria-label="Find a saved connection"
+            aria-expanded={filterOpen}
+            aria-controls={filterId}
+            onClick={() => {
+              setFilterOpen(!filterOpen)
+              if (filterOpen) setFilter("")
+            }}
+          >
+            <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Refresh list"
+            onClick={p.onRefresh}
+          >
+            <HugeiconsIcon icon={ArrowReloadHorizontalIcon} strokeWidth={2} />
+          </Button>
+          {p.canGroup && (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Connection actions"
+                  />
+                }
+              >
+                <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem onClick={p.onCreateGroup}>
+                    Group this PostgreSQL server
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
+      {p.onSkipToCatalog && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="sr-only focus:not-sr-only"
+          onClick={p.onSkipToCatalog}
+        >
+          Skip to database objects
+        </Button>
+      )}
+      {filterOpen && (
+        <Field>
+          <FieldLabel htmlFor={filterId} className="sr-only">
+            Filter saved connections
+          </FieldLabel>
+          <TextInput
+            id={filterId}
+            autoFocus
+            value={filter}
+            placeholder="Find a connection…"
+            onChange={(event) => setFilter(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setFilter("")
+                setFilterOpen(false)
+                searchTrigger.current?.focus()
+              }
+            }}
+          />
+        </Field>
+      )}
       {p.loading && (
         <p role="status" className="flex items-center gap-2 text-xs">
           <Spinner />
@@ -195,8 +230,13 @@ export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
             </EmptyHeader>
           </Empty>
         )}
-      <div className="max-h-[38vh] overflow-y-auto">
-        {p.groups.map((group, i) => (
+      <div
+        className="min-h-0 overflow-y-auto"
+        ref={savedViewport}
+        role="region"
+        aria-label="Saved connections"
+      >
+        {groups.map((group, i) => (
           <section
             key={group.id}
             aria-label={group.name}
@@ -211,7 +251,10 @@ export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
                 aria-label={`Expand ${group.name}`}
                 onClick={() => p.onToggle(group.id)}
               >
-                {group.expanded ? "−" : "+"}
+                <HugeiconsIcon
+                  icon={group.expanded ? ArrowDown01Icon : ArrowRight01Icon}
+                  strokeWidth={2}
+                />
               </Button>
               <Button
                 variant={
@@ -222,15 +265,59 @@ export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
               >
                 <bdi className="truncate">{group.name}</bdi>
               </Button>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Manage ${group.name}`}
+                    />
+                  }
+                >
+                  <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      disabled={!p.canGroup}
+                      onClick={() => p.onAttach(group.id)}
+                    >
+                      Add active connection
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => p.onRenameGroup(group.id)}>
+                      Rename group
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      onClick={() => p.onDisconnectGroup(group.id)}
+                    >
+                      Disconnect group…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => p.onRemoveGroup(group.id)}>
+                      Remove group
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             {group.expanded && (
               <div
                 id={`${prefix}-${i}`}
                 className="flex flex-col gap-2 border-l pl-2"
               >
-                <ul className="flex flex-col gap-1">
-                  {group.members.map((member) => row(member, true))}
-                </ul>
+                <ExplorerConnectionList
+                  connections={group.members}
+                  selected={p.selected}
+                  grouped
+                  actions={p}
+                  nameCounts={nameCounts}
+                  label={`${group.name} saved connections`}
+                  filterKey={query}
+                  outerViewport={savedViewport}
+                />
                 {group.members.length === 0 && (
                   <p className="text-xs text-muted-foreground">
                     No saved connections in this group.
@@ -257,35 +344,6 @@ export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
                       Read databases
                     </Button>
                   )}
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    disabled={!p.canGroup}
-                    onClick={() => p.onAttach(group.id)}
-                  >
-                    Add active connection
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => p.onRenameGroup(group.id)}
-                  >
-                    Rename group
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => p.onDisconnectGroup(group.id)}
-                  >
-                    Disconnect group…
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => p.onRemoveGroup(group.id)}
-                  >
-                    Remove group
-                  </Button>
                 </div>
                 {group.seed && (
                   <p className="text-xs text-muted-foreground">
@@ -406,25 +464,34 @@ export function MultiBaseExplorer(p: MultiBaseExplorerProps) {
             )}
           </section>
         ))}
-        {p.ungrouped.length > 0 && (
+        {ungrouped.length > 0 && (
           <>
-            <Separator />
-            <h3 className="py-2 text-xs text-muted-foreground">Ungrouped</h3>
-            <ul className="flex flex-col gap-1">
-              {p.ungrouped.map((member) => row(member))}
-            </ul>
+            {p.groups.length > 0 && (
+              <>
+                <Separator />
+                <h3 className="py-1 text-xs text-muted-foreground">
+                  Other connections
+                </h3>
+              </>
+            )}
+            <ExplorerConnectionList
+              connections={ungrouped}
+              selected={p.selected}
+              actions={p}
+              nameCounts={nameCounts}
+              label="Ungrouped saved connections"
+              filterKey={query}
+              outerViewport={savedViewport}
+            />
           </>
         )}
       </div>
-      {p.canGroup && (
-        <Button size="xs" variant="outline" onClick={p.onCreateGroup}>
-          Group this PostgreSQL server
-        </Button>
+
+      {query && groups.length === 0 && ungrouped.length === 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          No matching saved connections.
+        </p>
       )}
-      <p className="text-xs text-muted-foreground">
-        Select a row; Enter or Open workspace activates it. Objects below belong
-        to the active workspace.
-      </p>
     </section>
   )
 }

@@ -91,7 +91,7 @@ function setup() {
     </QueryClientProvider>
   )
   const rendered = render(show(open))
-  fireEvent.click(screen.getByRole("button", { name: "Metadata loading…" }))
+  fireEvent.click(screen.getByRole("button", { name: "Metadata preferences…" }))
   return { ...rendered, show }
 }
 it("saves a loading preference without starting any metadata preload", async () => {
@@ -122,6 +122,9 @@ it("cancels the old source command and ignores its late completion after source 
       })
   )
   const { rerender, show } = setup()
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Advanced: optional preload" })
+  )
   await waitFor(() =>
     expect(
       screen.getByRole("button", { name: "Preload scope" })

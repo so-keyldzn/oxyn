@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { menuRows } from "@/components/oxyn/action-menu-items"
 
@@ -7,7 +7,7 @@ import type { ActionContext, ActionSources } from "./context"
 import { CONTEXT_MENUS, surfaceActions } from "./context-menus"
 import type { Surface } from "./context-menus"
 import { actionSpec } from "./manifest"
-import { behaviours } from "./registry"
+import { availability, behaviours, invoke } from "./registry"
 import menuBehavioursSource from "./menu-behaviours.ts?raw"
 import registrySource from "./registry.ts?raw"
 import objectOperationsSource from "@/components/oxyn/object-operations.ts?raw"
@@ -443,5 +443,54 @@ describe("context menus", () => {
   it("keep no reason that leaves the user nowhere to go", () => {
     for (const [file, text] of Object.entries(REASON_SOURCES))
       expect(text, file).not.toMatch(GENERIC)
+  })
+})
+
+describe("browsing a console session", () => {
+  it("uses the tab target callback without running, duplicating, closing or activating a console", () => {
+    const browse = vi.fn()
+    const close = vi.fn()
+    const duplicate = vi.fn()
+    const ctx = contextWith({
+      tab: {
+        state: {
+          console: true,
+          count: 2,
+          toTheRight: 0,
+          saved: false,
+          moveBlocked: null,
+          browseBlocked: null,
+        },
+        actions: { browseSession: browse, close, duplicate },
+      },
+    })
+    expect(availability("tab.browseSession", ctx)).toBe(true)
+    expect(invoke("tab.browseSession", "context-menu", ctx)).toBe(true)
+    expect(browse).toHaveBeenCalledOnce()
+    expect(close).not.toHaveBeenCalled()
+    expect(duplicate).not.toHaveBeenCalled()
+  })
+  it("is absent on objects and disabled with the console's actual metadata capability reason", () => {
+    const make = (console: boolean, browseBlocked: string | null) =>
+      contextWith({
+        tab: {
+          state: {
+            console,
+            count: 1,
+            toTheRight: 0,
+            saved: false,
+            moveBlocked: null,
+            browseBlocked,
+          },
+          actions: { browseSession: vi.fn() },
+        },
+      })
+    expect(availability("tab.browseSession", make(false, null))).toBe("absent")
+    expect(
+      availability(
+        "tab.browseSession",
+        make(true, "This console does not provide a browsable catalog")
+      )
+    ).toEqual({ reason: "This console does not provide a browsable catalog" })
   })
 })

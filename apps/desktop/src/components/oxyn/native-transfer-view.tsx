@@ -78,8 +78,7 @@ export function NativeTransferView({
         <div>
           <h2 className="text-base font-semibold">Database transfers</h2>
           <p className="text-sm text-muted-foreground">
-            <bdi>{connection}</bdi> · Native database export and restore,
-            separate from result export
+            <bdi>{connection}</bdi> · Export or restore the whole database
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -89,11 +88,11 @@ export function NativeTransferView({
             disabled={busy || state.reading}
             onClick={onReload}
           >
-            Read availability and history
+            Refresh transfer status
           </Button>
           {state.reading && (
             <Button variant="outline" size="sm" onClick={onCancelRead}>
-              Cancel availability/history reads
+              Cancel status refresh
             </Button>
           )}
         </div>
@@ -113,10 +112,10 @@ export function NativeTransferView({
       {!state.support ? (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>Read native transfer availability</EmptyTitle>
+            <EmptyTitle>Choose your transfer</EmptyTitle>
             <EmptyDescription>
-              Support follows this original source, its transport and installed
-              tool selections. No program starts by opening this tab.
+              Check the available formats, then choose an installed tool and a
+              file. Opening this tab never starts a transfer.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -145,10 +144,10 @@ export function NativeTransferView({
           {state.review && (
             <Card>
               <CardHeader>
-                <CardTitle>Fixed prepared destination</CardTitle>
+                <CardTitle>Review transfer</CardTitle>
                 <CardDescription>
-                  Options, source and file are retained; changing them requires
-                  a new preparation.
+                  Check the destination and file before continuing. Discard this
+                  preparation to change them.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
@@ -200,8 +199,20 @@ export function NativeTransferView({
             {state.cancelling
               ? "Cancellation requested; waiting for process and file cleanup…"
               : state.busy === "starting"
-                ? "Waiting for host confirmation or native startup…"
-                : `Native operation: ${state.busy}`}
+                ? state.operation === "restore"
+                  ? "Waiting for your confirmation…"
+                  : "Starting export…"
+                : state.busy === "inspecting"
+                  ? "Checking the selected tool…"
+                  : state.busy === "selectingFile"
+                    ? "Choose a file in the system dialog…"
+                    : state.busy === "preparing"
+                      ? "Preparing your transfer…"
+                      : state.busy === "discarding"
+                        ? "Discarding preparation…"
+                        : state.busy === "reconciling"
+                          ? "Recording your inspection…"
+                          : "Transfer in progress…"}
           </p>
           <Progress
             value={null}
@@ -236,8 +247,8 @@ export function NativeTransferView({
                   : "History has not been read"}
               </EmptyTitle>
               <EmptyDescription>
-                Read availability and history to inspect recorded outcomes.
-                Nothing starts or resumes automatically.
+                Refresh transfer status to inspect recorded outcomes. Nothing
+                starts or resumes automatically.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

@@ -40,14 +40,11 @@ type Story = StoryObj<typeof meta>
 export const Initial: Story = {
   play: async ({ canvasElement, args }) => {
     const c = within(canvasElement)
-    await expect(
-      c.getByText("Choose a scope to draw its metadata")
-    ).toBeVisible()
+    await expect(c.getByText("Choose a database or schema")).toBeVisible()
     await expect(args.onLoad).not.toHaveBeenCalled()
-    await userEvent.click(
-      c.getByRole("button", { name: "Load selected scope" })
-    )
-    await expect(args.onLoad).toHaveBeenCalledWith(false)
+    await expect(
+      c.queryByRole("button", { name: "Load selected scope" })
+    ).toBeNull()
   },
 }
 export const Loading: Story = {
@@ -89,6 +86,17 @@ export const Ready: Story = {
     const c = within(canvasElement)
     await userEvent.click(c.getByRole("tab", { name: "Accessible list" }))
     await expect(c.getByRole("list", { name: "Mapped objects" })).toBeVisible()
+    await expect(c.queryByText("0 objects not shown")).toBeNull()
+    await expect(c.queryByText("0 structures not read")).toBeNull()
+    await expect(
+      c.getByText("Loaded scope only · this is not a complete database map.")
+    ).toBeVisible()
+    await userEvent.click(
+      c.getByRole("button", { name: "How to read this map" })
+    )
+    await expect(
+      c.getByText(/Incoming links cover loaded objects only/)
+    ).toBeVisible()
     await expect(
       c.getAllByRole("button", { name: "Inspect orders" })
     ).toHaveLength(2)
@@ -139,6 +147,14 @@ export const Partial: Story = {
       stale: true,
       error: null,
     },
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement)
+    await expect(c.getByText("25 objects not shown")).toBeVisible()
+    await expect(c.getByText("18 fields not shown")).toBeVisible()
+    await expect(c.getByText("2 links outside this map")).toBeVisible()
+    await expect(c.queryByText("0 links not shown")).toBeNull()
+    await expect(c.getByText(/Retained metadata may be stale/)).toBeVisible()
   },
 }
 export const Error: Story = {
@@ -252,16 +268,19 @@ export const SelectedObject: Story = {
   args: { selectionLabel: "orders" },
   play: async ({ canvasElement, args }) => {
     const c = within(canvasElement)
-    await expect(c.getByRole("button", { name: "Load orders" })).toBeVisible()
-    await userEvent.click(
-      c.getByRole("button", { name: "Load whole selected scope" })
-    )
+    await expect(c.queryByRole("button", { name: "Load orders" })).toBeNull()
+    await userEvent.click(c.getByRole("button", { name: "Show entire scope" }))
     await expect(args.onLoadScope).toHaveBeenCalled()
     await expect(args.onLoad).not.toHaveBeenCalled()
   },
 }
 
 export const Compact: Story = {
+  // Geometry is measured after the real renderer module is available; this
+  // story does not measure network/module startup time under parallel builds.
+  beforeEach: async () => {
+    await import("./erd-diagram")
+  },
   parameters: {
     viewport: {
       options: {
@@ -287,6 +306,10 @@ export const Compact: Story = {
   },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement)
+    await userEvent.clear(
+      c.getByRole("textbox", { name: "Filter loaded objects" })
+    )
+    await userEvent.click(c.getByRole("tab", { name: "Diagram" }))
     const diagram = await c.findByRole("region", {
       name: "Diagram of 2 objects",
     })

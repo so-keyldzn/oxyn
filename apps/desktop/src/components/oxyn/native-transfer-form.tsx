@@ -75,8 +75,8 @@ export function NativeTransferForm({
       <CardHeader>
         <CardTitle>Prepare a database transfer</CardTitle>
         <CardDescription>
-          Engine: {support.engine}. Files and executables are selected by native
-          dialogs; free-form commands and flags are not accepted.
+          Export this database to a file, or restore a trusted archive.
+          Available formats follow the selected database.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -101,9 +101,8 @@ export function NativeTransferForm({
               </ToggleGroupItem>
             </ToggleGroup>
             <FieldDescription>
-              The native tool opens its own reviewed database connection.
-              Uncommitted console changes and private temporary objects are not
-              a database backup.
+              Exports include committed database contents. Uncommitted changes
+              and private temporary objects are not included.
             </FieldDescription>
           </Field>
           <Field data-disabled={locked || !allowed}>
@@ -156,8 +155,8 @@ export function NativeTransferForm({
               )}
             </div>
             <FieldDescription>
-              Selection runs a bounded version check on a private executable
-              snapshot. Unsupported and outdated clients are refused.
+              Oxyn checks the selected tool’s version. Unsupported or outdated
+              clients cannot be used.
             </FieldDescription>
           </Field>
           <Field>

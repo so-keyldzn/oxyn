@@ -1,4 +1,8 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Settings01Icon } from "@hugeicons/core-free-icons"
+import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
+import { ContentHint } from "@/components/oxyn/content-hint"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { MetadataLoadingDialog } from "@/components/oxyn/metadata-loading-dialog"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
@@ -22,21 +26,37 @@ const failure = (error: unknown): BackendFailure => ({
 export function MetadataLoadingSettings({
   open,
   nodes,
+  asMenuItem = false,
 }: {
   open: OpenConnection
   nodes: Array<CatalogNode> | undefined
+  asMenuItem?: boolean
 }) {
   const [visible, setVisible] = React.useState(false)
   return (
     <>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="mx-2 group-data-[collapsible=icon]:hidden"
-        onClick={() => setVisible(true)}
-      >
-        Metadata loading…
-      </Button>
+      {asMenuItem ? (
+        <SidebarMenuItem className="min-w-0 flex-1">
+          <ContentHint content="Metadata preferences">
+            <SidebarMenuButton
+              aria-label="Metadata preferences…"
+              onClick={() => setVisible(true)}
+            >
+              <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
+              <span className="sr-only">Metadata preferences…</span>
+            </SidebarMenuButton>
+          </ContentHint>
+        </SidebarMenuItem>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mx-2 group-data-[collapsible=icon]:hidden"
+          onClick={() => setVisible(true)}
+        >
+          Metadata preferences…
+        </Button>
+      )}
       {visible && (
         <LoadingSettings
           key={JSON.stringify([open.connection, open.session])}
