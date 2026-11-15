@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="bdcdc5c198d4" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="84e6a2ba9552" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -778,3 +778,42 @@ ce qui le maintiendra valide.
 
 Voir aussi [`/securite`](../claude/commands/securite.md) et
 [la liste de contrôle](../claude/checklists/revue-securite.md).
+
+## Confinement des transferts natifs
+
+Les transferts sont des commandes réservées à l’humain, pas une API générique de
+processus. Les sélecteurs natifs délivrent des droits opaques attachés à la
+fenêtre ; le webview n’envoie ni chemin ni arguments. Les exécutables installés
+choisis comme fiables sont copiés dans un emplacement privé, contrôlés par taille,
+type, rôle et version, puis conservés jusqu’au nettoyage. Ce n’est ni un bac à
+sable ni une preuve de fiabilité du programme sélectionné.
+
+Le premier mode PostgreSQL accepte uniquement une IP de boucle locale explicite,
+TLS désactivé et aucun SSH/paramètre additionnel. Environnement vidé, HOME/répertoire
+courant isolés, fichiers de mots de passe/services privés et vides, chiffrement GSS
+désactivé et `require_auth=none` imposé : aucun mot de passe sauvegardé n’est résolu.
+Les modes distant, TLS, SSH et mot de passe ainsi que la restauration SQL sont
+indisponibles. Un protocole compatible PostgreSQL ne prouve pas la compatibilité.
+
+Toute restauration exige une confirmation native composée par le backend, même
+en Local. L’approbation générique du webview ne peut l’accorder. Propriétaire,
+session/destination originales et lecture seule effective sont revérifiés avant
+exécution. Les options n’autorisent ni autre base, création, nettoyage ou rôle
+arbitraire. Le contrôle d’archive vérifie le format, sans certifier le contenu.
+Stderr brut est drainé et jeté ; seules version bornée analysée et catégories
+sûres franchissent la frontière. Aucun argument, secret, chemin absolu ou journal
+de processus n’est persisté.
+
+Sur macOS/Linux, le groupe de processus possédé réserve le PID du chef jusqu’aux
+signaux aux membres restants puis sa récolte ; drain et délais d’arrêt sont
+bornés. Aucune garantie pour des démons arbitraires échappant au groupe du client
+fiable. Les autres plateformes refusent l’opération. Une restauration annulée
+peut avoir modifié sa destination : caches invalidés et inspection requise, sans
+rejeu automatique. La perte du processus applicatif ne prouve ni rollback distant
+ni disparition de son ancien groupe.
+
+L’export prépare un répertoire 0700 et un fichier 0600 sous des descripteurs
+possédés. Les identités sont contrôlées ; après synchronisation du fichier, un lien
+dur publie sans remplacement. Nettoyage et synchronisation du répertoire doivent
+réussir. Fichiers/liens existants refusés, systèmes de fichiers incompatibles en
+erreur explicite. Une finalisation échouée après publication reste inconnue.

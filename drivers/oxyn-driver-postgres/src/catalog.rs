@@ -29,6 +29,7 @@
 //! would claim there is nothing.
 
 mod definition;
+mod discovery;
 mod incoming;
 
 use std::sync::Arc;
@@ -603,6 +604,13 @@ impl CatalogProvider for PostgresCatalog {
     ///
     /// # Errors
     /// Any session error, or [`OxynError::Cancelled`].
+    async fn discover_databases(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_core::DiscoveredDatabase>> {
+        self.read_server_databases(cancel).await
+    }
+
     async fn list_catalogs(&self, cancel: &CancelToken) -> Result<Vec<CatalogRef>> {
         let rows = self.fetch(cancel, SQL_CATALOGS, &[]).await?;
         let mut databases = Vec::with_capacity(rows.len());

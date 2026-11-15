@@ -25,4 +25,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 # Isolate proxy environment variables without mutating the test runner.
-tokio = { workspace = true, features = ["process"] }
+# Advance idle time after real loopback setup, without shortening production bounds.
+tokio = { workspace = true, features = ["process", "test-util"] }

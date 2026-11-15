@@ -13,6 +13,7 @@ import type { CatalogAddress } from "@/lib/ipc/types"
 import type { DensityChoice, ThemeChoice } from "@/lib/ipc/settings"
 
 import type { Zone } from "./manifest"
+import { rememberRegionFocus } from "./focus-regions"
 import { platform } from "./platform"
 import type { Platform } from "./shortcut"
 import type {
@@ -81,6 +82,8 @@ export interface CatalogObject {
 export interface CatalogSourceState {
   /** The connection whose loaded catalog ⌘P searches. */
   connection: string
+  /** Exact explorer owner; omitted only by connection-only legacy consumers. */
+  session?: string
 }
 
 export interface CatalogSourceActions {
@@ -286,6 +289,7 @@ export const focusStore = createStore<FocusState>(NO_FOCUS)
 export function trackFocus(): () => void {
   const update = (element: Element | null) => {
     if (isMenuFocus(element)) return
+    rememberRegionFocus(element)
     const next = focusOf(element)
     const current = focusStore.state
     if (
@@ -355,6 +359,7 @@ export function zoneElement(context: ActionContext, zone: Zone) {
 
 /** What a zone element offers the actions that act inside it. */
 export interface ZoneHandle {
+  owner?: { connection: string; session: string }
   find?: () => void
   toggleComment?: () => void
   /** Puts text where `point` falls in the zone, without running it. */

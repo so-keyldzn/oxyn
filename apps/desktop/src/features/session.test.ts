@@ -56,6 +56,16 @@ describe("retained workspaces", () => {
     expect(session.state.workspaces).toEqual([])
   })
 
+  it("reveals another retained workspace after disconnecting the active child", () => {
+    openConnection(opened("a"))
+    openConnection(opened("b"))
+    closeConnection("b")
+    expect(session.state.open?.connection).toBe("a")
+    expect(session.state.workspaces.map((open) => open.connection)).toEqual([
+      "a",
+    ])
+  })
+
   it("keeps a disconnected connection for a reload until its sessions close", () => {
     openConnection(opened("a"))
     openConnection(opened("b"))
@@ -100,4 +110,27 @@ describe("restored working copies", () => {
     ])
     expect(session.state.restored).toEqual([])
   })
+})
+
+it("a background grouped opening preserves the foreground and empties only its first console", async () => {
+  const { takeEmptyFirstConsole, setSqlDraft } = await import("./session")
+  const a = {
+    ...opened("a"),
+    console: { session: "a-console" },
+  } as OpenConnection
+  const b = {
+    ...opened("b"),
+    console: { session: "b-console" },
+  } as OpenConnection
+  session.setState((state) => ({ ...state, open: null, workspaces: [] }))
+  openConnection(a)
+  setSqlDraft("select sensitive_source;", "Source", "sql")
+  openConnection(b, { foreground: false, emptyFirstConsole: true })
+  expect(session.state.open).toBe(a)
+  expect(session.state.sqlDraft).toBe("select sensitive_source;")
+  expect(takeEmptyFirstConsole("b-console")).toBe(true)
+  expect(takeEmptyFirstConsole("b-console")).toBe(false)
+  expect(takeEmptyFirstConsole("a-console")).toBe(false)
+  expect(showConnection("a")).toBe(true)
+  expect(session.state.open).toBe(a)
 })

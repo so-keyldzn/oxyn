@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="bc707af0092a" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="32f61070e084" -->
 
 
 
@@ -474,11 +474,40 @@ Un texte conservé après un rafraîchissement échoué est signalé comme
 potentiellement périmé, y compris lors de sa copie dans une console.
 
 En disposition large, la définition accompagne les vues de métadonnées dans
-un panneau initialement large de 424 px. Sa poignée de 8 px fonctionne à la
+un panneau initialement large de 424 px. Afficher Structure, Index ou Relations
+ne lit pas la définition : l’utilisateur la demande explicitement. Sa poignée de 8 px fonctionne à la
 souris et au clavier (320–640 px, Début : 424 px). Cette largeur reste dans le
 workspace ouvert. En disposition compacte, le sous-onglet DDL présente la
 définition sur la largeur disponible ; changer la largeur de fenêtre ne
 relance pas sa lecture.
+
+### Chargement manuel des métadonnées
+
+`Metadata preferences…` dans l’explorateur de la source active ouvre les préférences
+de connexion et les dérogations exactes de catalogue/espace de noms observé.
+Minimal précharge les noms ; Structure ajoute descriptions, index et clés
+sortantes pris en charge ; Étendu ajoute les définitions disponibles. Enregistrer
+ne précharge rien et ne ferme aucun éditeur. Chaque vue demande toujours ses
+propres facettes nécessaires, indépendamment du préréglage. Une section Avancé
+repliée présente le préchargement facultatif, la page suivante et l’annulation,
+et montre la couverture
+fraîche, périmée, non lue, indisponible ou échouée. Une page est bornée à
+128 relations et 60 secondes ; les grands périmètres restent partiels. Modifier
+la politique arrête les préchargements remplacés. Une erreur ne rejoue aucun
+enregistrement silencieusement.
+
+Si décrire les champs exige une inférence documentaire, Structure demande
+un échantillon borné avec confirmation distincte. Annuler reçoit le focus.
+Les limites déclarées de documents retournés, octets retenus et temps de
+traitement sont affichées ; lots réseau et plan serveur peuvent lire davantage.
+Seules les métadonnées des champs inférés sont conservées, sans afficher ni
+transmettre de valeurs échantillonnées à l’IA. Un échantillonnage non pris en
+charge reste indisponible, sans lecture de remplacement.
+
+Trier ou projeter un aperçu documentaire peut exiger une structure de champs
+fraîche explicitement lue. Absente ou évincée, l’erreur demande de lire Structure
+d’abord. Préparer l’aperçu ne rééchantillonne aucun document silencieusement.
+L’aperçu documentaire simple reste disponible sans cette lecture structurelle.
 
 ### Lisibilité et hauteur de grille
 
@@ -695,8 +724,16 @@ Ce que chaque surface garantit :
 | `⌘P` | ouvrir un objet par son nom, parmi les objets déjà chargés — la portée est annoncée, comme dans la recherche du catalogue |
 | `⌘/` | la feuille des raccourcis |
 | `⌃Tab`, `⌃⇧Tab` | l'onglet suivant, le précédent (« Consoles indépendantes ») |
-| `F6`, `⇧F6` | la zone suivante, la précédente : catalogue, éditeur, résultats, panneau latéral |
+| `F6`, `⇧F6` | la zone visible suivante, la précédente : navigation, onglets, éditeur, résultats, inspecteur, assistant et carte montée |
 | `⇧F10`, touche `Menu` | le menu contextuel de l'élément focalisé, comme le clic droit |
+
+F6 et Maj+F6 passent par le registre d’actions, y compris View, palette et fiche
+des raccourcis. Le cycle suit l’ordre du document dans le workspace visible ;
+panneaux fermés/repliés et workspaces retenus masqués sont exclus. Une carte
+montée peut déclarer sa zone sans être un prérequis du raccourci. Le retour
+retrouve la dernière cible de focus valide ; CodeMirror restaure son curseur et
+sa sélection. Le cycle n’ouvre aucun panneau et n’active aucune connexion.
+Un dialogue modal conserve le focus jusqu’à sa fermeture.
 
 `⌘J` (retour à l'éditeur), `⌘B` (sidebar) et `⌘2` (grille de l'aperçu)
 gardent le sens que leur donnent « Navigation du premier workspace » et
@@ -884,6 +921,32 @@ connexion copie le texte SQL de la console active dans son premier éditeur,
 l'annonce et ne l'exécute pas, et la console d'origine le garde. Les
 connexions ouvertes pendant la session rejoignent immédiatement la liste.
 
+**Explorateur multi-base** ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md)).
+La barre latérale liste les groupes serveur, leurs connexions enregistrées et
+la liste PostgreSQL demandée explicitement. Sélectionner ne change pas le
+contenu actif ; le contrôle de développement ouvre le groupe, tandis qu’Entrée,
+le double-clic ou `Open workspace` active la destination. Les objets affichés
+restent ceux du workspace actif. Les autres moteurs conservent leur hiérarchie.
+
+Un workspace existant revient intact. Les activations concurrentes d’un enfant
+partagent une ouverture ; une ancienne réponse ne vole pas le premier plan.
+Une nouvelle ouverture par cet explorateur commence avec une console vide,
+sans copier brouillon ni secret. Le parcours de copie depuis l’accueil reste
+séparé. Une connexion sauvegardée dont l’ouverture échoue garde son identité ;
+plusieurs comptes correspondants demandent un choix.
+
+Un groupe peut être créé depuis PostgreSQL autorisé, renommé, associé/dissocié
+et supprimé sans effacer ses enfants. `Disconnect group…` révise les membres
+ouverts, puis leurs brouillons dans l’ordre. Opérations en cours et transactions
+ouvertes/inconnues bloquent la déconnexion jusqu’à résolution explicite. Annuler
+ne ferme aucun travail encore en attente ; un échec ultérieur nomme les
+fermetures déjà faites. Un nettoyage échoué reste visible et reprenable.
+Aucun commit ou rollback automatique.
+
+Les demandes de texte et d’objet portent la génération du workspace. Un dépôt
+dans un éditeur étranger propose la console source ou Cancel. Les objets privés
+restent sur leur console propriétaire. Aucun texte n’est exécuté.
+
 **Les workspaces ouverts restent connectés**
 ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Passer de A à B
 ne ferme rien : A garde ses consoles, leurs textes et leur historique
@@ -1050,7 +1113,7 @@ table. La barre se replie sur une fenêtre étroite et reste accessible au clavi
 
 Pour les vues et autres relations SQL sans clé de pagination prouvée, les collections/vues/séries temporelles MongoDB, les relations Turso Hrana 3, ClickHouse, Elasticsearch/OpenSearch et les collections Redis parcourables, les pages suivent une lecture conservée ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). La barre indique que la lecture reste ouverte entre les pages et que fermer l’aperçu la libère. Previous retrouve les mêmes lignes ; actualisation, filtre, tri, taille et reconnexion abandonnent la continuation et repartent à la première page. L’expiration ou le budget d’historique produit une erreur explicite, avec possibilité d’actualiser. Les chaînes et documents JSON Redis ont une seule valeur ; les résumés de structures probabilistes ne sont pas des collections de membres. L’ancien OpenSearch sans `_shard_doc` visite successivement les partitions index/shard ; le tri conserve l’aperçu borné de première page et la barre demande de l’effacer pour parcourir les pages natives. Les futures partitions peuvent refléter des modifications concurrentes. OpenSearch 2.0–2.3 conserve son aperçu initial sur la première page, PIT étant apparu en 2.4. Aucun aperçu ne demande un comptage global de lignes ou de résultats. Les valeurs uniques et résumés structurels n’ont pas de barre de pagination. Une source de lignes sans continuation disponible ne présente qu’un sélecteur de limite `Preview rows` et une explication, sans `Page N` ni Previous/Next. Les routines et objets de métadonnées ne deviennent pas exécutés automatiquement. Les erreurs de disponibilité sont visibles, avec reprise uniquement si elles sont classées transitoires ; la clé de requête comprend la session et le résultat affiché pour qu’une ancienne disponibilité ne s’applique jamais à de nouvelles lignes.
 
-**Objets locaux à une session.** Le sélecteur `Browse session` du catalogue peut inspecter une console ouverte. Objets temporaires, données privées en mémoire et attachements sont lus sur cette session. MySQL n’énumère pas les tables temporaires : `Open table by name…` demande séparément base et table, sans quoting SQL. L’identité d’un onglet local inclut son propriétaire ; il n’est pas restauré après redémarrage et ne se déplace pas seul vers une autre fenêtre. Fermer la console le retire. Déplacer la console exige d’abord de fermer ses aperçus de données occupés. Les actions qui nécessitent une autre session d’exécution y sont indisponibles ; la console propriétaire reste leur chemin.
+**Objets locaux à une session.** Le menu contextuel d’une console compatible propose `Browse this console session`. Aucun sélecteur permanent : un indicateur compact nomme la console et propose `Return to connection browsing`. Ce mode change seulement la source de l’explorateur, jamais la connexion ou console active, et n’exécute aucun script. Le retour manuel conserve les onglets d’une session vivante. La recherche catalogue (⌘/Ctrl+P) suit cette session, avec sa clé de cache et le propriétaire des objets ouverts ; changer de propriétaire rejette les résultats tardifs de l’ancien périmètre. Si la console disparaît ou change de fenêtre, un statut discret explique le retour normal ; les lectures et vues concernées sont nettoyées sans fermer de session ou transaction. Objets temporaires, données privées en mémoire et attachements sont lus sur cette session. MySQL n’énumère pas les tables temporaires : `Open table by name…` demande séparément base et table, sans quoting SQL. L’identité d’un onglet local inclut son propriétaire ; il n’est pas restauré après redémarrage et ne se déplace pas seul vers une autre fenêtre. Fermer la console le retire. Déplacer la console exige d’abord de fermer ses aperçus de données occupés. Les actions qui nécessitent une autre session d’exécution y sont indisponibles ; la console propriétaire reste leur chemin.
 
 Un aperçu original garde sa source occupée entre les pages. Un travail incompatible demande de fermer l’onglet de données ou d’attendre l’opération courante ; il ne semble jamais charger indéfiniment. Les colonnes initiales sont lues avant cette réservation. Actualiser, filtrer, trier ou changer la taille libère l’ancienne source avant le remplacement ; les lignes déjà reçues peuvent garder d’autres lecteurs. Fermer un onglet de données libère explicitement sa source ; un remontage React ou un simple changement d’onglet ne la ferme pas. Perdre une connexion physique PostgreSQL/MySQL après qu’un état privé a pu exister nécessite une reconnexion explicite ; une connexion neuve ne se fait jamais passer pour ce contexte. Les lectures SQL en cours restent détenues lorsque leur vue est masquée ou remontée ; fermer explicitement l’onglet ou utiliser Stop les annule toujours. Les lectures de métadonnées appartiennent également à leur fenêtre et à leur session, pas au composant de barre latérale ou de facette. Un remontage rejoint la commande en cours et conserve son action Cancel. Une invalidation met une nouvelle lecture en attente derrière la précédente au lieu d’annuler son propriétaire physique ; une annulation explicite empêche aussi le remplacement en attente de démarrer. Fermer la fenêtre ou la source annule ses opérations backend.
 
@@ -1917,6 +1980,33 @@ cache sait disparu s'affiche atténué, avec « not found », et n'ouvre rien. S
 preuve de sa disparition, une puce reste normale. Le libellé vient du catalogue :
 c'est une entrée hostile, rendue comme du texte.
 
+### Carte des schémas autonome
+
+`View schema map` ouvre un onglet conservé depuis la source de l'explorateur ou
+le menu d'un catalogue/espace/objet. Source et session d'origine restent
+attachées à cet onglet. Ouvrir la carte visible ou choisir son périmètre déclenche
+la lecture bornée sans bouton Charger supplémentaire (ADR-0084). Les niveaux
+natifs sont lus un par un ; un enfant unique peut être suivi, une ambiguïté exige
+un choix. Aucune autre base ni échantillon n’est préchargé.
+Les filtres de nom, chemin et type restent locaux. Canevas, déplacement, zoom,
+liste accessible d'objets/liens et F6 de l'onglet visible sont disponibles.
+Sélectionner affiche l'inspecteur sans lire de lignes.
+
+L'inspecteur distingue champs rapportés, déduits d'un échantillon explicite et
+dispositions d'aperçu de clés. Data/Structure/définition suivent les capacités ;
+rouvrir un objet existant applique la vue demandée. Le développement explicite
+lit les voisins immédiats disponibles d'un seul objet dans les limites
+existantes. L'inférence humaine a sa propre confirmation nommant source, objet,
+limites et annulation ; aucune valeur échantillonnée n'entre dans le graphe.
+
+Lecture, annulation, vide connu, indisponibilité, résultat partiel, erreur et
+péremption sont distincts. Un rafraîchissement échoué garde l'ancienne carte
+signalée périmée. Fermer/masquer n'annule que sa lecture. Les extrémités non
+chargées restent visibles. Sans métadonnées structurées, les dépendances
+techniques sont indisponibles ; appartenance et imbrication sont distinctes des
+FK. Une source éphémère fermée ou un fichier SQLite supprimé n'est pas remplacé.
+Dispositions durables, export d'image et édition DDL graphique restent séparés.
+
 ### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
 
 Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
@@ -1935,17 +2025,20 @@ diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
   orthographe (« Not found among the objects Oxyn has read »). La recherche
   n'introspecte pas : une table d'un schéma jamais déplié n'est pas trouvée, et
   le message le laisse entendre.
-* **Ce qui est dessiné vient du backend.** Colonnes, clé primaire et colonnes de
-  clé étrangère sont lues par les mêmes commandes que la vue d'objet
-  (`relation_facets`, puis `refresh_relation_facet` pour une facette jamais lue) ;
-  les arêtes sont les clés étrangères. Aux tables nommées s'ajoutent leurs
-  **voisines directes** par une clé, sortante ou entrante, et les clés entre
-  deux tables dessinées. Aucun modèle n'est consulté, et un même catalogue
-  donne le même diagramme (disposition dagre, de gauche à droite : la table qui
-  porte la clé avant celle qu'elle référence).
-* **Borné.** Un bloc est lu jusqu'à 20 noms, un diagramme s'arrête à 40 tables
-  et une table montre 12 colonnes, clés d'abord ; chaque surplus est compté et
-  dit. Quatre lectures au plus sont en vol à la fois.
+* **Ce qui est dessiné vient du backend.** La commande typée du bus
+  `LoadSchemaMap` lit descriptions et clés sortantes disponibles sur la session
+  d'origine et renvoie la même projection pure que la carte autonome
+  ([ADR-0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md)).
+  L'inférence documentaire n'est jamais implicite. Les noms désignent seulement
+  les objets déjà observés ; les voisins se développent explicitement dans la
+  carte. Les clés entre objets chargés sont dessinées et les extrémités non
+  chargées comptées. Aucun modèle ni nom de colonne ne crée de relation.
+* **Borné.** Un bloc contient au plus 20 noms ; la carte commune s'arrête à
+  40 objets, 12 champs affichés par objet, membres imbriqués compris, et
+  200 liens. Les lectures sont sérialisées par propriétaire d'origine avec
+  priorité interactive. Parties non lues/périmées/omises et facettes
+  indisponibles/échouées restent visibles ; la couverture entrante ne prétend
+  jamais dépasser les clés sortantes chargées.
 * **Navigable.** Déplacer à la souris, zoomer par les boutons, le pincement ou
   le clavier (flèches, `+`, `-`, `0` pour ajuster) quand le diagramme a le
   focus. La molette fait défiler la conversation, pas le diagramme. Un clic sur
@@ -2323,3 +2416,37 @@ Ouvrir le panneau de l'assistant charge un modèle prêt avant la première
 question, si bien que son chargement à froid ne compte pas dans la borne de
 2 secondes de cette question. Tant que l'option est désactivée, ouvrir le
 panneau ne fait rien.
+
+## Onglet de transfert natif de base
+
+`Database transfers` dans l’explorateur ouvre un onglet retenu par connexion/
+session originale, sans démarrer d’exécutable. Disponibilité et historique borné
+sont des lectures attachées à la source. Moteurs/transports indisponibles affichent
+leur raison dans la même vue ; l’export de grille reste distinct.
+
+Choisir export/restauration, format proposé, outil installé fiable et nouveau
+fichier de sortie ou archive fiable via les sélecteurs natifs. Préparer fixe
+sélections/options sans exécution sur la cible. Toute nouvelle archive efface
+l’acquittement de confiance. La revue affiche connexion, destination native
+exacte, nom de fichier, outil/version et options de propriété/privilèges. Toute
+restauration exige ensuite la confirmation native, même Local. Aucune commande
+éditable ni repli vers une restauration SQL.
+
+L’onglet affiche étapes/octets observés et historique sûr borné, jamais de
+pourcentage inventé ou journal brut. Masquer/changer conserve la tâche ; fermer
+une tâche active propose par défaut de garder ouvert et attend annulation/
+nettoyage avant fermeture. Fenêtre/source/arrêt possèdent aussi le nettoyage.
+Résultats distincts : refus, échec avant démarrage, échec, réussite, annulation,
+modifications partielles possibles, inconnu et interrompu. Aucun bouton ne rejoue
+une restauration incertaine. L’inspection humaine marque le rapprochement sans
+remplacer l’observation ; les sources possiblement modifiées invalident métadonnées
+et aperçus.
+
+
+### Précision ADR-0084 : lecture du schéma à la demande
+
+L’ouverture de la carte visible et le choix du périmètre déclenchent la lecture
+bornée, sans bouton Charger supplémentaire. Un enfant unique peut être suivi ;
+les ambiguïtés exigent un choix. Aucun autre préchargement ni échantillonnage
+implicite. Les préférences de métadonnées présentent le préchargement global
+facultatif dans une section Avancé repliée, sans prérequis pour explorer.

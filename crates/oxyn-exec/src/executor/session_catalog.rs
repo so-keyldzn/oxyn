@@ -52,7 +52,7 @@ impl Executor {
         ))
     }
 
-    fn catalog_target(
+    pub(super) fn catalog_target(
         &self,
         connection: ConnectionId,
         session: SessionId,
@@ -81,38 +81,87 @@ impl Executor {
         scope: &CatalogRefreshScope,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
+        self.refresh_session_catalog_with_priority(
+            id,
+            connection,
+            session,
+            scope,
+            cancel,
+            crate::catalog::priority::Priority::Demand,
+        )
+        .await
+    }
+
+    pub(super) async fn refresh_session_catalog_with_priority(
+        &self,
+        id: CommandId,
+        connection: ConnectionId,
+        session: SessionId,
+        scope: &CatalogRefreshScope,
+        cancel: &CancelToken,
+        priority: crate::catalog::priority::Priority,
+    ) -> Result<Outcome> {
         let (slot, state) = self.catalog_target(connection, session)?;
+        let _turn = state
+            .queue
+            .enter(id, priority, cancel, slot.closing_token())
+            .await?;
         let mut budget = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(OxynError::Cancelled),
             _ = slot.closing_token().cancelled() => return Err(OxynError::Cancelled),
             guard = state.refresh.lock() => guard,
         };
+        let generation = slot.catalog.cache.read().generation();
+        if let crate::catalog::priority::Priority::Prefetch(expected)
+        | crate::catalog::priority::Priority::DemandAt(expected) = priority
+            && generation != expected
+        {
+            return Err(OxynError::Cancelled);
+        }
         let patch = slot.read_catalog(scope, cancel).await?;
         if cancel.is_cancelled() || slot.closing_token().is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        let evicted = budget.reserve_for(session, scope, &patch)?;
-        self.evict_session_catalogs(evicted);
-        if let Err(error) = slot.catalog.publish(patch) {
-            budget.release_owner(session);
-            return Err(error);
-        }
+        let metadata_bytes = u64::try_from(patch.encoded_bytes()?)
+            .map_err(|_| OxynError::Config("metadata byte count exceeds report range".into()))?;
+        let generation =
+            self.publish_catalog_patch(&slot, &mut budget, scope, patch, generation, cancel)?;
         self.events
             .publish(id, Some(connection), Event::CatalogUpdated);
         Ok(Outcome::CatalogRefreshed {
             connection,
             scope: scope.clone(),
+            metadata_bytes,
+            generation,
         })
     }
-    pub(super) fn evict_session_catalogs(
+    pub(super) fn publish_catalog_patch(
         &self,
-        evicted: Vec<(SessionId, oxyn_catalog::CatalogScope)>,
-    ) {
-        for (owner, scope) in evicted {
-            if let Some(slot) = self.sessions.get(owner) {
-                slot.catalog.cache.write().evict(&scope);
+        slot: &SessionSlot,
+        budget: &mut crate::catalog::CatalogBudget,
+        scope: &CatalogRefreshScope,
+        patch: crate::catalog::CatalogPatch,
+        generation: oxyn_catalog::CatalogGenerationId,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_catalog::CatalogGenerationId> {
+        slot.catalog.publish_checked(generation, |cache| {
+            if cancel.is_cancelled() || slot.closing_token().is_cancelled() {
+                return Err(OxynError::Cancelled);
             }
-        }
+            let evicted = budget.reserve_for(slot.id(), scope, &patch)?;
+            for (owner, evicted_scope) in evicted {
+                if owner == slot.id() {
+                    cache.evict(&evicted_scope);
+                } else if let Some(other) = self.sessions.get(owner) {
+                    other.catalog.cache.write().evict(&evicted_scope);
+                }
+            }
+            if let Err(error) = patch.apply(cache) {
+                budget.release_owner(slot.id());
+                return Err(error);
+            }
+            Ok(cache.generation())
+        })
     }
 }

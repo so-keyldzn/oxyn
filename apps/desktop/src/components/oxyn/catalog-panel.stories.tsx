@@ -278,3 +278,17 @@ export const Narrow: Story = {
     ),
   ],
 }
+
+export const EmbeddedSourceHeader: Story = {
+  args: { embeddedNavigation: true },
+  play: async ({ canvas, canvasElement }) => {
+    await expect(
+      canvas.queryByRole("button", { name: "Switch connection" })
+    ).toBeNull()
+    const header = canvasElement.querySelector('[data-slot="sidebar-header"]')!
+    expect(parseFloat(getComputedStyle(header).paddingTop)).toBeLessThanOrEqual(
+      8
+    )
+    await expect(canvas.getByText("billing")).toBeVisible()
+  },
+}

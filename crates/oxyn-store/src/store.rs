@@ -164,10 +164,28 @@ impl Store {
         Workspaces::new(self)
     }
 
+    /// Workspace-local server groups. Every operation may block on the store.
+    #[must_use]
+    pub fn server_profiles(&self) -> crate::server_profiles::ServerProfiles<'_> {
+        crate::server_profiles::ServerProfiles::new(self)
+    }
+
     /// The configured connections.
     #[must_use]
     pub fn connections(&self) -> Connections<'_> {
         Connections::new(self)
+    }
+
+    /// Manual metadata preferences. Every operation may block on the store.
+    #[must_use]
+    pub fn metadata_policies(&self) -> crate::metadata_loading::MetadataPolicies<'_> {
+        crate::metadata_loading::MetadataPolicies::new(self)
+    }
+
+    /// Readable native job records; never credentials, argv or raw logs.
+    #[must_use]
+    pub fn native_transfers(&self) -> crate::native_transfers::NativeTransfers<'_> {
+        crate::native_transfers::NativeTransfers::new(self)
     }
 
     /// The execution history.

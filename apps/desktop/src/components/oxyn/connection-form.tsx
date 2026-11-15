@@ -225,6 +225,7 @@ export function missingFields(
  */
 export function ConnectionForm({
   driver,
+  lockedDestination = false,
   existing,
   prefill,
   submitting = false,
@@ -242,6 +243,8 @@ export function ConnectionForm({
   dropped,
 }: {
   driver: DriverChoice
+  /** Server/database stay fixed during an explicit grouped opening; account stays editable. */
+  lockedDestination?: boolean
   existing?: ConnectionDetails
   /** A new connection's starting values; ignored with `existing`. */
   prefill?: ConnectionPrefill
@@ -423,7 +426,12 @@ export function ConnectionForm({
                             moved
                           }
                           editing={stored !== undefined}
-                          disabled={busy}
+                          disabled={
+                            busy ||
+                            (lockedDestination &&
+                              !spec.secret &&
+                              spec.key !== "user")
+                          }
                           onBrowse={onBrowse}
                         />
                       )}
@@ -611,6 +619,7 @@ function DriverField({
     case "bool":
       control = (
         <Switch
+          disabled={disabled}
           id={id}
           checked={value === "true"}
           onCheckedChange={(checked: boolean) =>
@@ -662,6 +671,7 @@ function DriverField({
       control = (
         <InputGroup>
           <InputGroupTextInput
+            disabled={disabled}
             id={id}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -676,6 +686,7 @@ function DriverField({
           {onBrowse ? (
             <InputGroupAddon align="inline-end">
               <InputGroupButton
+                disabled={disabled}
                 onClick={async () => {
                   const chosen = await onBrowse(spec)
                   if (chosen) onChange(chosen)
@@ -696,6 +707,7 @@ function DriverField({
     default:
       control = (
         <TextInput
+          disabled={disabled}
           id={id}
           // A port is digits, not a number input: a scrolled wheel must not
           // change it, and a spinner means nothing for 5432.
@@ -736,6 +748,7 @@ function DriverField({
     ) : null
   return (
     <Field
+      data-disabled={disabled || undefined}
       data-connection-field={spec.key}
       data-invalid={invalidPort || undefined}
       orientation={spec.kind.type === "bool" ? "horizontal" : "vertical"}

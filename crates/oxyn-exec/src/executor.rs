@@ -95,6 +95,33 @@ mod session_catalog;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Outcome {
+    /// Manual metadata policy read/saved without opening a server session.
+    MetadataPolicy {
+        snapshot: oxyn_core::MetadataPolicySnapshot,
+    },
+    /// Actual reads and coverage of an explicit bounded preload.
+    MetadataPreloaded {
+        progress: oxyn_core::MetadataPreloadProgress,
+    },
+    /// Server databases, without opening any child session.
+    DatabasesDiscovered {
+        databases: Vec<oxyn_core::DiscoveredDatabase>,
+    },
+    /// The workspace's local grouping state, without credentials.
+    ServerProfilesListed {
+        profiles: Vec<oxyn_core::ServerProfileSnapshot>,
+    },
+    /// A profile revision was persisted atomically.
+    ServerProfileSaved {
+        snapshot: oxyn_core::ServerProfileSnapshot,
+    },
+    /// Only the group and its memberships were removed.
+    ServerProfileRemoved { profile: oxyn_core::ServerProfileId },
+    /// The child's grouping changed; its configuration and sessions did not.
+    ServerProfileMembershipSet {
+        connection: ConnectionId,
+        profile: Option<oxyn_core::ServerProfileId>,
+    },
     /// A session was opened.
     Connected {
         /// The connection.
@@ -131,12 +158,21 @@ pub enum Outcome {
     /// A preview cursor was released; retained result rows remain available.
     PreviewReleased { result: ResultId },
 
+    /// A bounded map snapshot; no row values or layout state.
+    SchemaMapLoaded {
+        map: oxyn_catalog::schema_map::SchemaMapLoaded,
+    },
+
     /// Metadata was refreshed without including its contents in the outcome.
     CatalogRefreshed {
+        /// Cache generation atomically observed at publication.
+        generation: oxyn_catalog::CatalogGenerationId,
         /// Connection owning the updated cache.
         connection: ConnectionId,
         /// Requested scope, including Root for the legacy command.
         scope: CatalogRefreshScope,
+        /// Bounded encoded metadata bytes, not protocol traffic.
+        metadata_bytes: u64,
     },
 
     /// The local catalog cache, handed to whoever was allowed to read it.
@@ -321,6 +357,27 @@ pub enum Outcome {
         existed: bool,
     },
 
+    /// Native availability follows the actual product, owner and confined mode.
+    NativeTransferSupport {
+        support: oxyn_core::NativeTransferSupport,
+    },
+    /// One unused owned native selection was released; no source was touched.
+    NativeSelectionRevoked { grant: oxyn_core::NativeGrantId },
+    /// A human-selected executable snapshot passed role/version checks.
+    NativeToolInspected { tool: oxyn_core::NativeToolInfo },
+    /// The fixed source/file/tool/options await start or host confirmation.
+    NativeTransferPrepared {
+        review: Box<oxyn_core::NativeTransferReview>,
+    },
+    /// A native job changed or settled; this is never SQL result data.
+    NativeTransferUpdated {
+        job: Box<oxyn_core::NativeTransferJob>,
+    },
+    /// Bounded readable native history, including interrupted outcomes.
+    NativeTransfers {
+        jobs: Vec<oxyn_core::NativeTransferJob>,
+    },
+
     /// **Nothing was executed.** The command awaits an explicit approval.
     NeedsApproval {
         /// The identifier under which the approval is given
@@ -397,6 +454,8 @@ pub struct Executor {
     events: EventBus,
     results: RwLock<crate::retained::RetainedResults>,
     previews: crate::preview_stream::Registry,
+    metadata_jobs: Arc<metadata_loading::jobs::Jobs>,
+    native: Arc<native_transfers::NativeOperations>,
     catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: Arc<RwLock<HashMap<ConnectionId, ConnectionConfig>>>,
     /// Orders every write of a connection — to the store, then to
@@ -802,6 +861,111 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         match command {
+            Command::DiscoverDatabases { connection } => {
+                self.discover_databases(*connection, cancel).await
+            }
+            Command::CreateDatabaseConnection {
+                profile,
+                seed,
+                config,
+            } => {
+                self.create_database_connection(*profile, *seed, config, cancel)
+                    .await
+            }
+            Command::LoadSchemaMap { request } => self.load_schema_map(id, request, cancel).await,
+            Command::ReadNativeTransferSupport {
+                connection,
+                session,
+            } => self.native_support(id, *connection, *session, cancel).await,
+            Command::RevokeNativeSelection { owner, grant } => {
+                let runner = Arc::clone(&self.native.runner);
+                let owner = *owner;
+                let grant = *grant;
+                // Releasing authority cannot compete with new native work for
+                // its capacity. The local writer owns this blocking drop even
+                // if the requesting tab disappears while the pool is full.
+                self.write_audit(move |_| {
+                    runner
+                        .revoke(owner, grant)
+                        .map_err(native_transfers::failure)
+                })
+                .await??;
+                Ok(Outcome::NativeSelectionRevoked { grant })
+            }
+            Command::InspectNativeTool { owner, grant } => {
+                self.inspect_native_tool(id, *owner, *grant, cancel).await
+            }
+            Command::PrepareNativeTransfer { request } => {
+                self.prepare_native(id, (**request).clone(), cancel).await
+            }
+            Command::ExportDatabase {
+                connection,
+                transfer,
+                owner,
+            } => {
+                self.run_native(id, *connection, *owner, *transfer, false, cancel)
+                    .await
+            }
+            Command::RestoreDatabase {
+                connection,
+                transfer,
+                owner,
+            } => {
+                self.run_native(id, *connection, *owner, *transfer, true, cancel)
+                    .await
+            }
+            Command::DiscardNativeTransfer {
+                connection,
+                transfer,
+                owner,
+            } => {
+                self.discard_native(*connection, *owner, *transfer, cancel)
+                    .await
+            }
+            Command::ReadNativeTransfers { connection } => {
+                self.read_native(*connection, cancel).await
+            }
+            Command::ReconcileNativeTransfer {
+                connection,
+                transfer,
+            } => self.reconcile_native(*connection, *transfer, cancel).await,
+            Command::PreloadMetadata { request } => {
+                self.preload_metadata(id, request, cancel).await
+            }
+            Command::ReadMetadataPolicy { connection } => {
+                self.read_metadata_policy(*connection, cancel).await
+            }
+            Command::WriteMetadataPolicy {
+                connection,
+                policy,
+                expected_revision,
+            } => {
+                self.write_metadata_policy(*connection, policy, *expected_revision, cancel)
+                    .await
+            }
+            Command::ListServerProfiles => self.list_server_profiles(cancel).await,
+            Command::SaveServerProfile {
+                profile,
+                expected_revision,
+            } => {
+                self.save_server_profile(profile, *expected_revision, cancel)
+                    .await
+            }
+            Command::RemoveServerProfile {
+                profile,
+                expected_revision,
+            } => {
+                self.remove_server_profile(*profile, *expected_revision, cancel)
+                    .await
+            }
+            Command::SetServerProfileMembership {
+                connection,
+                profile,
+                expected_profile,
+            } => {
+                self.set_server_profile_membership(*connection, *profile, *expected_profile, cancel)
+                    .await
+            }
             Command::Connect { connection } => self.connect(*connection, cancel, false).await,
             Command::OpenConsoleSession { connection } => {
                 self.connect(*connection, cancel, true).await
@@ -828,14 +992,18 @@ impl Executor {
                 if cancel.is_cancelled() {
                     return Err(OxynError::Cancelled);
                 }
-                self.set_session_context(
-                    *connection,
-                    *session,
-                    catalog.as_deref(),
-                    namespace.as_deref(),
-                    cancel,
-                )
-                .await
+                let outcome = self
+                    .set_session_context(
+                        *connection,
+                        *session,
+                        catalog.as_deref(),
+                        namespace.as_deref(),
+                        cancel,
+                    )
+                    .await;
+                self.events
+                    .publish(id, Some(*connection), Event::CatalogUpdated);
+                outcome
             }
 
             Command::Execute {
@@ -1469,11 +1637,9 @@ impl Executor {
     ) -> Result<Outcome> {
         let config = self.connection_config(connection, cancel).await?;
         let session = self.open_driver_session(&config, cancel).await?;
-        let slot = self.sessions.insert(if console {
-            SessionSlot::console(connection, session)
-        } else {
-            SessionSlot::new(connection, session)
-        });
+        let slot = self
+            .sessions
+            .insert(SessionSlot::opened(config, session, console));
         // Read, not assumed: a fresh SQLite connection is in autocommit, and
         // the console starts `Idle` because the engine said so. Before any
         // lock below: none may be held across this await.
@@ -1492,6 +1658,7 @@ impl Executor {
                 let next = crate::catalog::ConnectionCatalog {
                     cache: Arc::clone(&slot.catalog.cache),
                     refresh: Arc::clone(&current.refresh),
+                    queue: Arc::clone(&current.queue),
                     closed: CancelToken::new(),
                     session: RwLock::new(Some(slot.id())),
                 };
@@ -1556,6 +1723,7 @@ impl Executor {
         for slot in self.sessions.for_connection(connection) {
             slot.begin_close();
         }
+        self.stop_native_source(connection, None).await?;
         self.previews.close(connection, None);
         // Cancellation first: closing without cancelling leaves the queries
         // running server-side, connection taken and lock held.
@@ -1594,6 +1762,7 @@ impl Executor {
         }
         self.previews.close(connection, Some(session));
         slot.begin_close();
+        self.stop_native_source(connection, Some(session)).await?;
         for running in self.running.for_session(session) {
             self.running.cancel(&self.sessions, running.statement).await;
         }
@@ -1658,7 +1827,13 @@ impl Executor {
         )
         .map_err(|error| OxynError::Config(error.to_string()))?;
         let context = oxyn_driver::SessionContext::from_path(&path);
-        slot.set_context(&context, cancel).await?;
+        self.metadata_jobs.cancel_session(session);
+        slot.catalog.cache.write().invalidate_all();
+        let changed = slot.set_context(&context, cancel).await;
+        // Reads started while the provider was changing context are obsolete
+        // too, including when the operation's outcome is uncertain.
+        slot.catalog.cache.write().invalidate_all();
+        changed?;
         Ok(Outcome::SessionContextSet {
             session,
             context: slot.context(cancel).await?,
@@ -1706,6 +1881,15 @@ impl Executor {
             .get(&connection)
             .cloned()
             .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let _turn = state
+            .queue
+            .enter(
+                id,
+                crate::catalog::priority::Priority::Demand,
+                cancel,
+                &state.closed,
+            )
+            .await?;
         let mut budget = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(OxynError::Cancelled),
@@ -1727,6 +1911,7 @@ impl Executor {
             })
             .filter(|slot| slot.is_open())
             .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let generation = slot.catalog.cache.read().generation();
         let operation = cancel.child();
         let read = slot.read_catalog(scope, &operation);
         tokio::pin!(read);
@@ -1750,17 +1935,17 @@ impl Executor {
         {
             return Err(OxynError::Cancelled);
         }
-        let evicted = budget.reserve_for(slot.id(), scope, &patch)?;
-        self.evict_session_catalogs(evicted);
-        if let Err(error) = slot.catalog.publish(patch) {
-            budget.release_owner(slot.id());
-            return Err(error);
-        }
+        let metadata_bytes = u64::try_from(patch.encoded_bytes()?)
+            .map_err(|_| OxynError::Config("metadata byte count exceeds report range".into()))?;
+        let generation =
+            self.publish_catalog_patch(&slot, &mut budget, scope, patch, generation, cancel)?;
         self.events
             .publish(id, Some(connection), Event::CatalogUpdated);
         Ok(Outcome::CatalogRefreshed {
             connection,
             scope: scope.clone(),
+            metadata_bytes,
+            generation,
         })
     }
 
@@ -2283,8 +2468,8 @@ impl Executor {
             .map_err(Into::into)
     }
 
-    /// Runs a write meant for the audit trail — the policy journal or the
-    /// query history — on the blocking pool, and awaits it before returning.
+    /// Runs local audit/job writes and their owned resource release on the
+    /// blocking pool, awaiting them before returning.
     ///
     /// Unlike [`local_worker`](Self::local_worker), this never fails for want
     /// of a runtime: the audit trail must not go silent at shutdown, when no
@@ -2565,7 +2750,8 @@ impl Executor {
         match command {
             // The connection is not registered yet: its own declaration is
             // authoritative, and the gate will cross-check it.
-            Command::CreateConnection { config }
+            Command::CreateDatabaseConnection { config, .. }
+            | Command::CreateConnection { config }
             | Command::UpdateConnection { config }
             | Command::TestConnection { config } => config.environment,
             other => other
@@ -2703,6 +2889,9 @@ impl Executor {
     /// at that point: it is logged at `warn` level. Returns the number of
     /// closed sessions.
     pub async fn shutdown(&self) -> usize {
+        if let Err(error) = self.stop_all_native().await {
+            tracing::error!(error=%error,"native job shutdown cleanup did not settle");
+        }
         self.previews.clear();
         // Before closing sessions: a caller usually bounds this call, and a
         // server that never answers the close would cut it before the end —
@@ -3120,6 +3309,7 @@ pub struct ExecutorBuilder {
     workspace: WorkspaceId,
     app_session: oxyn_core::AppSessionId,
     memory_budget: usize,
+    native_runner: Arc<oxyn_transfer::TransferRunner>,
 }
 
 impl ExecutorBuilder {
@@ -3137,7 +3327,15 @@ impl ExecutorBuilder {
             // A launch no row names: its lines read as a finished launch's.
             app_session: oxyn_core::AppSessionId::new(),
             memory_budget: DEFAULT_MEMORY_BUDGET,
+            native_runner: Arc::new(oxyn_transfer::TransferRunner::new()),
         }
+    }
+
+    /// Host-selected native capabilities, shared with native file pickers only.
+    #[must_use]
+    pub fn with_native_runner(mut self, runner: Arc<oxyn_transfer::TransferRunner>) -> Self {
+        self.native_runner = runner;
+        self
     }
 
     /// The drivers compiled into this binary.
@@ -3205,6 +3403,8 @@ impl ExecutorBuilder {
             events: self.events,
             results: RwLock::new(crate::retained::RetainedResults::default()),
             previews,
+            metadata_jobs: Arc::new(metadata_loading::jobs::Jobs::default()),
+            native: Arc::new(native_transfers::NativeOperations::new(self.native_runner)),
             catalogs: RwLock::new(HashMap::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_writes: Arc::new(Mutex::new(())),
@@ -3301,3 +3501,15 @@ mod agent_transaction_tests;
 #[cfg(test)]
 #[path = "stopped_write_tests.rs"]
 mod stopped_write_tests;
+
+#[path = "server_profiles.rs"]
+mod server_profiles;
+
+#[path = "metadata_loading.rs"]
+mod metadata_loading;
+
+#[path = "schema_map.rs"]
+mod schema_map;
+
+#[path = "native_transfers.rs"]
+mod native_transfers;

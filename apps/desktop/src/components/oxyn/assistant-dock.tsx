@@ -59,6 +59,7 @@ export function AssistantDock({
       >
         <section
           aria-label="Assistant panel"
+          data-focus-region="assistant"
           inert={!open}
           className={cn(
             "flex h-full min-h-0 flex-col bg-sidebar",

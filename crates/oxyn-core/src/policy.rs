@@ -332,6 +332,58 @@ impl DefaultPolicy {
 
 impl PolicyGate for DefaultPolicy {
     fn authorize(&self, actor: &Actor, cmd: &Command, env: Environment) -> Decision {
+        if let Command::CreateDatabaseConnection { config, .. } = cmd {
+            return self.authorize(
+                actor,
+                &Command::CreateConnection {
+                    config: config.clone(),
+                },
+                env,
+            );
+        }
+        // Grouping exposes connection defaults and controls future navigation.
+        // It is the human's state, never an agent's new discovery channel.
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::ReadNativeTransferSupport { .. }
+                    | Command::InspectNativeTool { .. }
+                    | Command::RevokeNativeSelection { .. }
+                    | Command::PrepareNativeTransfer { .. }
+                    | Command::ExportDatabase { .. }
+                    | Command::RestoreDatabase { .. }
+                    | Command::DiscardNativeTransfer { .. }
+                    | Command::ReadNativeTransfers { .. }
+                    | Command::ReconcileNativeTransfer { .. }
+                    | Command::LoadSchemaMap { .. }
+                    | Command::PreloadMetadata { .. }
+                    | Command::ReadMetadataPolicy { .. }
+                    | Command::WriteMetadataPolicy { .. }
+                    | Command::DiscoverDatabases { .. }
+                    | Command::ListServerProfiles
+                    | Command::SaveServerProfile { .. }
+                    | Command::RemoveServerProfile { .. }
+                    | Command::SetServerProfileMembership { .. }
+            )
+        {
+            return Decision::deny(
+                "only the human may manage local navigation, loading preferences or native transfers",
+            );
+        }
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::RefreshCatalogScope {
+                    scope: crate::CatalogRefreshScope::SampledDescription { .. },
+                    ..
+                } | Command::RefreshSessionCatalog {
+                    scope: crate::CatalogRefreshScope::SampledDescription { .. },
+                    ..
+                }
+            )
+        {
+            return Decision::deny("schema sampling requires an explicit human request");
+        }
         if actor.is_agent() && matches!(cmd, Command::WriteWorkspacePreferences { .. }) {
             return Decision::Deny {
                 reason: "only the human may change workspace display preferences".into(),
@@ -474,6 +526,16 @@ impl PolicyGate for DefaultPolicy {
                 "an agent is strictly read-only on \"{}\" (production)",
                 Self::display_name(cmd, facts.as_ref())
             ));
+        }
+
+        if matches!(cmd, Command::RestoreDatabase { .. }) {
+            return Decision::approval(
+                format!(
+                    "database restoration on \"{}\" requires a destination-bound human review",
+                    Self::display_name(cmd, facts.as_ref())
+                ),
+                Self::preview(cmd, facts.as_ref()),
+            );
         }
 
         // ── Approvals ───────────────────────────────────────────────────────

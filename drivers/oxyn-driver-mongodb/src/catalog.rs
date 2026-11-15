@@ -45,8 +45,8 @@ const MAX_ENTRIES: usize = 100_000;
 /// would let a few thousand large schemas take a gigabyte (I-06).
 const MAX_LISTING_BYTES: usize = 64 << 20;
 
-/// The server-side bound, in milliseconds, on sampling a view's documents.
-const VIEW_SAMPLE_MS: i64 = 10_000;
+/// Server deadline for explicit inference, including view pipelines.
+const SCHEMA_SAMPLE_MS: i64 = 10_000;
 
 /// The databases MongoDB itself uses.
 const SYSTEM_DATABASES: &[&str] = &["admin", "config", "local"];
@@ -186,9 +186,20 @@ impl MongoCatalog {
             if !advanced {
                 return Ok(documents);
             }
-            let current = cursor.current().to_owned();
-            bytes = bytes.saturating_add(current.as_bytes().len());
-            documents.push(current);
+            let current = cursor.current();
+            let next_bytes = bytes.checked_add(current.as_bytes().len()).ok_or_else(|| {
+                OxynError::CatalogUnavailable("metadata cursor byte count overflow".into())
+            })?;
+            if !strict && next_bytes > SAMPLE_BYTES {
+                if documents.is_empty() {
+                    return Err(OxynError::CatalogUnavailable(
+                        "the first sampled document exceeds the inference byte budget".into(),
+                    ));
+                }
+                return Ok(documents);
+            }
+            bytes = next_bytes;
+            documents.push(current.to_owned());
         }
     }
 
@@ -342,6 +353,14 @@ fn database_of(path: &CatalogPath) -> Result<&str> {
 
 #[async_trait::async_trait]
 impl CatalogProvider for MongoCatalog {
+    fn schema_sample_limits(&self) -> Option<oxyn_catalog::SchemaSampleLimits> {
+        Some(oxyn_catalog::SchemaSampleLimits {
+            max_documents: u32::try_from(SAMPLE_DOCUMENTS).ok()?,
+            max_retained_bytes: u64::try_from(SAMPLE_BYTES).ok()?,
+            max_duration_ms: u64::try_from(SCHEMA_SAMPLE_MS).ok()?,
+        })
+    }
+
     async fn server_info(&self, _cancel: &CancelToken) -> Result<ServerInfo> {
         Ok(ServerInfo::new(
             "MongoDB",
@@ -443,12 +462,8 @@ impl CatalogProvider for MongoCatalog {
         let listed = self.listed(database, name, cancel).await?;
         let mut sample_command =
             doc! { "find": name, "limit": i64::try_from(SAMPLE_DOCUMENTS).unwrap_or(i64::MAX) };
-        if listed.kind == RelationKind::View {
-            // A view's pipeline runs to produce its first documents, and a
-            // `$group` reads its whole source: a click in the tree is bounded
-            // on the server.
-            sample_command.insert("maxTimeMS", VIEW_SAMPLE_MS);
-        }
+        // Explicit schema inference is bounded for collections and view pipelines.
+        sample_command.insert("maxTimeMS", SCHEMA_SAMPLE_MS);
         let sample = self
             .documents(database, sample_command, SAMPLE_DOCUMENTS, false, cancel)
             .await
@@ -457,7 +472,7 @@ impl CatalogProvider for MongoCatalog {
                     OxynError::CatalogUnavailable(format!(
                         "the view's fields could not be sampled within {} s ({message}); run a \
                          bounded aggregate on it from a console",
-                        VIEW_SAMPLE_MS / 1000
+                        SCHEMA_SAMPLE_MS / 1000
                     ))
                 }
                 other => other,

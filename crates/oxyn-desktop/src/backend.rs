@@ -72,6 +72,7 @@ pub(crate) struct Inner {
     /// of a conversation, on the same executor as the interface
     /// ([ADR-0004](../../../docs/adr/0004-command-bus.md)).
     pub(crate) executor: Arc<Executor>,
+    pub(crate) native_runner: Arc<oxyn_transfer::TransferRunner>,
     /// The only authority on which database types exist
     /// ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
     pub(crate) drivers: Arc<DriverRegistry>,
@@ -348,7 +349,13 @@ impl Backend {
         let local = recovery::LocalWork::begin(&store, workspace)?;
         let layouts = adopt_layouts(&store, workspace, local.session);
 
+        store
+            .native_transfers()
+            .interrupt_unfinished(workspace)
+            .context("recovering interrupted native transfers")?;
+        let native_runner = Arc::new(oxyn_transfer::TransferRunner::new());
         let executor = Executor::builder(Arc::clone(&store), gate)
+            .with_native_runner(Arc::clone(&native_runner))
             .with_drivers(Arc::clone(&drivers))
             .with_credentials(Arc::clone(&credentials) as Arc<_>)
             .with_workspace(workspace)
@@ -376,6 +383,7 @@ impl Backend {
         let backend = Self {
             inner: Arc::new(Inner {
                 executor: Arc::new(executor),
+                native_runner,
                 drivers,
                 policy,
                 credentials,
@@ -513,6 +521,27 @@ impl Backend {
         id: CommandId,
         draft: ConnectionDraft,
     ) -> Result<ConnectResponse, IpcError> {
+        self.connect_grouped(id, draft, None).await
+    }
+
+    /// Creates and opens a reviewed child with independent credentials.
+    /// Existing children use reconnect; failed opening returns their saved ID.
+    pub async fn open_database(
+        &self,
+        id: CommandId,
+        profile: oxyn_core::ServerProfileId,
+        seed: ConnectionId,
+        draft: ConnectionDraft,
+    ) -> Result<ConnectResponse, IpcError> {
+        self.connect_grouped(id, draft, Some((profile, seed))).await
+    }
+
+    async fn connect_grouped(
+        &self,
+        id: CommandId,
+        draft: ConnectionDraft,
+        group: Option<(oxyn_core::ServerProfileId, ConnectionId)>,
+    ) -> Result<ConnectResponse, IpcError> {
         let inner = &self.inner;
         let cancel = self.track(id)?;
 
@@ -532,8 +561,15 @@ impl Backend {
             .dispatch_as(
                 id,
                 Actor::Human,
-                Command::CreateConnection {
-                    config: Box::new(config.clone()),
+                match group {
+                    Some((profile, seed)) => Command::CreateDatabaseConnection {
+                        profile,
+                        seed,
+                        config: Box::new(config.clone()),
+                    },
+                    None => Command::CreateConnection {
+                        config: Box::new(config.clone()),
+                    },
                 },
                 &cancel,
             )
@@ -653,13 +689,13 @@ impl Backend {
         approved: bool,
     ) -> Result<Option<ConnectResponse>, IpcError> {
         let inner = &self.inner;
-        if !inner.pending_connections.lock().contains_key(&command) {
-            return Err(IpcError::invalid("No connection is awaiting this decision"));
-        }
         if !approved {
             inner.pending_connections.lock().remove(&command);
             inner.executor.reject(command);
             return Ok(None);
+        }
+        if !inner.pending_connections.lock().contains_key(&command) {
+            return Err(IpcError::invalid("No connection is awaiting this decision"));
         }
         // Registered under the pending command's id, before the host is asked:
         // `cancel(command)` must reach the approval and the session opening
@@ -930,6 +966,21 @@ impl Backend {
         if !approved {
             return reject("Operation rejected");
         }
+        if inner
+            .executor
+            .approvals()
+            .peek(command)
+            .is_some_and(|pending| {
+                matches!(
+                    pending.command,
+                    Command::RestoreDatabase { .. } | Command::ExportDatabase { .. }
+                )
+            })
+        {
+            return Err(IpcError::invalid(
+                "Native database transfer decisions require their destination-bound host review",
+            ));
+        }
         // A connection's creation, edit or deletion completes on its own path:
         // approved here, its secrets and the policy would never follow it.
         if inner.pending_connections.lock().contains_key(&command)
@@ -1145,7 +1196,9 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
             preview: preview.map(Into::into),
         },
         Outcome::Denied { reason, .. } => CommandOutcome::Denied { reason },
-        Outcome::CatalogRefreshed { .. } => CommandOutcome::CatalogRefreshed,
+        Outcome::CatalogRefreshed { .. } | Outcome::SchemaMapLoaded { .. } => {
+            CommandOutcome::CatalogRefreshed
+        }
         Outcome::Exported { rows, bytes, .. } => CommandOutcome::Exported { rows, bytes },
         Outcome::Cancelled { .. } => CommandOutcome::Cancelled,
         _ => CommandOutcome::Done,
@@ -1189,12 +1242,17 @@ mod consoles;
 mod documents;
 mod exit;
 mod library;
+mod local_commands;
 mod metadata;
+mod metadata_loading;
+mod native_transfers;
 mod object_operations;
 mod proposal;
 mod recovery;
 mod results;
+mod schema_map;
 mod semantic;
+mod server_profiles;
 mod settings;
 mod tracking;
 pub(crate) mod windows;

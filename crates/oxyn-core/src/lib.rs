@@ -79,9 +79,20 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod library;
+pub mod metadata_loading;
+pub mod native_transfer;
+pub use native_transfer::*;
+pub mod schema_map;
+pub use schema_map::{MapObjectRef, SchemaMapRequest};
+pub mod server_profile;
 pub use library::{
     DocumentFilter, HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter,
     MAX_QUERY_DOCUMENT_BYTES, QueryDocumentUpdate,
+};
+pub use metadata_loading::{
+    MetadataFacet, MetadataLevel, MetadataLoadingPolicy, MetadataOverride, MetadataPolicySnapshot,
+    MetadataPreloadCursor, MetadataPreloadIssue, MetadataPreloadProgress, MetadataPreloadRequest,
+    MetadataPreloadState, MetadataScope,
 };
 pub mod policy;
 pub mod preferences;
@@ -108,13 +119,15 @@ pub use error::{ErrorClass, MissingModule, OxynError, Result};
 pub use event::Event;
 pub use ids::{
     AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,
-    DriverId, IdParseError, ResultId, SessionId, StatementHandle, WindowId, WorkspaceId,
+    DriverId, IdParseError, NativeGrantId, NativeTransferId, ResultId, ServerProfileId, SessionId,
+    StatementHandle, WindowId, WorkspaceId,
 };
 pub use policy::{ConnectionFacts, Decision, DefaultPolicy, PolicyGate, Preview};
 pub use preview::{PreviewShape, PreviewSort};
 pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
+pub use server_profile::{DiscoveredDatabase, ServerProfile, ServerProfileSnapshot};
 pub use stats::{ExecStats, ExecTimings};
 pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};

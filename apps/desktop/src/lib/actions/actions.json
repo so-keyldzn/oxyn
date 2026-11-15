@@ -365,6 +365,26 @@
       }
     },
     {
+      "id": "view.focusNext",
+      "label": "Focus next area",
+      "zone": "global",
+      "shortcut": { "mac": "F6", "other": "F6" },
+      "menu": {
+        "mac": { "menu": "view", "group": 2, "order": 0 },
+        "other": { "menu": "view", "group": 2, "order": 0, "mnemonic": "n" }
+      }
+    },
+    {
+      "id": "view.focusPrevious",
+      "label": "Focus previous area",
+      "zone": "global",
+      "shortcut": { "mac": "Shift+F6", "other": "Shift+F6" },
+      "menu": {
+        "mac": { "menu": "view", "group": 2, "order": 1 },
+        "other": { "menu": "view", "group": 2, "order": 1, "mnemonic": "r" }
+      }
+    },
+    {
       "id": "view.catalog",
       "label": "Show catalog",
       "zone": "global",
@@ -491,6 +511,11 @@
     { "id": "tab.closeOthers", "label": "Close others", "zone": "tabs" },
     { "id": "tab.closeRight", "label": "Close to the right", "zone": "tabs" },
     { "id": "tab.closeAll", "label": "Close all", "zone": "tabs" },
+    {
+      "id": "tab.browseSession",
+      "label": "Browse this console session",
+      "zone": "tabs"
+    },
     { "id": "tab.duplicate", "label": "Duplicate", "zone": "tabs" },
     { "id": "tab.rename", "label": "Rename…", "zone": "tabs" },
     {
@@ -642,6 +667,11 @@
     {
       "id": "catalog.viewStructure",
       "label": "View structure",
+      "zone": "tree"
+    },
+    {
+      "id": "catalog.viewSchemaMap",
+      "label": "View schema map",
       "zone": "tree"
     },
     { "id": "catalog.viewDdl", "label": "View DDL", "zone": "tree" },

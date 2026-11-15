@@ -130,7 +130,7 @@ async fn keys_with_dots_and_dollars_are_columns_find_cannot_sort_on() {
             ..PreviewShape::unordered()
         };
         let refused = session
-            .preview_request(&path, 10, &shape, &CancelToken::new())
+            .plan_preview(&path, 10, &shape, Some(&described), &CancelToken::new())
             .await;
         assert!(
             matches!(refused, Err(OxynError::NotSupported { .. })),

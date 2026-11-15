@@ -6,11 +6,11 @@ fn a_hostile_relation_stays_data_and_never_becomes_sql() {
     let path = CatalogPath::for_relation(Some("db"), Some("public"), name).expect("legal name");
     let command = refresh_command(ConnectionId::new(), Some(&path), Capabilities::SQL);
     let Command::RefreshCatalogScope {
-        scope: CatalogRefreshScope::Relation { relation, .. },
+        scope: CatalogRefreshScope::Description { relation, .. },
         ..
     } = command
     else {
-        panic!("a relation expansion must refresh that relation");
+        panic!("a relation expansion must request its description only");
     };
     assert_eq!(relation, name);
 }

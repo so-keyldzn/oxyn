@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
@@ -6,6 +7,7 @@ import { useSelector } from "@tanstack/react-store"
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { ExportMenuView, ExportSubmenu } from "@/components/oxyn/export-menu"
+import { SchemaSamplingDialog } from "@/components/oxyn/schema-sampling-dialog"
 import { FacetFrame } from "@/components/oxyn/facet-frame"
 import {
   ObjectViewFrame,
@@ -71,6 +73,8 @@ import type {
 export type ObjectViewHandle = {
   /** Shows Data and focuses its grid (`⌘2`); nothing without a preview. */
   focusPreview: () => void
+  /** Explicit navigation to an existing tab also releases restored-read hold. */
+  openSection: (target: OpenTarget) => void
 }
 
 /**
@@ -94,6 +98,7 @@ export function ObjectView({
   onPlaceChange,
   onInspectRow,
   onOpenRelated,
+  onSchemaMap,
   onOpenInConsole,
   handleRef,
   definitionWidth,
@@ -120,6 +125,8 @@ export function ObjectView({
   onInspectRow?: () => void
   /** Selects another relation, as a click in the explorer would. */
   onOpenRelated?: (address: CatalogAddress) => void
+  /** Opens a map on this exact owner, including objects absent from native listings. */
+  onSchemaMap?: () => void
   /**
    * Opens SQL in a **new** console, without running it. `parameters`
    * pre-fills its Parameters panel; the values are bound there, never
@@ -166,6 +173,11 @@ export function ObjectView({
   React.useImperativeHandle(
     handleRef,
     () => ({
+      openSection: (target) => {
+        const next = initialObjectTab(target, previewable)
+        setHeld(false)
+        setTab(absentTabs.has(next) ? "structure" : next)
+      },
       focusPreview: () => {
         if (!previewable) return
         setHeld(false)
@@ -173,7 +185,7 @@ export function ObjectView({
         setGridFocusRequest((count) => count + 1)
       },
     }),
-    [previewable]
+    [previewable, absentTabs]
   )
   const [direction, setDirection] = React.useState<RelationDirection>(
     () =>
@@ -182,8 +194,15 @@ export function ObjectView({
   )
   const source = `preview:${open.connection}:${open.session}:${addressKey(node.address)}`
   const facets = useRelationFacets(open, node.address)
+  const [samplingReview, setSamplingReview] = React.useState(false)
+  const requestDescription = () => {
+    if (open.capabilities.includes("INFERRED_SCHEMA")) setSamplingReview(true)
+    else void facets.refresh("description")
+  }
   const detailFreshness = facets.facets?.detail.freshness
-  const metadataReady = detailFreshness?.state === "fetched"
+  const inferredSource = open.capabilities.includes("INFERRED_SCHEMA")
+  const descriptionFacet = inferredSource ? "sampledDescription" : "description"
+  const metadataReady = detailFreshness?.state === "fetched" || inferredSource
   const preview = usePreview({
     open,
     address: node.address,
@@ -237,13 +256,15 @@ export function ObjectView({
   const { ensure } = facets
   React.useEffect(() => {
     if (held || !active) return
-    switch (tab) {
+    switch (chosenTab) {
       // The rows are paged by the relation's key, which only its description
       // tells the backend (ADR-0068): described once, like the Structure tab.
       case "data":
       case "structure":
+        ensure("description")
+        break
       case "indexes":
-        ensure("detail")
+        if (!unsupportedReason(open, "indexes")) ensure("indexes")
         break
       case "constraints":
         if (!unsupportedReason(open, "constraints")) ensure("constraints")
@@ -251,7 +272,7 @@ export function ObjectView({
       case "relations":
         if (direction === "incoming") {
           if (!unsupportedReason(open, "incoming")) ensure("incomingKeys")
-        } else ensure("detail")
+        } else if (!unsupportedReason(open, "relations")) ensure("outgoingKeys")
         break
       case "definition":
         if (!unsupportedReason(open, "definition")) ensure("definition")
@@ -259,10 +280,8 @@ export function ObjectView({
       default:
         break
     }
-    // Asked once, like a tab: a window resized across 1200 px reads nothing.
-    if (!compact && tab !== "data" && !unsupportedReason(open, "definition"))
-      ensure("definition")
-  }, [held, active, tab, direction, compact, ensure])
+    // The adjacent DDL panel waits for its own explicit demand.
+  }, [held, active, chosenTab, direction, ensure])
 
   const data = facets.facets
   const state = preview.state
@@ -273,8 +292,8 @@ export function ObjectView({
   const moduleMissing =
     state.status === "error" && state.missingModule
       ? state.missingModule
-      : facets.loads.detail.status === "error"
-        ? (facets.loads.detail.missingModule ?? null)
+      : facets.loads[descriptionFacet].status === "error"
+        ? (facets.loads[descriptionFacet].missingModule ?? null)
         : null
   // A read that failed because the connection lacks the engine module the
   // table needs: explained rather than shown raw (docs/UX-SPEC.md). Only that
@@ -335,7 +354,7 @@ export function ObjectView({
       }
     : undefined
 
-  const detailLoad = facets.loads.detail
+  const detailLoad = facets.loads[descriptionFacet]
   const definitionStale =
     data?.definition.freshness.state === "invalidated" ||
     facets.loads.definition.status === "error"
@@ -394,363 +413,389 @@ export function ObjectView({
   )
 
   return (
-    <ObjectViewFrame
-      name={node.name}
-      kind={data?.kind ?? node.kind}
-      tab={tab}
-      onTabChange={chooseTab}
-      compact={compact}
-      absentTabs={absentTabs}
-      dataUnavailable={dataUnavailable}
-      onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
-      gridFocusRequest={gridFocusRequest}
-      definitionLayout={{
-        beside: !compact,
-        width: definitionWidth,
-        onWidthChange: onDefinitionWidthChange,
-      }}
-      toolbar={
-        tab === "data" && previewable && !moduleMissing ? (
-          <PreviewToolbar
-            running={preview.running}
-            cancelling={preview.cancelling}
-            onRefresh={() => {
-              setHeld(false)
-              if (metadataReady || preview.status !== "initial")
-                preview.refresh()
-              else void facets.refresh("detail")
-            }}
-            onCancel={preview.cancel}
-          />
-        ) : null
-      }
-      notice={
-        <>
-          {held ? (
-            <RestoredObjectNotice
-              state="held"
-              name={node.name}
-              onRead={() => setHeld(false)}
-            />
-          ) : vanished ? (
-            <RestoredObjectNotice state="vanished" name={node.name} />
-          ) : null}
-          {facets.error ? (
-            <Alert
-              variant="destructive"
-              className="rounded-none border-x-0 border-t-0"
-            >
-              <AlertTitle>The catalog cache could not be read</AlertTitle>
-              <AlertDescription className="font-mono text-xs text-foreground">
-                {facets.error}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-        </>
-      }
-      panels={{
-        data:
-          previewable &&
-          !metadataReady &&
-          !held &&
-          preview.status === "initial" &&
-          !moduleMissing ? (
-            <FacetFrame
-              label="object columns"
-              freshness={detailFreshness ?? { state: "never" }}
-              load={facets.loads.detail}
-              unsupported={null}
-              hasValue={false}
-              empty={false}
-              emptyText="No columns reported for this object."
-              onRefresh={() => void facets.refresh("detail")}
-              onCancel={() => facets.cancel("detail")}
-            >
-              {null}
-            </FacetFrame>
-          ) : previewable ? (
-            <>
-              {moduleMissing ? null : (
-                <PreviewControls
-                  canFilter={open.capabilities.includes("PREVIEW_FILTER")}
-                  canSort={sortable}
-                  columns={
-                    data?.detail.value?.fields.map((field) => field.name) ??
-                    null
-                  }
-                  applied={preview.applied}
-                  reshaped={preview.reshaped}
-                  status={preview.status}
-                  pagination={preview.pagination}
-                  loadingColumns={detailLoad.status === "loading"}
-                  onApplyPredicate={preview.applyPredicate}
-                  onApplySort={preview.applySort}
-                  onCancel={preview.cancel}
-                  onLoadColumns={() => void facets.refresh("detail")}
-                  filterRef={filterRef}
-                  sortOpen={sortOpen}
-                  onSortOpenChange={setSortOpen}
-                />
-              )}
-              {preview.approvalRefused ? (
-                <Alert className="rounded-none border-x-0 border-t-0 py-2">
-                  <AlertTitle>Preview not read</AlertTitle>
-                  <AlertDescription>
-                    This connection&apos;s policy requires an explicit approval
-                    for this read. Run it from a SQL console instead.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              <div className="min-h-0 flex-1">
-                {moduleMissing && state.status === "error" ? (
-                  explainMissing(moduleMissing, state.message)
-                ) : moduleMissing && detailLoad.status === "error" ? (
-                  explainMissing(moduleMissing, detailLoad.message)
-                ) : (
-                  <ResultPanel
-                    state={state}
-                    initialHint="Refresh data reads the first rows of this object."
-                    fetchPage={fetchPage}
+    <>
+      {samplingReview && active && (
+        <SchemaSamplingDialog
+          connection={open.name}
+          object={facets.facets?.qualifiedName ?? node.name}
+          limits={facets.facets?.sampleLimits ?? null}
+          loading={facets.reading}
+          error={facets.failure}
+          onRetry={facets.reload}
+          onCancel={() => setSamplingReview(false)}
+          onSample={() => {
+            setSamplingReview(false)
+            void facets.refresh("sampledDescription")
+          }}
+        />
+      )}
+      <ObjectViewFrame
+        name={node.name}
+        kind={data?.kind ?? node.kind}
+        tab={tab}
+        onTabChange={chooseTab}
+        compact={compact}
+        absentTabs={absentTabs}
+        dataUnavailable={dataUnavailable}
+        onEscape={
+          tab === "data" && preview.running ? preview.cancel : undefined
+        }
+        gridFocusRequest={gridFocusRequest}
+        definitionLayout={{
+          beside: !compact,
+          width: definitionWidth,
+          onWidthChange: onDefinitionWidthChange,
+        }}
+        toolbar={
+          <>
+            {onSchemaMap && (
+              <Button size="sm" variant="outline" onClick={onSchemaMap}>
+                View schema map
+              </Button>
+            )}
+            {tab === "data" && previewable && !moduleMissing ? (
+              <PreviewToolbar
+                running={preview.running}
+                cancelling={preview.cancelling}
+                onRefresh={() => {
+                  setHeld(false)
+                  if (metadataReady || preview.status !== "initial")
+                    preview.refresh()
+                  else requestDescription()
+                }}
+                onCancel={preview.cancel}
+              />
+            ) : null}
+          </>
+        }
+        notice={
+          <>
+            {held ? (
+              <RestoredObjectNotice
+                state="held"
+                name={node.name}
+                onRead={() => setHeld(false)}
+              />
+            ) : vanished ? (
+              <RestoredObjectNotice state="vanished" name={node.name} />
+            ) : null}
+            {facets.error ? (
+              <Alert
+                variant="destructive"
+                className="rounded-none border-x-0 border-t-0"
+              >
+                <AlertTitle>The catalog cache could not be read</AlertTitle>
+                <AlertDescription className="font-mono text-xs text-foreground">
+                  {facets.error}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </>
+        }
+        panels={{
+          data:
+            previewable &&
+            !metadataReady &&
+            !held &&
+            preview.status === "initial" &&
+            !moduleMissing ? (
+              <FacetFrame
+                label="object columns"
+                freshness={detailFreshness ?? { state: "never" }}
+                load={facets.loads[descriptionFacet]}
+                unsupported={null}
+                hasValue={false}
+                empty={false}
+                emptyText="No columns reported for this object."
+                onRefresh={() => requestDescription()}
+                onCancel={() => facets.cancel(descriptionFacet)}
+              >
+                {null}
+              </FacetFrame>
+            ) : previewable ? (
+              <>
+                {moduleMissing ? null : (
+                  <PreviewControls
+                    canFilter={open.capabilities.includes("PREVIEW_FILTER")}
+                    canSort={sortable}
+                    columns={
+                      data?.detail.value?.fields.map((field) => field.name) ??
+                      null
+                    }
+                    applied={preview.applied}
+                    reshaped={preview.reshaped}
+                    status={preview.status}
+                    pagination={preview.pagination}
+                    loadingColumns={detailLoad.status === "loading"}
+                    onApplyPredicate={preview.applyPredicate}
+                    onApplySort={preview.applySort}
                     onCancel={preview.cancel}
-                    onRetry={preview.refresh}
-                    context={{ connectionName: open.name, statement: null }}
-                    footerNote={previewFooterNote(
-                      preview.pagination,
-                      state.status === "populated" ? state.rows : 0
-                    )}
-                    gridMenu={gridMenu}
-                    // Compact: the export sits in `Actions`, and the footer shows
-                    // only a running export's progress and its Cancel.
-                    footerActions={
-                      <>
-                        {preview.pagination?.type === "needsOrder" &&
-                        sortable ? (
-                          <SortToBrowsePages
-                            onClick={() => setSortOpen(true)}
-                          />
-                        ) : null}
-                        {!compact || exporter.state.status === "exporting"
-                          ? exportMenu
-                          : null}
-                      </>
-                    }
-                    compactActions={
-                      compact ? (
-                        <>
-                          <ExportSubmenu
-                            {...exportChoice}
-                            exporting={exporter.state.status === "exporting"}
-                            onExport={exporter.run}
-                          />
-                          <DropdownMenuItem
-                            disabled={!selected || !onInspectRow}
-                            onClick={onInspectRow}
-                          >
-                            <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
-                            Inspect row
-                          </DropdownMenuItem>
-                        </>
-                      ) : undefined
-                    }
-                    {...gridInspection({
-                      source,
-                      open,
-                      result,
-                      columns:
-                        state.status === "populated" ? state.columns : [],
-                    })}
+                    onLoadColumns={() => requestDescription()}
+                    filterRef={filterRef}
+                    sortOpen={sortOpen}
+                    onSortOpenChange={setSortOpen}
                   />
                 )}
-              </div>
-              {!moduleMissing ? (
-                <PreviewPagination
-                  applied={preview.applied}
-                  pagination={preview.pagination}
-                  error={preview.paginationError}
-                  onRetry={preview.retryPagination}
-                  status={preview.status}
-                  rows={state.status === "populated" ? state.rows : null}
-                  onPage={preview.page}
-                  onPageSize={preview.resizePage}
-                />
-              ) : null}
-              <ValueInspectionDialog source={source} />
-            </>
-          ) : null,
-
-        structure:
-          detailLoad.status === "error" && detailLoad.missingModule ? (
-            explainMissing(detailLoad.missingModule, detailLoad.message)
-          ) : data ? (
-            <FacetFrame
-              label="columns"
-              freshness={data.detail.freshness}
-              load={detailLoad}
-              unsupported={null}
-              hasValue={data.detail.value !== null}
-              empty={data.detail.value?.fields.length === 0}
-              emptyText="No columns reported for this object."
-              onRefresh={() => void facets.refresh("detail")}
-              onCancel={() => facets.cancel("detail")}
-            >
-              <RelationStructure
-                detail={data.detail.value}
-                renameColumn={{
-                  offer: sessionScoped
-                    ? {
-                        state: "greyed",
-                        reason: "Manage this object from its owning console",
+                {preview.approvalRefused ? (
+                  <Alert className="rounded-none border-x-0 border-t-0 py-2">
+                    <AlertTitle>Preview not read</AlertTitle>
+                    <AlertDescription>
+                      This connection&apos;s policy requires an explicit
+                      approval for this read. Run it from a SQL console instead.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <div className="min-h-0 flex-1">
+                  {moduleMissing && state.status === "error" ? (
+                    explainMissing(moduleMissing, state.message)
+                  ) : moduleMissing && detailLoad.status === "error" ? (
+                    explainMissing(moduleMissing, detailLoad.message)
+                  ) : (
+                    <ResultPanel
+                      state={state}
+                      initialHint="Refresh data reads the first rows of this object."
+                      fetchPage={fetchPage}
+                      onCancel={preview.cancel}
+                      onRetry={preview.refresh}
+                      context={{ connectionName: open.name, statement: null }}
+                      footerNote={previewFooterNote(
+                        preview.pagination,
+                        state.status === "populated" ? state.rows : 0
+                      )}
+                      gridMenu={gridMenu}
+                      // Compact: the export sits in `Actions`, and the footer shows
+                      // only a running export's progress and its Cancel.
+                      footerActions={
+                        <>
+                          {preview.pagination?.type === "needsOrder" &&
+                          sortable ? (
+                            <SortToBrowsePages
+                              onClick={() => setSortOpen(true)}
+                            />
+                          ) : null}
+                          {!compact || exporter.state.status === "exporting"
+                            ? exportMenu
+                            : null}
+                        </>
                       }
-                    : operationOffer("rename", node, open.capabilities),
-                  onRename: (column) =>
-                    columnOperation.start(node, "rename", column),
-                }}
-              />
-              {/* Modal while open: no tab change can unmount it mid-review. */}
-              {columnOperation.element}
-            </FacetFrame>
-          ) : (
-            <RelationStructure
-              detail={undefined}
-              error={
-                facets.error
-                  ? { message: facets.error, retryable: false }
-                  : null
-              }
-              onRefresh={() => void facets.refresh("detail")}
-              refreshing={detailLoad.status === "loading"}
-            />
-          ),
+                      compactActions={
+                        compact ? (
+                          <>
+                            <ExportSubmenu
+                              {...exportChoice}
+                              exporting={exporter.state.status === "exporting"}
+                              onExport={exporter.run}
+                            />
+                            <DropdownMenuItem
+                              disabled={!selected || !onInspectRow}
+                              onClick={onInspectRow}
+                            >
+                              <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                              Inspect row
+                            </DropdownMenuItem>
+                          </>
+                        ) : undefined
+                      }
+                      {...gridInspection({
+                        source,
+                        open,
+                        result,
+                        columns:
+                          state.status === "populated" ? state.columns : [],
+                      })}
+                    />
+                  )}
+                </div>
+                {!moduleMissing ? (
+                  <PreviewPagination
+                    applied={preview.applied}
+                    pagination={preview.pagination}
+                    error={preview.paginationError}
+                    onRetry={preview.retryPagination}
+                    status={preview.status}
+                    rows={state.status === "populated" ? state.rows : null}
+                    onPage={preview.page}
+                    onPageSize={preview.resizePage}
+                  />
+                ) : null}
+                <ValueInspectionDialog source={source} />
+              </>
+            ) : null,
 
-        indexes: data ? (
-          <FacetFrame
-            label="indexes"
-            freshness={data.detail.freshness}
-            load={detailLoad}
-            unsupported={unsupportedReason(open, "indexes")}
-            hasValue={data.indexes !== null}
-            empty={data.indexes?.length === 0}
-            emptyText="No indexes reported for this object."
-            onRefresh={() => void facets.refresh("detail")}
-            onCancel={() => facets.cancel("detail")}
-          >
-            <RelationIndexes indexes={data.indexes ?? []} />
-          </FacetFrame>
-        ) : null,
-
-        constraints: data ? (
-          <FacetFrame
-            label="constraints"
-            freshness={data.constraints.freshness}
-            load={facets.loads.constraints}
-            unsupported={unsupportedReason(open, "constraints")}
-            hasValue={data.constraints.value !== null}
-            empty={data.constraints.value?.length === 0}
-            emptyText="No constraints reported for this object."
-            onRefresh={() => void facets.refresh("constraints")}
-            onCancel={() => facets.cancel("constraints")}
-          >
-            <RelationConstraints
-              constraints={data.constraints.value ?? []}
-              detail={data.detail.value}
-              indexes={data.indexes}
-              onCopyDefinition={(text) =>
-                void copyToClipboard(text, "Constraint definition")
-              }
-            />
-          </FacetFrame>
-        ) : null,
-
-        relations: (
-          <RelationsPanel
-            direction={direction}
-            onDirectionChange={chooseDirection}
-          >
-            {data && direction === "outgoing" ? (
+          structure:
+            detailLoad.status === "error" && detailLoad.missingModule ? (
+              explainMissing(detailLoad.missingModule, detailLoad.message)
+            ) : data ? (
               <FacetFrame
-                label="foreign keys"
+                label="columns"
                 freshness={data.detail.freshness}
                 load={detailLoad}
-                unsupported={unsupportedReason(open, "relations")}
-                hasValue={data.foreignKeys !== null}
-                empty={data.foreignKeys?.length === 0}
-                emptyText="No outgoing foreign keys reported for this object."
-                onRefresh={() => void facets.refresh("detail")}
-                onCancel={() => facets.cancel("detail")}
+                unsupported={null}
+                hasValue={data.detail.value !== null}
+                empty={data.detail.value?.fields.length === 0}
+                emptyText="No columns reported for this object."
+                onRefresh={() => requestDescription()}
+                onCancel={() => facets.cancel(descriptionFacet)}
               >
-                <OutgoingKeys
-                  keys={data.foreignKeys ?? []}
-                  onOpen={onOpenRelated}
-                  onReviewRelatedRows={
-                    reviewRelatedRows
-                      ? (index) => void reviewRelatedRows(false, index)
-                      : undefined
-                  }
+                <RelationStructure
+                  detail={data.detail.value}
+                  renameColumn={{
+                    offer: sessionScoped
+                      ? {
+                          state: "greyed",
+                          reason: "Manage this object from its owning console",
+                        }
+                      : operationOffer("rename", node, open.capabilities),
+                    onRename: (column) =>
+                      columnOperation.start(node, "rename", column),
+                  }}
                 />
+                {/* Modal while open: no tab change can unmount it mid-review. */}
+                {columnOperation.element}
               </FacetFrame>
-            ) : null}
-            {data && direction === "incoming" ? (
-              <FacetFrame
-                label="incoming foreign keys"
-                freshness={data.incomingKeys.freshness}
-                load={facets.loads.incomingKeys}
-                unsupported={unsupportedReason(open, "incoming")}
-                hasValue={data.incomingKeys.value !== null}
-                empty={data.incomingKeys.value?.length === 0}
-                emptyText="No incoming foreign keys reported for this object."
-                onRefresh={() => void facets.refresh("incomingKeys")}
-                onCancel={() => facets.cancel("incomingKeys")}
-              >
-                <IncomingKeys
-                  keys={data.incomingKeys.value ?? []}
-                  onOpen={onOpenRelated}
-                  onReviewRelatedRows={
-                    reviewRelatedRows
-                      ? (index) => void reviewRelatedRows(true, index)
-                      : undefined
-                  }
-                />
-              </FacetFrame>
-            ) : null}
-          </RelationsPanel>
-        ),
+            ) : (
+              <RelationStructure
+                detail={undefined}
+                error={
+                  facets.error
+                    ? { message: facets.error, retryable: false }
+                    : null
+                }
+                onRefresh={() => requestDescription()}
+                refreshing={detailLoad.status === "loading"}
+              />
+            ),
 
-        definition: data ? (
-          <FacetFrame
-            label="the definition"
-            freshness={data.definition.freshness}
-            load={facets.loads.definition}
-            unsupported={unsupportedReason(open, "definition")}
-            hasValue={data.definition.value !== null}
-            empty={false}
-            emptyText=""
-            onRefresh={() => void facets.refresh("definition")}
-            onCancel={() => facets.cancel("definition")}
-            actions={
-              data.definition.value ? (
-                <DefinitionActions
+          indexes: data ? (
+            <FacetFrame
+              label="indexes"
+              freshness={data.indexesFreshness}
+              load={facets.loads.indexes}
+              unsupported={unsupportedReason(open, "indexes")}
+              hasValue={data.indexes !== null}
+              empty={data.indexes?.length === 0}
+              emptyText="No indexes reported for this object."
+              onRefresh={() => void facets.refresh("indexes")}
+              onCancel={() => facets.cancel("indexes")}
+            >
+              <RelationIndexes indexes={data.indexes ?? []} />
+            </FacetFrame>
+          ) : null,
+
+          constraints: data ? (
+            <FacetFrame
+              label="constraints"
+              freshness={data.constraints.freshness}
+              load={facets.loads.constraints}
+              unsupported={unsupportedReason(open, "constraints")}
+              hasValue={data.constraints.value !== null}
+              empty={data.constraints.value?.length === 0}
+              emptyText="No constraints reported for this object."
+              onRefresh={() => void facets.refresh("constraints")}
+              onCancel={() => facets.cancel("constraints")}
+            >
+              <RelationConstraints
+                constraints={data.constraints.value ?? []}
+                detail={data.detail.value}
+                indexes={data.indexes}
+                onCopyDefinition={(text) =>
+                  void copyToClipboard(text, "Constraint definition")
+                }
+              />
+            </FacetFrame>
+          ) : null,
+
+          relations: (
+            <RelationsPanel
+              direction={direction}
+              onDirectionChange={chooseDirection}
+            >
+              {data && direction === "outgoing" ? (
+                <FacetFrame
+                  label="foreign keys"
+                  freshness={data.foreignKeysFreshness}
+                  load={facets.loads.outgoingKeys}
+                  unsupported={unsupportedReason(open, "relations")}
+                  hasValue={data.foreignKeys !== null}
+                  empty={data.foreignKeys?.length === 0}
+                  emptyText="No outgoing foreign keys reported for this object."
+                  onRefresh={() => void facets.refresh("outgoingKeys")}
+                  onCancel={() => facets.cancel("outgoingKeys")}
+                >
+                  <OutgoingKeys
+                    keys={data.foreignKeys ?? []}
+                    onOpen={onOpenRelated}
+                    onReviewRelatedRows={
+                      reviewRelatedRows
+                        ? (index) => void reviewRelatedRows(false, index)
+                        : undefined
+                    }
+                  />
+                </FacetFrame>
+              ) : null}
+              {data && direction === "incoming" ? (
+                <FacetFrame
+                  label="incoming foreign keys"
+                  freshness={data.incomingKeys.freshness}
+                  load={facets.loads.incomingKeys}
+                  unsupported={unsupportedReason(open, "incoming")}
+                  hasValue={data.incomingKeys.value !== null}
+                  empty={data.incomingKeys.value?.length === 0}
+                  emptyText="No incoming foreign keys reported for this object."
+                  onRefresh={() => void facets.refresh("incomingKeys")}
+                  onCancel={() => facets.cancel("incomingKeys")}
+                >
+                  <IncomingKeys
+                    keys={data.incomingKeys.value ?? []}
+                    onOpen={onOpenRelated}
+                    onReviewRelatedRows={
+                      reviewRelatedRows
+                        ? (index) => void reviewRelatedRows(true, index)
+                        : undefined
+                    }
+                  />
+                </FacetFrame>
+              ) : null}
+            </RelationsPanel>
+          ),
+
+          definition: data ? (
+            <FacetFrame
+              label="the definition"
+              freshness={data.definition.freshness}
+              load={facets.loads.definition}
+              unsupported={unsupportedReason(open, "definition")}
+              hasValue={data.definition.value !== null}
+              empty={false}
+              emptyText=""
+              onRefresh={() => void facets.refresh("definition")}
+              onCancel={() => facets.cancel("definition")}
+              actions={
+                data.definition.value ? (
+                  <DefinitionActions
+                    definition={data.definition.value}
+                    stale={definitionStale}
+                    onCopy={(sql) => void copyToClipboard(sql, "DDL")}
+                    onOpenInConsole={
+                      onOpenInConsole
+                        ? (sql, notice) =>
+                            onOpenInConsole(sql, "Object DDL", { notice })
+                        : undefined
+                    }
+                  />
+                ) : null
+              }
+            >
+              {data.definition.value ? (
+                <RelationDefinition
                   definition={data.definition.value}
                   stale={definitionStale}
-                  onCopy={(sql) => void copyToClipboard(sql, "DDL")}
-                  onOpenInConsole={
-                    onOpenInConsole
-                      ? (sql, notice) =>
-                          onOpenInConsole(sql, "Object DDL", { notice })
-                      : undefined
-                  }
                 />
-              ) : null
-            }
-          >
-            {data.definition.value ? (
-              <RelationDefinition
-                definition={data.definition.value}
-                stale={definitionStale}
-              />
-            ) : null}
-          </FacetFrame>
-        ) : null,
-      }}
-    />
+              ) : null}
+            </FacetFrame>
+          ) : null,
+        }}
+      />
+    </>
   )
 }

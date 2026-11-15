@@ -31,6 +31,7 @@ export const CONTEXT_MENUS = {
       [
         "catalog.openData",
         "catalog.viewStructure",
+        "catalog.viewSchemaMap",
         "catalog.viewDdl",
         "catalog.newConsoleOnSchema",
       ],
@@ -78,6 +79,7 @@ export const CONTEXT_MENUS = {
     zone: "tabs",
     groups: [
       ["tab.close", "tab.closeOthers", "tab.closeRight", "tab.closeAll"],
+      ["tab.browseSession"],
       ["tab.duplicate", "tab.rename"],
       ["tab.openInNewWindow", "tab.revealInLibrary"],
     ],

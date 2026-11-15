@@ -1,8 +1,21 @@
+import { NativeTransferTab } from "@/features/native-transfers/native-transfer-tab"
+import { useNativeTabs } from "@/features/native-transfers/use-native-tabs"
+import { SchemaMapTab } from "@/features/schema-map/schema-map-tab"
+import { useMapTabs } from "@/features/schema-map/use-map-tabs"
 import { previewKey } from "@/features/metadata/preview-store"
 import { previews } from "@/features/metadata/preview-state"
 import { OpenSessionTable } from "@/components/oxyn/open-session-table"
 import { CatalogSource } from "@/components/oxyn/catalog-source"
+import { useCatalogBrowsing } from "./use-catalog-browsing"
+import { sessionViewRetirement } from "./session-view-retirement"
 import * as React from "react"
+import {
+  disconnectRequests,
+  takeWorkspaceDisconnect,
+  finishWorkspaceDisconnect,
+  registerDisconnectCosts,
+} from "./disconnect-requests"
+import { serverProfiles } from "@/lib/ipc/server-profiles"
 import { useQuery } from "@tanstack/react-query"
 import { useSelector } from "@tanstack/react-store"
 
@@ -87,7 +100,7 @@ import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
 import { actionKeys } from "@/lib/actions/manifest"
-import { BackendError } from "@/lib/ipc/client"
+import { BackendError, newCommandId } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { metadata } from "@/lib/ipc/metadata"
 import { windows } from "@/lib/ipc/windows"
@@ -234,7 +247,6 @@ export function WorkspaceScreen({
   React.useEffect(() => {
     if (focusAssistant > 0) visibleAssistantField()?.focus()
   }, [focusAssistant])
-  const [catalogSource, setCatalogSource] = React.useState("")
   const [objects, setObjects] = React.useState<Array<ObjectTab>>([])
   const [retained, setRetained] = React.useState<Array<ResultTab>>([])
   /** Result tabs with an export under way: they do not close meanwhile. */
@@ -337,8 +349,19 @@ export function WorkspaceScreen({
       current = false
     }
   }, [open.connection])
+  const maps = useMapTabs(activate)
+  const native = useNativeTabs(activate)
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
+  const browsing = useCatalogBrowsing(
+    open,
+    work.entries.map((entry) => ({
+      key: entry.key,
+      session: entry.session,
+      title: work.meta[entry.key]?.title ?? entry.seed.title,
+    })),
+    hasCatalog
+  )
 
   const asideItem =
     inspectors.find((item) => item.id === asideActive) ?? inspectors[0]
@@ -367,6 +390,7 @@ export function WorkspaceScreen({
             tab.key === key ? { ...tab, node: richer } : tab
           )
         )
+      if (target) objectHandles.current.get(key)?.openSection(target)
       activate(key)
       return
     }
@@ -379,8 +403,16 @@ export function WorkspaceScreen({
   // catalog would; another connection's requests stay for its own screen.
   const objectRequests = useSelector(objectOpenRequests)
   React.useEffect(() => {
-    if (objectRequests.length === 0) return
+    if (!visible || objectRequests.length === 0) return
     for (const request of takeObjectOpenRequests(open.connection)) {
+      if (request.workspace !== null && request.workspace !== open.session) {
+        toast.add({
+          title: "Object source was replaced",
+          description: "Choose the object again in its current workspace.",
+          type: "warning",
+        })
+        continue
+      }
       const source = request.session
         ? work.entries.find(
             (entry) => entry.session?.session === request.session
@@ -401,7 +433,7 @@ export function WorkspaceScreen({
       )
     }
     // `openObject` reads the tabs through a ref: the requests are the trigger.
-  }, [objectRequests, open.connection])
+  }, [objectRequests, open.connection, open.session, visible])
 
   const openResult = (tab: Omit<ResultTab, "key">) => {
     const key = `result:${tab.result}`
@@ -417,8 +449,16 @@ export function WorkspaceScreen({
   // rows, never a rerun. Another connection's requests stay for its screen.
   const resultRequests = useSelector(resultOpenRequests)
   React.useEffect(() => {
-    if (resultRequests.length === 0) return
+    if (!visible || resultRequests.length === 0) return
     for (const request of takeResultOpenRequests(open.connection)) {
+      if (request.workspace !== null && request.workspace !== open.session) {
+        toast.add({
+          title: "Result source was replaced",
+          description: "Open the result again from its current conversation.",
+          type: "warning",
+        })
+        continue
+      }
       openResult({
         connection: request.connection,
         result: request.result,
@@ -429,7 +469,7 @@ export function WorkspaceScreen({
       })
     }
     // `openResult` only sets state: the requests are the trigger.
-  }, [resultRequests, open.connection])
+  }, [resultRequests, open.connection, open.session, visible])
 
   /**
    * Closes the tab `key`. Resolves `false` when a console's close was
@@ -438,6 +478,11 @@ export function WorkspaceScreen({
    */
   const closeTab = async (key: string): Promise<boolean> => {
     if (key.startsWith("console:")) return work.requestClose(key)
+    if (key.startsWith("native:")) {
+      const handle = native.handles.current.get(key)
+      if (handle && !(await handle.requestClose())) return false
+      native.close(new Set([key]))
+    }
     // Closing would unmount the export and cancel its write (UX-SPEC
     // § Retained results): the user ends or cancels it first.
     if (exporting.has(key)) {
@@ -474,6 +519,7 @@ export function WorkspaceScreen({
       sections.current.delete(key)
       keepPlace(remaining[remaining.length - 1])
     }
+    maps.close(new Set([key]))
     setObjects((current) => current.filter((tab) => tab.key !== key))
     setRetained((current) => current.filter((tab) => tab.key !== key))
     if (activeRef.current !== key) return true
@@ -637,7 +683,11 @@ export function WorkspaceScreen({
     visible
       ? {
           activeTab: active,
-          tabCount: objects.length + work.entries.length + retained.length,
+          tabCount:
+            objects.length +
+            work.entries.length +
+            retained.length +
+            maps.entries.length,
           consoleCount: work.entries.length,
           objectActive:
             active !== null && objects.some((tab) => tab.key === active),
@@ -676,14 +726,33 @@ export function WorkspaceScreen({
   // click in the tree does.
   useActionSource(
     "catalog",
-    visible && hasCatalog(open) ? { connection: open.connection } : null,
+    visible && hasCatalog(browsing.owner ?? open)
+      ? {
+          connection: open.connection,
+          session: (browsing.owner ?? open).session,
+        }
+      : null,
     {
       openObject: (object) =>
-        openObject({ ...relatedNode(object.address), ...object, loaded: true }),
+        openObject(
+          { ...relatedNode(object.address), ...object, loaded: true },
+          undefined,
+          browsing.owner
+        ),
     }
   )
 
   const naturalTabs: Array<WorkspaceTabItem> = [
+    ...native.entries.map((tab) => ({
+      kind: "native" as const,
+      key: tab.key,
+      title: `Transfers: ${tab.owner.name}`,
+    })),
+    ...maps.entries.map((tab) => ({
+      kind: "map" as const,
+      key: tab.key,
+      title: `Map: ${tab.object?.name ?? tab.scope?.namespace ?? tab.scope?.catalog ?? tab.owner.name}`,
+    })),
     ...objects.map((tab) => ({
       kind: "object" as const,
       key: tab.key,
@@ -760,6 +829,89 @@ export function WorkspaceScreen({
     return "blocked" in carried ? carried.blocked : null
   }
 
+  const readCosts = React.useRef(() => ({
+    consoles: 0,
+    unsaved: 0,
+    running: 0,
+  }))
+  readCosts.current = () => {
+    const costs = work.windowCloseCosts()
+    return {
+      consoles: work.entries.length,
+      unsaved: costs.filter((cost) => cost.unsaved || cost.conflict).length,
+      running:
+        costs.filter((cost) => cost.running).length +
+        exporting.size +
+        native.entries.filter((entry) =>
+          native.handles.current.get(entry.key)?.running()
+        ).length,
+    }
+  }
+  React.useEffect(
+    () => registerDisconnectCosts(open.connection, () => readCosts.current()),
+    [open.connection]
+  )
+  React.useEffect(
+    () => () => finishWorkspaceDisconnect(open.connection, false),
+    [open.connection]
+  )
+
+  const disconnecting = React.useRef(false)
+  const [disconnectRequested, setDisconnectRequested] = React.useState(false)
+  const requestedDisconnects = useSelector(disconnectRequests)
+  const requestDisconnect = async () => {
+    if (disconnecting.current) return
+    if (closeTabs.review) {
+      finishWorkspaceDisconnect(open.connection, false)
+      toast.add({
+        title: "Finish the current tab review first",
+        type: "warning",
+      })
+      return
+    }
+    disconnecting.current = true
+    try {
+      await serverProfiles.disconnectReady(newCommandId(), open.connection)
+      setDisconnectRequested(true)
+      closeTabs.request(tabs.map((tab) => tab.key))
+    } catch (caught) {
+      finishWorkspaceDisconnect(open.connection, false)
+      toast.add({
+        title: "Connection stays open",
+        description: caught instanceof Error ? caught.message : String(caught),
+        type: "error",
+      })
+    } finally {
+      disconnecting.current = false
+    }
+  }
+  React.useEffect(() => {
+    if (
+      visible &&
+      requestedDisconnects.includes(open.connection) &&
+      takeWorkspaceDisconnect(open.connection)
+    )
+      void requestDisconnect()
+  }, [visible, requestedDisconnects, open.connection])
+  React.useEffect(() => {
+    if (!disconnectRequested || tabs.length > 0) return
+    setDisconnectRequested(false)
+    void serverProfiles
+      .disconnectReady(newCommandId(), open.connection)
+      .then(() => {
+        onDisconnect()
+      })
+      .catch((caught) => {
+        finishWorkspaceDisconnect(open.connection, false)
+        toast.add({
+          title: "Connection stays open",
+          description:
+            caught instanceof Error ? caught.message : String(caught),
+          type: "error",
+        })
+      })
+  }, [disconnectRequested, tabs.length, open.connection, onDisconnect])
+
   const closeTabs = useCloseTabs({
     targets: () =>
       tabs.map((tab) => {
@@ -773,9 +925,11 @@ export function WorkspaceScreen({
             handle?.closeBlocked?.() ??
             (exporting.has(tab.key)
               ? "Finish or cancel the export before closing this tab."
-              : activity === "saving" || activity === "closing"
-                ? "Wait for the current save or close, or cancel it."
-                : null),
+              : native.handles.current.get(tab.key)?.running()
+                ? "Cancel the native operation and wait for its cleanup before closing this tab."
+                : activity === "saving" || activity === "closing"
+                  ? "Wait for the current save or close, or cancel it."
+                  : null),
         }
       }),
     save: (key) =>
@@ -798,6 +952,8 @@ export function WorkspaceScreen({
       keepPlace(remaining[remaining.length - 1])
       setObjects((all) => all.filter((tab) => !gone.has(tab.key)))
       setRetained((all) => all.filter((tab) => !gone.has(tab.key)))
+      maps.close(gone)
+      native.close(gone)
       if (activeRef.current !== null && gone.has(activeRef.current)) {
         const next = tabs.find((tab) => !gone.has(tab.key))?.key ?? null
         activeRef.current = next
@@ -825,6 +981,7 @@ export function WorkspaceScreen({
         toTheRight: right.length,
         saved: handle?.closeReasons().hasSavedCopy ?? false,
         moveBlocked: moveBlocked(key),
+        browseBlocked: isConsole ? browsing.reason(key) : null,
       },
       actions: {
         close: () => void closeTab(key),
@@ -844,6 +1001,9 @@ export function WorkspaceScreen({
         // saved query to show.
         revealInLibrary: isConsole ? () => setLeftView("library") : undefined,
         openInNewWindow: () => void moveToWindow(key),
+        browseSession: () => {
+          if (browsing.browse(key)) setLeftView("catalog")
+        },
       },
     }
   }
@@ -853,31 +1013,26 @@ export function WorkspaceScreen({
     (entry) => entry.key === lastConsole.current
   )
 
-  const sourceEntry = work.entries.find(
-    (entry) => entry.session?.session === catalogSource
-  )
-  const sourceOpen = sourceEntry?.session
-    ? {
-        ...open,
-        session: sourceEntry.session.session,
-        capabilities: sourceEntry.session.capabilities,
-        readOnly: sourceEntry.session.readOnly,
-      }
-    : undefined
-  const sourceChoices = work.entries.flatMap((entry) =>
-    entry.session
-      ? [{ id: entry.session.session, label: entry.seed.title || "Console" }]
-      : []
-  )
+  const sourceOpen = browsing.owner
   React.useEffect(() => {
-    const live = new Set(
+    const { live, retired } = sessionViewRetirement(
+      open.session,
       work.entries.flatMap((entry) =>
         entry.session ? [entry.session.session] : []
-      )
+      ),
+      [...objectsRef.current, ...maps.entries, ...native.entries]
     )
     setObjects((current) =>
       current.filter((tab) => !tab.owner || live.has(tab.owner.session))
     )
+    maps.retainOwners(live)
+    native.retainOwners(live)
+    if (activeRef.current !== null && retired.has(activeRef.current)) {
+      const next = work.entries[0]?.key ?? null
+      activeRef.current = next
+      if (next) activate(next)
+      else setActive(null)
+    }
   }, [work.entries])
 
   return (
@@ -887,35 +1042,41 @@ export function WorkspaceScreen({
           leftView === "catalog" ? (
             <CatalogSidebar
               key={sourceOpen?.session ?? open.session}
+              navigation={visible}
+              active={visible}
               open={sourceOpen ?? open}
               sessionScoped={sourceOpen !== undefined}
               sourceSelector={
-                <>
-                  <CatalogSource
-                    value={sourceOpen ? catalogSource : ""}
-                    choices={sourceChoices}
-                    onChange={setCatalogSource}
-                  />
-                  {sourceOpen && open.driver === "mysql" && (
-                    <OpenSessionTable
-                      onOpen={(database, table) =>
-                        openObject(
-                          relatedNode({
-                            catalog: null,
-                            namespace: database,
-                            relation: table,
-                          }),
-                          undefined,
-                          sourceOpen
-                        )
-                      }
+                browsing.name !== null || browsing.notice !== null ? (
+                  <>
+                    <CatalogSource
+                      name={browsing.name}
+                      notice={browsing.notice}
+                      onReturn={browsing.returnToConnection}
                     />
-                  )}
-                </>
+                    {sourceOpen && open.driver === "mysql" && (
+                      <OpenSessionTable
+                        onOpen={(database, table) =>
+                          openObject(
+                            relatedNode({
+                              catalog: null,
+                              namespace: database,
+                              relation: table,
+                            }),
+                            undefined,
+                            sourceOpen
+                          )
+                        }
+                      />
+                    )}
+                  </>
+                ) : undefined
               }
               selected={
                 activeObject ? addressKey(activeObject.node.address) : null
               }
+              onNativeTransfers={() => native.open(sourceOpen ?? open)}
+              onSchemaMap={(node) => maps.open(sourceOpen ?? open, node)}
               onSelect={(node) => openObject(node, undefined, sourceOpen)}
               onOpen={(node, target) => openObject(node, target, sourceOpen)}
               onNewConsole={(place) =>
@@ -1006,7 +1167,7 @@ export function WorkspaceScreen({
         }
         compact={compact}
         onOpenSettings={onOpenSettings}
-        onDisconnect={onDisconnect}
+        onDisconnect={() => void requestDisconnect()}
         statusBar={
           <StatusBar
             connectionName={open.name}
@@ -1023,6 +1184,45 @@ export function WorkspaceScreen({
           />
         }
       >
+        {native.entries.map((tab) => (
+          <TabsContent
+            key={tab.key}
+            value={tabPanelValue(tab.key)}
+            keepMounted
+            className="h-full min-h-0"
+          >
+            <NativeTransferTab
+              open={tab.owner}
+              onActivity={native.changed}
+              handleRef={(handle) => {
+                if (handle) native.handles.current.set(tab.key, handle)
+                else native.handles.current.delete(tab.key)
+              }}
+            />
+          </TabsContent>
+        ))}
+        {maps.entries.map((tab) => (
+          <TabsContent
+            key={tab.key}
+            value={tabPanelValue(tab.key)}
+            keepMounted
+            className="h-full min-h-0"
+          >
+            <SchemaMapTab
+              open={tab.owner}
+              active={visible && tab.key === active}
+              initialScope={tab.scope}
+              initialObject={tab.object}
+              onOpenObject={(node, target, owner) =>
+                openObject(
+                  node,
+                  target,
+                  owner.session === open.session ? undefined : owner
+                )
+              }
+            />
+          </TabsContent>
+        ))}
         {objects.map((tab) => (
           <TabsContent
             key={tab.key}
@@ -1056,6 +1256,7 @@ export function WorkspaceScreen({
                     }
                   : undefined
               }
+              onSchemaMap={() => maps.open(tab.owner ?? open, tab.node)}
               onOpenRelated={(address) =>
                 openObject(relatedNode(address), undefined, tab.owner)
               }
@@ -1169,7 +1370,11 @@ export function WorkspaceScreen({
       />
       <CloseTabsDialog
         review={visible ? closeTabs.review : null}
-        onCancel={closeTabs.cancel}
+        onCancel={() => {
+          setDisconnectRequested(false)
+          finishWorkspaceDisconnect(open.connection, false)
+          closeTabs.cancel()
+        }}
         onSave={() => void closeTabs.decide("save")}
         onDiscard={() => void closeTabs.decide("discard")}
       />

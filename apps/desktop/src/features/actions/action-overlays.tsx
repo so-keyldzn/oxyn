@@ -44,6 +44,7 @@ export function ActionOverlays() {
   const [sheet, setSheet] = React.useState(false)
   const catalog = useSelector(actionSources, (state) => state.sources.catalog)
   const connection = catalog?.state.connection ?? null
+  const session = catalog?.state.session ?? null
 
   useActionSource(
     "overlays",
@@ -75,8 +76,11 @@ export function ActionOverlays() {
   // only, bounded by the backend, never a read of the server (I-06).
   const search = query.trim()
   const hits = useQuery({
-    queryKey: ["catalog-search", connection, search],
-    queryFn: () => metadata.searchCatalog(connection ?? "", search),
+    queryKey: ["catalog-search", connection, session, search],
+    queryFn: () =>
+      session === null
+        ? metadata.searchCatalog(connection ?? "", search)
+        : metadata.searchCatalog(connection ?? "", search, session),
     enabled: quickOpen && connection !== null && search !== "",
   })
 
@@ -128,8 +132,18 @@ export function ActionOverlays() {
         results={results}
         onRetry={() => void hits.refetch()}
         onOpenObject={(hit) => {
+          // A menu click can arrive after another window retired or changed
+          // the explorer owner. Never attach an old hit to the new session.
+          const current = actionSources.state.sources.catalog
+          if (
+            !current ||
+            current.state.connection !== connection ||
+            (current.state.session ?? null) !== session ||
+            !hits.data?.includes(hit)
+          )
+            return
           setQuickOpen(false)
-          catalog?.actions.openObject({
+          current.actions.openObject({
             address: hit.address,
             name: hit.name,
             kind: hit.kind,

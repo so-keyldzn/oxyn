@@ -439,10 +439,36 @@ failed refresh is flagged as potentially stale, including when copied into a
 console.
 
 In the wide layout, the definition accompanies the metadata views in a panel
-initially 424 px wide. Its 8 px handle works with the mouse and the keyboard
+initially 424 px wide. It does not read a definition merely because Structure,
+Indexes or Relations is visible: the user explicitly requests that definition.
+Its 8 px handle works with the mouse and the keyboard
 (320–640 px, Home: 424 px). This width stays within the open workspace. In the
 compact layout, the DDL sub-tab presents the definition over the available
 width; changing the window width does not re-run its read.
+
+### Manual metadata loading
+
+`Metadata preferences…` in the active source’s explorer opens per-connection
+preferences and exact observed catalog/namespace overrides. Minimal preloads
+names, Structure adds supported descriptions/indexes/outgoing keys, Extended
+adds supported definitions. Saving starts no preload and closes no editor.
+Opening a view still requests its own required facets, regardless of the preset.
+A collapsed Advanced section offers optional preload, explicit next page and cancellation, and
+shows actual fresh/stale/unread/unavailable/failed coverage. A page is limited
+to 128 relations and 60 seconds; larger scopes remain partial. Changing the
+policy stops superseded preloads. An error does not silently retry a save.
+
+For a source whose field description requires documentary inference, Structure
+asks for a separate confirmed bounded sample. Cancel is focused first. The
+source’s declared returned-document, retained-byte and processing-time limits
+are shown; protocol batching and the server plan may read more. Only inferred
+field metadata is retained, with no sample values shown or sent to AI.
+Unsupported sampling remains unavailable rather than falling back to a read.
+
+Sorting or projecting a documentary preview may require fresh explicitly read
+field structure. If it is absent or evicted, the error asks the user to read
+Structure first. Preparing the preview does not silently re-sample documents.
+A plain document preview remains available without that structural read.
 
 ### Readability and grid height
 
@@ -646,8 +672,16 @@ What each surface guarantees:
 | `⌘P` | open an object by its name, among the objects already loaded — the scope is announced, as in the catalog search |
 | `⌘/` | the shortcut sheet |
 | `⌃Tab`, `⌃⇧Tab` | the next tab, the previous one ("Independent consoles") |
-| `F6`, `⇧F6` | the next area, the previous one: catalog, editor, results, side panel |
+| `F6`, `⇧F6` | the next visible area, the previous one: navigation, tabs, editor, results, inspector, assistant and a mounted map |
 | `⇧F10`, `Menu` key | the context menu of the focused element, like the right click |
+
+F6 and Shift+F6 use the action registry, including View, the palette and the
+shortcut sheet. The cycle follows document order in the visible workspace;
+closed/collapsed panels and hidden retained workspaces are excluded. A mounted
+map can register a focus region without being a prerequisite for the shortcut.
+Returning to a region restores its last valid focus target; CodeMirror restores
+its own cursor and selection. No panel opens and no connection activates during
+the cycle. A modal keeps focus until it is dismissed.
 
 `⌘J` (back to the editor), `⌘B` (sidebar) and `⌘2` (preview grid) keep the
 meaning that "First workspace navigation" and "Filter, sort, page through" give
@@ -822,6 +856,32 @@ active console into its first editor, announces it and does not run it, and the
 original console keeps it. The connections opened during the session join the
 list immediately.
 
+**Multi-base explorer** ([ADR-0080](adr/0080-group-database-connections-under-server-profiles.md)).
+The workspace sidebar lists server groups, their saved child connections and an
+explicitly requested PostgreSQL database list. Selecting a row changes no active
+content; its disclosure expands the group, while Enter, double-click or
+`Open workspace` activates a destination. Objects below remain those of the
+active workspace. Other engines keep their native hierarchy.
+
+An existing workspace is revealed intact. Concurrent activations of one child
+share one opening; an older completion cannot steal the latest foreground.
+Opening a destination through this explorer starts its first console empty,
+without copying a draft or credential. The start-screen draft-copy flow above
+remains separate. A saved connection whose opening failed retains its identity
+for retry; multiple matching accounts require a choice.
+
+Groups can be created from an authorized PostgreSQL connection, renamed,
+linked/unlinked and removed without deleting children. `Disconnect group…`
+reviews its currently open members, then asks about their drafts in order.
+Running operations and open/unknown transactions block disconnection until
+explicitly resolved. Cancelling a review closes none of its pending work; a
+later failure reports earlier completed closes. Cleanup failures remain visible
+and explicitly retryable. No commit or rollback is automatic.
+
+Text and object requests carry their workspace generation. Dropping an object
+onto a foreign editor offers insertion in the source console or Cancel;
+private-session objects stay on their owning console. No text is executed.
+
 **Open workspaces stay connected**
 ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Switching from A
 to B closes nothing: A keeps its consoles, their texts and their edit history,
@@ -983,7 +1043,7 @@ the table. The bar wraps on narrow windows and remains reachable by keyboard.
 
 For views and other SQL relations without a proven paging key, MongoDB collections/views/time-series, Hrana 3 Turso relations, ClickHouse, Elasticsearch/OpenSearch and iterable Redis collections, pages follow one retained read ([ADR-0077](adr/0077-retain-preview-streams-for-native-pagination.md)). The footer says the read stays open between pages and closing the preview releases it. Previous returns the same rows; refresh, filter, sort, size change and reconnection discard continuation and start at page one. Expiry or the history budget produces an explicit error with refresh available. Redis strings and JSON documents have one value; probabilistic structure summaries are not member collections. Older OpenSearch without `_shard_doc` visits index/shard partitions successively; sorting keeps the bounded first-page preview; the footer asks to clear the sort to browse native pages. Future partitions may reflect concurrent changes. OpenSearch 2.0–2.3 keeps its original first-page preview because PIT was introduced in 2.4. No preview issues a total-hit or row count. Single values and structural summaries have no pager. A record source without supported continuation has only a `Preview rows` limit selector and an explanation, with no `Page N` or Previous/Next controls. Routines and metadata-only objects do not gain automatic execution. Availability errors are displayed with retry only when classified transient; the query key includes the session and displayed result, so stale availability never attaches to replacement rows.
 
-**Session-local objects.** The catalog’s `Browse session` selector can inspect an open console. Its temporary objects, private-memory data and attachments are read on that session. MySQL does not enumerate temporary tables, so `Open table by name…` asks for database and table separately, without SQL quoting. Session-local object tabs include the owner in their identity, are not restored after restart and do not move to a new window on their own. Closing the console removes them. Moving the console requires closing its occupied data previews first. Actions that need a fresh execution session are unavailable there; the owning console remains the path for these operations.
+**Session-local objects.** A console’s context menu offers `Browse this console session` when its session can expose metadata. The sidebar has no permanent session selector. While active, a compact indicator names the console and offers `Return to connection browsing`. Choosing this mode changes only the explorer source, never the active connection or console, and executes no script. Returning preserves still-live session-owned tabs. Catalog search (⌘/Ctrl+P) follows the same explorer session, including its cache key and opened-object owner; changing owners rejects late hits from the previous scope. If the console disappears or moves to another window, a quiet status explains the return to connection browsing; affected reads and owner-bound views are retired without closing a session or transaction. Its temporary objects, private-memory data and attachments are read on that session. MySQL does not enumerate temporary tables, so `Open table by name…` asks for database and table separately, without SQL quoting. Session-local object tabs include the owner in their identity, are not restored after restart and do not move to a new window on their own. Closing the console removes them. Moving the console requires closing its occupied data previews first. Actions that need a fresh execution session are unavailable there; the owning console remains the path for these operations.
 
 An original-session preview keeps its source occupied between pages. Conflicting work says to close the data tab or wait for the current operation; it never appears to load forever. Initial columns are read before that reservation. Refresh, filter, sort and page-size changes release the previous source before preparing the replacement; existing received rows can still have other readers. Closing a data tab releases its source explicitly, while a React remount or merely selecting another tab does not close it. Losing a PostgreSQL/MySQL physical session after private state may exist requires an explicit reconnect; a fresh connection never masquerades as the original context. SQL preview reads remain owned while pending when a view hides or remounts; an explicit close or Stop still cancels them. Metadata reads likewise belong to their window and session, not to the sidebar or facet component. Remounts join the pending command and retain its Cancel action. An invalidation queues a fresh read after the current one rather than cancelling the physical owner; explicit cancellation also prevents a queued replacement from starting. Closing the window or source cancels its backend work.
 
@@ -1808,6 +1868,35 @@ against the cache: an object the cache knows to be gone is shown dimmed, with
 stays normal. The label comes from the catalog: it is hostile input, rendered
 as text.
 
+### Standalone schema map
+
+`View schema map` opens a retained workspace tab from the explorer's current
+source or a catalog/namespace/object menu. Source and original session stay
+attached to that tab. Opening the visible tab or choosing its native scope starts
+a bounded demand read without a separate Load gesture (ADR-0084). Containers are
+read one level at a time; a sole child may advance automatically, and ambiguous
+children require a choice. No other database or document sample is preloaded.
+Filters affect loaded names, native paths and kinds locally. The canvas has
+pan/zoom controls and a keyboard-accessible object/link list; F6 participates
+only while the tab is visible. Selection reveals an inspector rather than rows.
+
+The inspector distinguishes reported fields, explicit sample-derived fields
+and key preview layouts; it offers Data/Structure/definition only where
+applicable. Expand neighbours reads one selected object's supported incoming
+keys plus the available direct references, under the existing bounds. Reopening
+an existing object applies the requested view. Human inference has its own
+source/object/limits disclosure and Cancel; no sampled values enter the graph.
+
+Reading, cancellation, known-empty, unavailable, partial, failed and stale maps
+are distinct. A failed refresh keeps the previous map labelled stale. Closing
+or hiding a map cancels its exact active read, without touching another tab's
+job. References to unloaded objects remain visible; technical dependencies are
+explicitly unavailable without structured provider metadata. Membership and
+field containment are named separately from foreign keys. A closed ephemeral
+source or removed SQLite file never causes an empty replacement to be opened.
+Dispositions across launches, image export and graphical DDL editing remain
+separate work.
+
 ### An `erd` block is drawn from the catalog, not from the answer
 
 A fenced code block of language `erd` in an answer lists table names, one per
@@ -1825,17 +1914,19 @@ at every arriving name would read as a defect.
   spelling ("Not found among the objects Oxyn has read"). The search does not
   introspect: a table of a schema never expanded is not found, and the message
   hints at it.
-* **What is drawn comes from the backend.** Columns, primary key and foreign
-  key columns are read by the same commands as the object view
-  (`relation_facets`, then `refresh_relation_facet` for a facet never read);
-  the edges are the foreign keys. To the named tables are added their **direct
-  neighbors** through a key, outgoing or incoming, and the keys between two
-  drawn tables. No model is consulted, and the same catalog gives the same
-  diagram (dagre layout, left to right: the table that carries the key before
-  the one it references).
-* **Bounded.** A block is read up to 20 names, a diagram stops at 40 tables and
-  a table shows 12 columns, keys first; each surplus is counted and said. At
-  most four reads are in flight at once.
+* **What is drawn comes from the backend.** The typed `LoadSchemaMap` bus
+  command reads available descriptions and outgoing keys on the original
+  session and returns the same pure projection as the standalone map
+  ([ADR-0082](adr/0082-project-schema-maps-from-provenanced-catalog-metadata.md)).
+  Documentary inference is never implicit. Names resolve only to already
+  observed objects; neighbors are expanded explicitly in the standalone map.
+  Keys between loaded objects are drawn, and unresolved endpoints are counted.
+  No model is consulted and no column name creates a relationship.
+* **Bounded.** A block is read up to 20 names; the shared map stops at 40
+  objects, 12 displayed fields per object (nested members included), and 200
+  links. Reads are serialized per original metadata owner with interactive
+  priority. Unread/stale/omitted and unsupported/failed parts remain visible;
+  incoming coverage never claims more than loaded outgoing keys.
 * **Navigable.** Pan with the mouse, zoom with the buttons, pinching or the
   keyboard (arrows, `+`, `-`, `0` to fit) when the diagram has the focus. The
   wheel scrolls the conversation, not the diagram. A click on a table name
@@ -2198,3 +2289,27 @@ files` and `Preparing the model` otherwise.
 Opening the assistant panel loads a ready model ahead of the first question,
 so that its cold load does not count against that question's 2-second bound.
 While the option is off, opening the panel does nothing.
+
+## Native database transfer tab
+
+`Database transfers` on the explorer opens one retained tab per original
+connection/session, without starting an executable. Availability and bounded
+history are explicit source-owned reads. Unsupported engines/transports show a
+reason through the same view; result-grid export remains separate.
+
+Choose export/restore, an offered format, trusted installed tool and new output
+file or trusted archive through host pickers. Preparing fixes selections and
+options; it does not execute against the target. Every new archive clears its
+trust acknowledgement. Ready review shows the connection, exact native target,
+filename, tool/version and ownership/privilege options. Restore then requires the
+native host confirmation even on Local. There is no editable command or SQL
+restore fallback.
+
+The tab shows observed stages/bytes and bounded safe history, never invented
+completion percentages or raw logs. Hiding/switching preserves work; closing
+active work defaults to Keep open and waits for cancellation/cleanup before
+closing. Window/source shutdown also owns cleanup. Outcomes distinguish refusal,
+failure before start, failure, success, cancellation, possible partial changes,
+unknown and interrupted. No button replays an uncertain restore. Human inspection
+marks reconciliation without replacing the original outcome; potentially changed
+sources invalidate metadata and previews.

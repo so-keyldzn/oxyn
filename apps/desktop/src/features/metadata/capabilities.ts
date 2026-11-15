@@ -1,4 +1,5 @@
 import type { ObjectTab } from "@/components/oxyn/object-view-frame"
+import type { RelationFacet } from "@/lib/ipc/metadata"
 import type { OpenConnection } from "@/lib/ipc/types"
 import { queryLanguageOf } from "@/lib/query-language"
 
@@ -73,4 +74,32 @@ export function previewUnavailable(
   if (queryLanguageOf(open.capabilities) === null)
     return "This session cannot read rows with a query."
   return null
+}
+
+/** The interface's admission hint; the command bus revalidates every read. */
+export function facetUnavailable(
+  open: OpenConnection,
+  facet: RelationFacet
+): string | null {
+  switch (facet) {
+    case "detail":
+    case "description":
+      return open.capabilities.includes("INFERRED_SCHEMA")
+        ? "Schema fields require an explicit bounded sampling request."
+        : null
+    case "sampledDescription":
+      return open.capabilities.includes("INFERRED_SCHEMA")
+        ? null
+        : "This session does not provide schema inference."
+    case "indexes":
+      return unsupportedReason(open, "indexes")
+    case "outgoingKeys":
+      return unsupportedReason(open, "relations")
+    case "constraints":
+      return unsupportedReason(open, "constraints")
+    case "incomingKeys":
+      return unsupportedReason(open, "incoming")
+    case "definition":
+      return unsupportedReason(open, "definition")
+  }
 }

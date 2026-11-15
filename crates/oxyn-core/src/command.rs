@@ -169,6 +169,42 @@ pub enum CatalogRefreshScope {
         /// Raw relation name.
         relation: String,
     },
+    /// Fields and native paging evidence, without indexes or outgoing keys.
+    Description {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Only supported indexes; a missing summary requires a names dependency.
+    Indexes {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Only supported outgoing keys, without a description read.
+    OutgoingForeignKeys {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
+    /// Explicit human-only bounded inference; no sampled values leave the driver.
+    SampledDescription {
+        /// Absent on an engine without catalogs.
+        catalog: Option<String>,
+        /// Absent on an engine without namespaces.
+        namespace: Option<String>,
+        /// Exact relation identifier, never SQL.
+        relation: String,
+    },
     /// Constraints of one relation, gated by the session's `CONSTRAINTS` capability.
     Constraints {
         /// Absent when the source has no catalog level.
@@ -403,6 +439,97 @@ pub enum Command {
         /// Owning workspace.
         workspace: WorkspaceId,
     },
+    /// Read one saved connection's manual loading policy without opening it.
+    ReadMetadataPolicy {
+        /// Existing connection in the executor's workspace.
+        connection: ConnectionId,
+    },
+    /// Save loading preferences only; never changes authentication or starts I/O.
+    WriteMetadataPolicy {
+        /// Existing connection in the executor's workspace.
+        connection: ConnectionId,
+        /// Versioned, bounded presets and native namespace exceptions.
+        policy: Box<crate::MetadataLoadingPolicy>,
+        /// Exact observed revision, zero for a missing policy.
+        expected_revision: u64,
+    },
+    /// Read capability-driven native transfer availability on an existing owner.
+    ReadNativeTransferSupport {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact live source owner.
+        session: SessionId,
+    },
+    /// Inspect a host-issued executable snapshot; never an arbitrary path/argv.
+    InspectNativeTool {
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+        /// Opaque native-selected executable capability.
+        grant: crate::NativeGrantId,
+    },
+    /// Release one unused host capability, without database or process execution.
+    RevokeNativeSelection {
+        /// Original host window.
+        owner: crate::WindowId,
+        /// Exact owned selection; never a path.
+        grant: crate::NativeGrantId,
+    },
+    /// Prepare a fixed host-granted transfer; no target writes begin here.
+    PrepareNativeTransfer {
+        /// Structured source/window-bound request; no paths or argv.
+        request: Box<crate::NativeTransferRequest>,
+    },
+    /// Export the exact prepared database to its no-clobber destination.
+    ExportDatabase {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Restore an archive only after human approval naming its actual target.
+    RestoreDatabase {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Discard only this owner's unused prepared job and capabilities.
+    DiscardNativeTransfer {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+        /// Original window identity, set by the host.
+        owner: crate::WindowId,
+    },
+    /// Read bounded native job history; never resume an interrupted operation.
+    ReadNativeTransfers {
+        /// Existing connection; history access never reopens it.
+        connection: ConnectionId,
+    },
+    /// Record the human's explicit inspection without rewriting the observed outcome.
+    ReconcileNativeTransfer {
+        /// Existing connection, never inferred from an object label.
+        connection: ConnectionId,
+        /// Exact prepared or historical transfer identity.
+        transfer: crate::NativeTransferId,
+    },
+
+    /// Load a bounded local schema map without rows or automatic inference.
+    LoadSchemaMap {
+        /// Bounded native identities on the exact live owner; no query text.
+        request: Box<crate::SchemaMapRequest>,
+    },
+
+    /// Explicit, bounded metadata preload on an already owned live session.
+    PreloadMetadata {
+        /// Bounded, reviewed source and policy; never authentication parameters.
+        request: Box<crate::MetadataPreloadRequest>,
+    },
     /// Save a newer display snapshot. Only the human may change their interface.
     WriteWorkspacePreferences {
         /// Owning workspace.
@@ -569,6 +696,46 @@ pub enum Command {
         id: crate::ai::ProviderId,
     },
 
+    /// Read this workspace's local server groups. Human-only (ADR-0080).
+    ListServerProfiles,
+    /// Discover server databases through an already open seed connection.
+    DiscoverDatabases { connection: ConnectionId },
+    /// Save an independently authenticated child and its membership atomically.
+    CreateDatabaseConnection {
+        /// Local group to attach to.
+        profile: crate::ServerProfileId,
+        /// Authorized connection whose endpoint is being explored.
+        seed: ConnectionId,
+        /// Reviewed child destination with its own credential reference.
+        config: Box<ConnectionConfig>,
+    },
+
+    /// Create or revise non-secret defaults without changing any child connection.
+    SaveServerProfile {
+        /// Bounded defaults; credentials are never accepted here.
+        profile: Box<crate::ServerProfile>,
+        /// None creates; Some updates exactly the observed revision.
+        expected_revision: Option<u64>,
+    },
+
+    /// Remove grouping only, preserving child connections and credentials.
+    RemoveServerProfile {
+        /// Profile in the executor's workspace.
+        profile: crate::ServerProfileId,
+        /// Revision observed by the caller.
+        expected_revision: u64,
+    },
+
+    /// Move or unlink one existing connection's local grouping; opens nothing.
+    SetServerProfileMembership {
+        /// Child connection whose configuration is left intact.
+        connection: ConnectionId,
+        /// New group, or None to ungroup.
+        profile: Option<crate::ServerProfileId>,
+        /// Previous group; refuses a concurrent move.
+        expected_profile: Option<crate::ServerProfileId>,
+    },
+
     /// Remove a declared AI provider. Documents keep the provenance they were
     /// written with.
     RemoveAiProvider {
@@ -621,6 +788,7 @@ impl Command {
     #[must_use]
     pub fn intent(&self) -> StatementIntent {
         match self {
+            Self::RestoreDatabase { .. } => StatementIntent::Ddl,
             Self::Execute { request, .. } => request.intent,
             Self::Connect { .. }
             | Self::Disconnect { .. }
@@ -638,6 +806,18 @@ impl Command {
             | Self::InspectResultValue { .. }
             | Self::Export { .. }
             | Self::ReadWorkspacePreferences { .. }
+            | Self::PreloadMetadata { .. }
+            | Self::LoadSchemaMap { .. }
+            | Self::ReadNativeTransferSupport { .. }
+            | Self::InspectNativeTool { .. }
+            | Self::RevokeNativeSelection { .. }
+            | Self::PrepareNativeTransfer { .. }
+            | Self::ExportDatabase { .. }
+            | Self::DiscardNativeTransfer { .. }
+            | Self::ReadNativeTransfers { .. }
+            | Self::ReconcileNativeTransfer { .. }
+            | Self::ReadMetadataPolicy { .. }
+            | Self::WriteMetadataPolicy { .. }
             | Self::WriteWorkspacePreferences { .. }
             | Self::WriteWindowLayout { .. }
             | Self::ListQueryDocuments { .. }
@@ -651,6 +831,10 @@ impl Command {
             | Self::OpenRetainedResult { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. }
+            | Self::DiscoverDatabases { .. }
+            | Self::ListServerProfiles
+            | Self::SaveServerProfile { .. }
+            | Self::RemoveServerProfile { .. }
             | Self::ListAiProviders
             | Self::SaveAiProvider { .. }
             | Self::RemoveAiProvider { .. }
@@ -660,7 +844,9 @@ impl Command {
             // Opens and closes a session, writes nothing: the same effect as
             // `Connect`, on a configuration the workspace does not hold yet.
             | Self::TestConnection { .. } => StatementIntent::Read,
-            Self::CreateConnection { .. }
+            Self::SetServerProfileMembership { .. } => StatementIntent::Read,
+            Self::CreateDatabaseConnection { .. }
+            | Self::CreateConnection { .. }
             | Self::UpdateConnection { .. }
             | Self::DeleteConnection { .. } => StatementIntent::Ddl,
         }
@@ -674,7 +860,20 @@ impl Command {
     pub fn target_connection(&self) -> Option<ConnectionId> {
         match self {
             Self::ReadHistory { filter } => filter.connection,
-            Self::Connect { connection }
+            Self::PreloadMetadata { request } => Some(request.connection),
+            Self::LoadSchemaMap { request } => Some(request.connection),
+            Self::PrepareNativeTransfer { request } => Some(request.connection),
+            Self::ReadNativeTransferSupport { connection, .. }
+            | Self::ExportDatabase { connection, .. }
+            | Self::RestoreDatabase { connection, .. }
+            | Self::DiscardNativeTransfer { connection, .. }
+            | Self::ReadNativeTransfers { connection }
+            | Self::ReconcileNativeTransfer { connection, .. } => Some(*connection),
+            Self::ReadMetadataPolicy { connection }
+            | Self::WriteMetadataPolicy { connection, .. }
+            | Self::DiscoverDatabases { connection }
+            | Self::SetServerProfileMembership { connection, .. }
+            | Self::Connect { connection }
             | Self::Disconnect { connection }
             | Self::CloseSession { connection, .. }
             | Self::OpenConsoleSession { connection }
@@ -692,10 +891,13 @@ impl Command {
             | Self::InspectResultValue { connection, .. }
             | Self::Export { connection, .. }
             | Self::DeleteConnection { connection } => Some(*connection),
-            Self::CreateConnection { config }
+            Self::CreateDatabaseConnection { config, .. }
+            | Self::CreateConnection { config }
             | Self::UpdateConnection { config }
             | Self::TestConnection { config } => Some(config.id),
-            Self::ListQueryDocuments { .. }
+            Self::InspectNativeTool { .. }
+            | Self::RevokeNativeSelection { .. }
+            | Self::ListQueryDocuments { .. }
             | Self::SaveQueryDocument { .. }
             | Self::CloseQueryDocument { .. }
             | Self::DeleteQueryDocument { .. }
@@ -710,6 +912,9 @@ impl Command {
             // A provider is declared **per machine** (ADR-0023): it has no
             // target connection, and the privacy tier that governs its use
             // stays the one of the open connection.
+            | Self::ListServerProfiles
+            | Self::SaveServerProfile { .. }
+            | Self::RemoveServerProfile { .. }
             | Self::ListAiProviders
             | Self::SaveAiProvider { .. }
             | Self::RemoveAiProvider { .. }
@@ -780,6 +985,8 @@ impl Command {
                 | Self::PreviewRelation { .. }
                 | Self::Export { .. }
                 | Self::TestConnection { .. }
+                | Self::ExportDatabase { .. }
+                | Self::RestoreDatabase { .. }
         )
     }
 
@@ -823,6 +1030,19 @@ impl Command {
             Self::ListHistoryConnections { .. } => "ListHistoryConnections",
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
+            Self::PreloadMetadata { .. } => "PreloadMetadata",
+            Self::LoadSchemaMap { .. } => "LoadSchemaMap",
+            Self::ReadNativeTransferSupport { .. } => "ReadNativeTransferSupport",
+            Self::InspectNativeTool { .. } => "InspectNativeTool",
+            Self::RevokeNativeSelection { .. } => "RevokeNativeSelection",
+            Self::PrepareNativeTransfer { .. } => "PrepareNativeTransfer",
+            Self::ExportDatabase { .. } => "ExportDatabase",
+            Self::RestoreDatabase { .. } => "RestoreDatabase",
+            Self::DiscardNativeTransfer { .. } => "DiscardNativeTransfer",
+            Self::ReadNativeTransfers { .. } => "ReadNativeTransfers",
+            Self::ReconcileNativeTransfer { .. } => "ReconcileNativeTransfer",
+            Self::ReadMetadataPolicy { .. } => "ReadMetadataPolicy",
+            Self::WriteMetadataPolicy { .. } => "WriteMetadataPolicy",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
             Self::WriteWindowLayout { .. } => "WriteWindowLayout",
             Self::WriteDocument { .. } => "WriteDocument",
@@ -830,6 +1050,12 @@ impl Command {
             Self::TestConnection { .. } => "TestConnection",
             Self::UpdateConnection { .. } => "UpdateConnection",
             Self::DeleteConnection { .. } => "DeleteConnection",
+            Self::ListServerProfiles => "ListServerProfiles",
+            Self::DiscoverDatabases { .. } => "DiscoverDatabases",
+            Self::CreateDatabaseConnection { .. } => "CreateDatabaseConnection",
+            Self::SaveServerProfile { .. } => "SaveServerProfile",
+            Self::RemoveServerProfile { .. } => "RemoveServerProfile",
+            Self::SetServerProfileMembership { .. } => "SetServerProfileMembership",
             Self::ListAiProviders => "ListAiProviders",
             Self::SaveAiProvider { .. } => "SaveAiProvider",
             Self::RemoveAiProvider { .. } => "RemoveAiProvider",

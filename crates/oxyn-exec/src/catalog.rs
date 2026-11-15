@@ -1,6 +1,8 @@
 //! Lazy catalog reads and atomic cache publication, confined to the bus.
 
 mod budget;
+pub(crate) mod payload;
+pub(crate) mod priority;
 
 use std::sync::Arc;
 
@@ -18,6 +20,7 @@ pub(crate) use budget::CatalogBudget;
 pub(crate) struct ConnectionCatalog {
     pub cache: SharedCatalog,
     pub refresh: Arc<Mutex<CatalogBudget>>,
+    pub queue: Arc<priority::Queue>,
     pub closed: CancelToken,
     /// The first session is reserved for connection-level catalog work.
     pub session: RwLock<Option<oxyn_core::SessionId>>,
@@ -28,6 +31,7 @@ impl ConnectionCatalog {
         Self {
             cache: Arc::new(RwLock::new(CatalogCache::new())),
             refresh: Arc::new(Mutex::new(CatalogBudget::default())),
+            queue: Arc::new(priority::Queue::default()),
             closed: CancelToken::new(),
             session: RwLock::new(None),
         }
@@ -49,12 +53,20 @@ impl Default for SessionCatalog {
 }
 
 impl SessionCatalog {
-    pub fn publish(&self, patch: CatalogPatch) -> Result<()> {
+    pub fn publish_checked<T>(
+        &self,
+        generation: oxyn_catalog::CatalogGenerationId,
+        publish: impl FnOnce(&mut CatalogCache) -> Result<T>,
+    ) -> Result<T> {
         let closed = self.closed.lock();
         if *closed {
             return Err(OxynError::Cancelled);
         }
-        patch.apply(&mut self.cache.write())
+        let mut cache = self.cache.write();
+        if cache.generation() != generation {
+            return Err(OxynError::Cancelled);
+        }
+        publish(&mut cache)
     }
 
     pub fn close(&self) {
@@ -65,13 +77,15 @@ impl SessionCatalog {
 }
 
 /// A single successful read, published only after releasing the session guard.
-#[derive(Default)]
+#[derive(Default, serde::Serialize)]
 pub(crate) struct CatalogPatch {
     server: Option<ServerInfo>,
     catalogs: Option<Vec<CatalogRef>>,
     namespaces: Option<(Option<String>, Vec<NamespaceRef>)>,
     relations: Option<(CatalogPath, Vec<RelationRef>)>,
     relation: Option<(CatalogPath, Relation)>,
+    summary: Option<(CatalogPath, RelationRef)>,
+    aggregate: Option<CatalogPath>,
     // Absent means "not read": a source without the capability must never
     // publish an empty vector, which the tabs would read as "no index at all".
     indexes: Option<(CatalogPath, Vec<Index>)>,
@@ -81,11 +95,14 @@ pub(crate) struct CatalogPatch {
     definition: Option<(CatalogPath, RelationDefinition)>,
     // Absent means "not read" or "the source cannot say", never "empty".
     resolution_path: Option<Vec<String>>,
+    #[serde(skip)]
+    encoded_size: Option<usize>,
 }
 
 impl CatalogPatch {
     fn object_count(&self) -> usize {
         usize::from(self.server.is_some())
+            + usize::from(self.summary.is_some())
             + self.catalogs.as_ref().map_or(0, Vec::len)
             + self
                 .namespaces
@@ -129,6 +146,9 @@ impl CatalogPatch {
         if let Some((path, relations)) = self.relations {
             cache.set_relations(&path, relations)?;
         }
+        if let Some((path, summary)) = self.summary {
+            cache.set_relation_summary(&path, summary)?;
+        }
         if let Some((path, relation)) = self.relation {
             cache.set_relation(&path, relation)?;
         }
@@ -148,6 +168,9 @@ impl CatalogPatch {
         }
         if let Some((path, definition)) = self.definition {
             cache.set_definition(&path, definition)?;
+        }
+        if let Some(path) = self.aggregate {
+            cache.mark_relation_aggregate(&path)?;
         }
         if let Some(namespaces) = self.resolution_path {
             cache.set_resolution_path(namespaces);
@@ -173,13 +196,92 @@ fn path(
         .map_err(|_| OxynError::Config("invalid catalog scope identifier".to_owned()))
 }
 
+pub(crate) fn relation_target(scope: &CatalogRefreshScope) -> Result<Option<CatalogPath>> {
+    match scope {
+        CatalogRefreshScope::Relation {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::Description {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::SampledDescription {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::Indexes {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::OutgoingForeignKeys {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::Constraints {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::IncomingForeignKeys {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::Definition {
+            catalog,
+            namespace,
+            relation,
+        } => path(catalog, namespace, Some(relation.clone())).map(Some),
+        _ => Ok(None),
+    }
+}
+
+async fn observed_summary(
+    provider: &dyn CatalogProvider,
+    target: &CatalogPath,
+    known: Option<RelationRef>,
+    cancel: &CancelToken,
+) -> Result<RelationRef> {
+    if let Some(summary) = known {
+        return Ok(summary);
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| OxynError::Config("relation needs a parent scope".into()))?;
+    provider
+        .list_relations(&parent, cancel)
+        .await?
+        .into_iter()
+        .find(|summary| Some(summary.name()) == target.relation())
+        .ok_or_else(|| {
+            OxynError::Query("the requested object is no longer listed in its namespace".into())
+        })
+}
+
 pub(crate) async fn read(
     provider: &dyn CatalogProvider,
     capabilities: Capabilities,
     scope: &CatalogRefreshScope,
     cancel: &CancelToken,
+    summary: Option<RelationRef>,
 ) -> Result<CatalogPatch> {
     check_cancel(cancel)?;
+    if capabilities.contains(Capabilities::INFERRED_SCHEMA)
+        && matches!(
+            scope,
+            CatalogRefreshScope::Relation { .. } | CatalogRefreshScope::Description { .. }
+        )
+    {
+        return Err(OxynError::NotSupported {
+            capability: "explicit schema sampling required".into(),
+        });
+    }
     let mut patch = CatalogPatch::default();
     match scope {
         CatalogRefreshScope::Root => {
@@ -222,7 +324,8 @@ pub(crate) async fn read(
             relation,
         } => {
             let target = path(catalog, namespace, Some(relation.clone()))?;
-            let detail = provider.describe_relation(&target, cancel).await?;
+            let mut detail = provider.describe_relation(&target, cancel).await?;
+            oxyn_catalog::nesting::bound(&mut detail.fields);
             // Session capabilities gate these two reads. Calling anyway would
             // turn `NotSupported` into a failed refresh of the whole relation,
             // and swallowing that error would leave the tabs empty with no
@@ -237,7 +340,64 @@ pub(crate) async fn read(
                 let keys = provider.list_foreign_keys(&target, cancel).await?;
                 patch.foreign_keys = Some((target.clone(), keys));
             }
+            patch.aggregate = Some(target.clone());
             patch.relation = Some((target, detail));
+        }
+        CatalogRefreshScope::Description {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::SampledDescription {
+            catalog,
+            namespace,
+            relation,
+        } => {
+            if matches!(scope, CatalogRefreshScope::SampledDescription { .. }) {
+                capabilities.require(Capabilities::INFERRED_SCHEMA)?;
+                provider
+                    .schema_sample_limits()
+                    .ok_or_else(|| OxynError::NotSupported {
+                        capability: "bounded schema inference".into(),
+                    })?
+                    .validate()?;
+            }
+            let target = path(catalog, namespace, Some(relation.clone()))?;
+            let mut detail = provider.describe_relation(&target, cancel).await?;
+            oxyn_catalog::nesting::bound(&mut detail.fields);
+            patch.relation = Some((target, detail));
+        }
+        CatalogRefreshScope::Indexes {
+            catalog,
+            namespace,
+            relation,
+        } => {
+            capabilities.require(Capabilities::INDEXES)?;
+            let target = path(catalog, namespace, Some(relation.clone()))?;
+            patch.summary = Some((
+                target.clone(),
+                observed_summary(provider, &target, summary, cancel).await?,
+            ));
+            patch.indexes = Some((
+                target.clone(),
+                provider.list_indexes(&target, cancel).await?,
+            ));
+        }
+        CatalogRefreshScope::OutgoingForeignKeys {
+            catalog,
+            namespace,
+            relation,
+        } => {
+            capabilities.require(Capabilities::FOREIGN_KEYS)?;
+            let target = path(catalog, namespace, Some(relation.clone()))?;
+            patch.summary = Some((
+                target.clone(),
+                observed_summary(provider, &target, summary, cancel).await?,
+            ));
+            patch.foreign_keys = Some((
+                target.clone(),
+                provider.list_foreign_keys(&target, cancel).await?,
+            ));
         }
         CatalogRefreshScope::Constraints {
             catalog,
@@ -246,12 +406,13 @@ pub(crate) async fn read(
         } => {
             capabilities.require(Capabilities::CONSTRAINTS)?;
             let target = path(catalog, namespace, Some(relation.clone()))?;
-            // Describe first so a direct bus request can publish to an empty cache.
-            let detail = provider.describe_relation(&target, cancel).await?;
+            patch.summary = Some((
+                target.clone(),
+                observed_summary(provider, &target, summary, cancel).await?,
+            ));
             check_cancel(cancel)?;
             let constraints = provider.list_constraints(&target, cancel).await?;
             patch.constraints = Some((target.clone(), constraints));
-            patch.relation = Some((target, detail));
         }
         CatalogRefreshScope::IncomingForeignKeys {
             catalog,
@@ -260,11 +421,13 @@ pub(crate) async fn read(
         } => {
             capabilities.require(Capabilities::INCOMING_FOREIGN_KEYS)?;
             let target = path(catalog, namespace, Some(relation.clone()))?;
-            let detail = provider.describe_relation(&target, cancel).await?;
+            patch.summary = Some((
+                target.clone(),
+                observed_summary(provider, &target, summary, cancel).await?,
+            ));
             check_cancel(cancel)?;
             let keys = provider.list_incoming_foreign_keys(&target, cancel).await?;
             patch.incoming_keys = Some((target.clone(), keys));
-            patch.relation = Some((target, detail));
         }
         CatalogRefreshScope::Definition {
             catalog,
@@ -273,12 +436,14 @@ pub(crate) async fn read(
         } => {
             capabilities.require(Capabilities::OBJECT_DEFINITION)?;
             let target = path(catalog, namespace, Some(relation.clone()))?;
-            let detail = provider.describe_relation(&target, cancel).await?;
+            patch.summary = Some((
+                target.clone(),
+                observed_summary(provider, &target, summary, cancel).await?,
+            ));
             check_cancel(cancel)?;
             let definition = provider.relation_definition(&target, cancel).await?;
             definition.validate()?;
             patch.definition = Some((target.clone(), definition));
-            patch.relation = Some((target, detail));
         }
         CatalogRefreshScope::ResolutionPath => match provider.resolution_path(cancel).await {
             Ok(namespaces) => patch.resolution_path = Some(namespaces),
@@ -295,6 +460,7 @@ pub(crate) async fn read(
         }
     }
     check_cancel(cancel)?;
+    patch.encoded_size = Some(patch.encoded_bytes()?);
     Ok(patch)
 }
 

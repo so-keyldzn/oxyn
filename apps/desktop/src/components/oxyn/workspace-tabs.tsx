@@ -6,7 +6,8 @@ import {
   Add01Icon,
   Cancel01Icon,
   CodeIcon,
-  DashboardSquare01Icon,
+  ChartRelationshipIcon,
+  DatabaseSync01Icon,
   Files01Icon,
   Layers01Icon,
   TableIcon,
@@ -44,6 +45,7 @@ export type WorkspaceTabItem =
    * A retained result reopened from history. While `exporting`, it does not
    * close: the export must end or be cancelled first.
    */
+  | { kind: "map" | "native"; key: string; title: string }
   | { kind: "result"; key: string; title: string; exporting?: boolean }
 
 const STATE_LABEL = {
@@ -62,7 +64,13 @@ function stateOf(tab: WorkspaceTabItem): keyof typeof STATE_LABEL | null {
 
 function iconOf(tab: WorkspaceTabItem): IconSvgElement {
   if (tab.kind === "console") return CodeIcon
-  if (tab.kind === "result") return DashboardSquare01Icon
+  if (tab.kind !== "object") {
+    return tab.kind === "map"
+      ? ChartRelationshipIcon
+      : tab.kind === "native"
+        ? DatabaseSync01Icon
+        : TableIcon
+  }
   if (tab.objectKind.includes("view")) return ViewIcon
   // The catalog tree's icon for the same kind: a document collection.
   if (tab.objectKind === "collection") return Files01Icon

@@ -499,3 +499,28 @@ export const ReorderWithThePointer: Story = {
     await expect(args.onClose).not.toHaveBeenCalled()
   },
 }
+
+export const SourceToolTabs: Story = {
+  args: {
+    active: "map",
+    tabs: [
+      { kind: "map", key: "map", title: "Schema map" },
+      { kind: "native", key: "native", title: "Database transfers" },
+      { kind: "result", key: "result", title: "Query result" },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement)
+    const map = c.getByRole("tab", { name: /Schema map/ })
+    await userEvent.click(map)
+    await expect(map).toHaveAttribute("aria-selected", "true")
+    await userEvent.keyboard("{ArrowRight}")
+    await expect(
+      c.getByRole("tab", { name: /Database transfers/ })
+    ).toHaveFocus()
+    await userEvent.keyboard("{Enter}")
+    await expect(
+      c.getByRole("tab", { name: /Database transfers/ })
+    ).toHaveAttribute("aria-selected", "true")
+  },
+}

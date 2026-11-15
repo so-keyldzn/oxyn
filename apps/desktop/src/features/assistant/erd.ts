@@ -2,20 +2,16 @@
 //
 // The block names tables; the model does not describe them. Each name is
 // looked up among the objects the backend has read, each table found is read
-// for its columns and keys, and its direct neighbours by a foreign key are
-// added under a bound. No model is asked anything here, and the same catalog
+// for available fields and keys by the shared bounded host map loader. No model is asked anything here, and the same catalog
 // draws the same diagram.
 
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { ErdAmbiguity, ErdState } from "@/components/oxyn/assistant-erd"
 import type { ErdName } from "@/components/oxyn/assistant-markdown-model"
 import { ERD_MAX_TABLES } from "@/components/oxyn/erd-model"
-import type { ErdLink, ErdTable } from "@/components/oxyn/erd-model"
-import type {
-  CatalogSearchHit,
-  RelationFacet,
-  RelationFacets,
-} from "@/lib/ipc/metadata"
+import { erdProjection } from "@/components/oxyn/schema-map-model"
+import type { CatalogSearchHit } from "@/lib/ipc/metadata"
+import type { SchemaMapLoaded } from "@/lib/ipc/schema-map"
 import type { CatalogAddress } from "@/lib/ipc/types"
 
 /** Reads run at once: a diagram of 40 tables is not 80 commands in flight. */
@@ -24,11 +20,8 @@ const CONCURRENCY = 4
 export interface ErdSources {
   /** The catalog search: only what the backend has already read. */
   search: (relation: string) => Promise<Array<CatalogSearchHit>>
-  /** A relation's facets, with those named read first if never read. */
-  facets: (
-    address: CatalogAddress,
-    wanted: Array<RelationFacet>
-  ) => Promise<RelationFacets>
+  /** Same host projection as the standalone map, without implicit neighbour expansion. */
+  project: (addresses: Array<CatalogAddress>) => Promise<SchemaMapLoaded>
 }
 
 async function inPool<T, TResult>(
@@ -51,7 +44,7 @@ async function inPool<T, TResult>(
 }
 
 function readable(address: CatalogAddress) {
-  return [address.namespace, address.relation]
+  return [address.catalog, address.namespace, address.relation]
     .filter((segment) => segment !== null)
     .join(".")
 }
@@ -88,26 +81,6 @@ export function resolveName(
     return { kind: "ambiguous", candidates: found.map((hit) => hit.address) }
   const [only] = found
   return only ? { kind: "found", address: only.address } : { kind: "notFound" }
-}
-
-function tableOf(facets: RelationFacets, requested: boolean): ErdTable {
-  const keyed = new Set((facets.foreignKeys ?? []).flatMap((key) => key.fields))
-  const fields = [...(facets.detail.value?.fields ?? [])].sort(
-    (a, b) => a.position - b.position
-  )
-  return {
-    key: addressKey(facets.address),
-    address: facets.address,
-    name: facets.detail.value?.name ?? facets.address.relation ?? "",
-    namespace: facets.address.namespace,
-    columns: fields.map((field) => ({
-      name: field.name,
-      type: field.rawType,
-      primaryKey: field.primaryKey,
-      foreignKey: keyed.has(field.name),
-    })),
-    requested,
-  }
 }
 
 /** The diagram for these names. Throws what a read threw, unparaphrased. */
@@ -148,61 +121,18 @@ export async function assembleErd(
   }
 
   const startList = [...starts.values()].slice(0, ERD_MAX_TABLES)
-  const startFacets = await inPool(startList, (address) =>
-    sources.facets(address, ["detail", "incomingKeys"])
-  )
-
-  const neighbours = new Map<string, CatalogAddress>()
-  for (const facets of startFacets) {
-    const related = [
-      ...(facets.foreignKeys ?? []).map((key) => key.references),
-      ...(facets.incomingKeys.value ?? []).map((incoming) => incoming.source),
-    ]
-    for (const address of related) {
-      const key = addressKey(address)
-      if (!starts.has(key) && !neighbours.has(key)) neighbours.set(key, address)
-    }
-  }
-  const room = Math.max(ERD_MAX_TABLES - startList.length, 0)
-  const neighbourList = [...neighbours.values()].slice(0, room)
-  const omitted =
-    neighbours.size - neighbourList.length + (starts.size - startList.length)
-  const neighbourFacets = await inPool(neighbourList, (address) =>
-    sources.facets(address, ["detail"])
-  )
-
-  const tables = [
-    ...startFacets.map((facets) => tableOf(facets, true)),
-    ...neighbourFacets.map((facets) => tableOf(facets, false)),
-  ]
-  const drawn = new Set(tables.map((table) => table.key))
-  const links: Array<ErdLink> = []
-  const seen = new Set<string>()
-  // Every drawn table's own outgoing keys: those between two neighbours are
-  // real keys too, and leaving them out would draw a false absence.
-  for (const facets of [...startFacets, ...neighbourFacets]) {
-    const from = addressKey(facets.address)
-    for (const key of facets.foreignKeys ?? []) {
-      const to = addressKey(key.references)
-      const id = JSON.stringify([from, key.name])
-      if (!drawn.has(to) || seen.has(id)) continue
-      seen.add(id)
-      links.push({
-        key: id,
-        from,
-        to,
-        name: key.name,
-        fields: key.fields,
-        referencedFields: key.referencedFields,
-      })
-    }
-  }
-
+  const map = startList.length > 0 ? await sources.project(startList) : null
+  const graph = map ? erdProjection(map.projection) : { tables: [], links: [] }
   return {
     status: "ready",
-    tables,
-    links,
-    omitted,
+    ...graph,
+    omitted:
+      starts.size -
+      startList.length +
+      (map?.projection.coverage.omittedObjects ?? 0),
+    coverageNotice: map
+      ? `${map.projection.coverage.unreadObjects} unread descriptions; ${map.projection.coverage.staleObjects} stale objects; ${map.projection.coverage.omittedFields} omitted fields; ${map.projection.coverage.omittedLinks} omitted links; ${map.projection.coverage.unresolvedLinks} unloaded endpoints; ${map.issues.length} unavailable/failed parts${map.stopped ? "; read stopped" : ""}. Incoming links cover loaded objects only. Expand neighbours in the standalone map.`
+      : undefined,
     notFound,
     ambiguous,
     ignoredNames,

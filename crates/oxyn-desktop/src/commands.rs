@@ -104,6 +104,16 @@ pub async fn decide_connection(
 ) -> Result<Option<ConnectResponse>, IpcError> {
     let window = caller(&backend, &webview)?;
     let command = parse("command id", &command)?;
+    if !approved {
+        return run_owned(
+            &backend,
+            window,
+            command,
+            backend.decide_connection(command, false),
+            |_| false,
+        )
+        .await;
+    }
     let opening = backend.inner.windows.begin_opening(window, command)?;
     let response = run_owned(
         &backend,
@@ -283,10 +293,14 @@ pub mod library;
 pub mod location;
 pub mod menu;
 pub mod metadata;
+pub mod metadata_loading;
+pub mod native_transfers;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;
+pub mod schema_map;
 pub mod semantic;
+pub mod server_profiles;
 pub mod settings;
 mod subscriptions;
 pub mod updates;

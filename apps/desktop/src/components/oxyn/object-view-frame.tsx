@@ -155,6 +155,7 @@ export function ObjectViewFrame({
       key={candidate.value}
       ref={candidate.value === "data" ? dataPanel : undefined}
       value={candidate.value}
+      data-focus-region="object"
       className="flex min-h-0 flex-1 flex-col"
     >
       {panels[candidate.value]}

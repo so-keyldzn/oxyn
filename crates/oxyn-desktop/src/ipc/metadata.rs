@@ -506,8 +506,12 @@ pub struct RelationFacets {
     /// the backend from the segments, never by joining strings in the front.
     pub qualified_name: String,
     pub detail: Facet<RelationDetail>,
-    /// Indexes and outgoing keys come with the relation read; `None` when the
-    /// source does not report them, which is not the same as « none ».
+    pub generation: oxyn_catalog::CatalogGenerationId,
+    pub sample_limits: Option<oxyn_catalog::SchemaSampleLimits>,
+    pub aggregate_freshness: FacetFreshness,
+    pub indexes_freshness: FacetFreshness,
+    pub foreign_keys_freshness: FacetFreshness,
+    /// Independent values: `None` means not read or unavailable, never empty.
     pub indexes: Option<Vec<IndexRow>>,
     pub foreign_keys: Option<Vec<ForeignKeyRow>>,
     pub constraints: Facet<Vec<ConstraintRow>>,
@@ -523,6 +527,12 @@ pub struct RelationFacets {
 pub enum RelationFacet {
     /// Columns, comments, size, indexes and outgoing keys.
     Detail,
+    /// Only fields, comments and native paging evidence.
+    Description,
+    Indexes,
+    OutgoingKeys,
+    /// Explicit human-only schema inference.
+    SampledDescription,
     Constraints,
     IncomingKeys,
     Definition,
@@ -642,6 +652,12 @@ impl RefreshSignal {
                 _ => vec![Self::RowsChanged { connection }],
             },
             oxyn_core::Event::HistoryRecorded => vec![Self::HistoryRecorded { connection }],
+            oxyn_core::Event::DatabaseMayHaveChanged => vec![
+                Self::CatalogInvalidated {
+                    connection: connection.clone(),
+                },
+                Self::RowsChanged { connection },
+            ],
             oxyn_core::Event::CatalogUpdated => vec![Self::CatalogChanged { connection }],
             _ => Vec::new(),
         }

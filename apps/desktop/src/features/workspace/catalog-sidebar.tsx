@@ -1,15 +1,29 @@
+import { HugeiconsIcon } from "@hugeicons/react"
+import { DatabaseIcon } from "@hugeicons/core-free-icons"
 import * as React from "react"
+import { CatalogSourceTools } from "@/components/oxyn/catalog-source-tools"
+import { MetadataLoadingSettings } from "@/features/metadata/loading-settings"
+import { CatalogTransferDialog } from "@/components/oxyn/catalog-transfer-dialog"
+import { ExplorerNavigation } from "@/features/multi-base/explorer-provider"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { CatalogPanel } from "@/components/oxyn/catalog-panel"
 import type { CatalogProblem } from "@/components/oxyn/catalog-panel"
 import { addressKey, staleExpanded } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
-import { Sidebar, SidebarRail } from "@/components/ui/sidebar"
+import {
+  Sidebar,
+  SidebarRail,
+  SidebarGroup,
+  useSidebar,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+} from "@/components/ui/sidebar"
 import { usePinToQuestion } from "@/features/assistant/object-pin"
 import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { hasCapability } from "@/features/session"
+import { hasCapability, showConnection } from "@/features/session"
 import { useCatalogCopies } from "@/features/workspace/catalog-copies"
 import { metadataReads } from "@/features/metadata/read-requests"
 import { nameTransfer } from "@/features/workspace/name-transfer"
@@ -72,14 +86,22 @@ export function CatalogSidebar({
   onSelect,
   onOpen,
   onNewConsole,
+  onSchemaMap,
+  onNativeTransfers,
   onLeave,
   sourceSelector,
   sessionScoped = false,
+  navigation = true,
+  active: visible = true,
 }: {
   open: OpenConnection
+  navigation?: boolean
+  active?: boolean
   sourceSelector?: React.ReactNode
   sessionScoped?: boolean
   selected: string | null
+  onSchemaMap?: (node?: CatalogNode) => void
+  onNativeTransfers?: () => void
   onSelect: (node: CatalogNode) => void
   /** Opens a relation on a given tab; without it, the menu selects the node. */
   onOpen?: (node: CatalogNode, target: OpenTarget) => void
@@ -90,6 +112,7 @@ export function CatalogSidebar({
   onNewConsole?: (place: SessionPlace) => void
   onLeave: () => void
 }) {
+  const [transfer, setTransfer] = React.useState<CatalogNode | null>(null)
   const queryClient = useQueryClient()
   const pin = usePinToQuestion(open)
   const treeNodes = React.useRef<Array<CatalogNode>>([])
@@ -104,12 +127,17 @@ export function CatalogSidebar({
     if (parent) onSelect(parent)
   })
   const [loading, setLoading] = React.useState<Set<string>>(() => new Set())
+  const { setOpen: expandSidebar } = useSidebar()
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set())
   const [problem, setProblem] = React.useState<CatalogProblem | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState("")
   const [cancelling, setCancelling] = React.useState(false)
   const latest = React.useRef(new Map<string, string>())
+  const catalogRegion = React.useRef<HTMLDivElement>(null)
+  const ownerKey = JSON.stringify([open.connection, open.session])
+  const currentOwner = React.useRef(ownerKey)
+  currentOwner.current = ownerKey
   const mounted = React.useRef(false)
   React.useEffect(() => {
     mounted.current = true
@@ -147,7 +175,10 @@ export function CatalogSidebar({
         fresh
       )
       latest.current.set(key, id)
-      const isCurrent = () => latest.current.get(key) === id
+      const isCurrent = () =>
+        mounted.current &&
+        currentOwner.current === ownerKey &&
+        latest.current.get(key) === id
       setLoading((current) => new Set(current).add(key))
       setCancelling(false)
       setProblem(null)
@@ -164,22 +195,24 @@ export function CatalogSidebar({
         if (isCurrent()) setProblem(problemOf(caught))
         return false
       } finally {
-        await queryClient.invalidateQueries({
-          queryKey: ["catalog", open.connection, open.session],
-        })
-        await queryClient.invalidateQueries({
-          queryKey: ["catalog-search", open.connection],
-        })
-        // Only once the tree read again is shown: released earlier, a level
-        // just read would still say « Not loaded » for one round trip.
         if (isCurrent()) {
-          latest.current.delete(key)
-          setCancelling(false)
-          setLoading((current) => {
-            const next = new Set(current)
-            next.delete(key)
-            return next
+          await queryClient.invalidateQueries({
+            queryKey: ["catalog", open.connection, open.session],
           })
+          await queryClient.invalidateQueries({
+            queryKey: ["catalog-search", open.connection],
+          })
+          // Only once the tree read again is shown: released earlier, a level
+          // just read would still say « Not loaded » for one round trip.
+          if (isCurrent()) {
+            latest.current.delete(key)
+            setCancelling(false)
+            setLoading((current) => {
+              const next = new Set(current)
+              next.delete(key)
+              return next
+            })
+          }
         }
       }
     },
@@ -251,68 +284,128 @@ export function CatalogSidebar({
 
   return (
     <Sidebar variant="inset" collapsible="icon">
+      {navigation && (
+        <>
+          <SidebarGroup className="hidden pt-8 group-data-[collapsible=icon]:flex">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Connections"
+                  aria-label="Show connections"
+                  onClick={() => expandSidebar(true)}
+                >
+                  <HugeiconsIcon icon={DatabaseIcon} strokeWidth={2} />
+                  <span>Connections</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroup>
+          <ExplorerNavigation
+            onSkipToCatalog={
+              supported
+                ? () =>
+                    catalogRegion.current
+                      ?.querySelector<HTMLInputElement>("input")
+                      ?.focus()
+                : undefined
+            }
+          />
+        </>
+      )}
       {sourceSelector}
-      <CatalogPanel
-        connectionName={open.name}
-        driver={open.driver}
-        supported={supported}
-        nodes={tree.data}
-        loading={loading}
-        selected={selected}
-        expanded={expanded}
-        onExpandedChange={setExpanded}
-        onExpand={(address) => void refresh(address)}
-        onSelect={onSelect}
-        search={{
-          hits: query.trim() === "" ? null : (hits.data ?? null),
-          searching: hits.isFetching,
-          onQuery: setQuery,
-        }}
-        refreshing={loading.size > 0}
-        cancelling={cancelling}
-        onRefresh={() => void refresh(null, true)}
-        onCancelRefresh={cancelRefresh}
-        problem={
-          problem ??
-          (tree.isError && tree.data === undefined
-            ? problemOf(tree.error)
-            : null)
+      <div ref={catalogRegion} className="flex min-h-0 flex-1 flex-col">
+        <CatalogPanel
+          connectionName={open.name}
+          driver={open.driver}
+          supported={supported}
+          nodes={tree.data}
+          loading={loading}
+          selected={selected}
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          onExpand={(address) => void refresh(address)}
+          onSelect={onSelect}
+          search={{
+            hits: query.trim() === "" ? null : (hits.data ?? null),
+            searching: hits.isFetching,
+            onQuery: setQuery,
+          }}
+          refreshing={loading.size > 0}
+          cancelling={cancelling}
+          onRefresh={() => void refresh(null, true)}
+          onCancelRefresh={cancelRefresh}
+          problem={
+            problem ??
+            (tree.isError && tree.data === undefined
+              ? problemOf(tree.error)
+              : null)
+          }
+          notice={notice}
+          onDismissProblem={() => setProblem(null)}
+          onOpen={onOpen ?? ((node) => onSelect(node))}
+          onSchemaMap={onSchemaMap}
+          onCopyName={copies.copyName}
+          nameTransfer={nameTransfer(
+            open.connection,
+            (caught) => setProblem(problemOf(caught)),
+            { session: open.session, private: sessionScoped },
+            setTransfer
+          )}
+          onRefreshLevel={(node) => void refresh(node.address, true)}
+          pin={sessionScoped ? undefined : pin}
+          operations={
+            sessionScoped
+              ? undefined
+              : {
+                  capabilities: open.capabilities,
+                  onOperation: operation.start,
+                }
+          }
+          copyAs={{
+            definition: hasCapability(open, "OBJECT_DEFINITION"),
+            sql: hasCapability(open, "SQL"),
+            onCopy: copies.copyAs,
+          }}
+          onNewConsole={
+            onNewConsole && hasCapability(open, "SESSION_CONTEXT")
+              ? (node) =>
+                  onNewConsole({
+                    catalog: node.address.catalog,
+                    namespace: node.address.namespace,
+                  })
+              : undefined
+          }
+          onLeave={onLeave}
+          embeddedNavigation={navigation}
+        />
+      </div>
+      <CatalogSourceTools
+        onSchemaMap={supported && onSchemaMap ? () => onSchemaMap() : undefined}
+        onNativeTransfers={onNativeTransfers}
+        preferences={
+          supported && visible ? (
+            <MetadataLoadingSettings open={open} nodes={tree.data} asMenuItem />
+          ) : undefined
         }
-        notice={notice}
-        onDismissProblem={() => setProblem(null)}
-        onOpen={onOpen ?? ((node) => onSelect(node))}
-        onCopyName={copies.copyName}
-        nameTransfer={nameTransfer(open.connection, (caught) =>
-          setProblem(problemOf(caught))
-        )}
-        onRefreshLevel={(node) => void refresh(node.address, true)}
-        pin={sessionScoped ? undefined : pin}
-        operations={
-          sessionScoped
-            ? undefined
-            : {
-                capabilities: open.capabilities,
-                onOperation: operation.start,
-              }
-        }
-        copyAs={{
-          definition: hasCapability(open, "OBJECT_DEFINITION"),
-          sql: hasCapability(open, "SQL"),
-          onCopy: copies.copyAs,
-        }}
-        onNewConsole={
-          onNewConsole && hasCapability(open, "SESSION_CONTEXT")
-            ? (node) =>
-                onNewConsole({
-                  catalog: node.address.catalog,
-                  namespace: node.address.namespace,
-                })
-            : undefined
-        }
-        onLeave={onLeave}
       />
       <SidebarRail />
       {operation.element}
+      {transfer && (
+        <CatalogTransferDialog
+          name={transfer.name}
+          connection={open.name}
+          onCancel={() => setTransfer(null)}
+          onSource={() => {
+            showConnection(open.connection)
+            nameTransfer(
+              open.connection,
+              (caught) => setProblem(problemOf(caught)),
+              { session: open.session, private: sessionScoped }
+            ).onInsert(transfer)
+            setTransfer(null)
+          }}
+        />
+      )}
     </Sidebar>
   )
 }

@@ -723,3 +723,41 @@ what will keep it valid.
 
 See also [`/securite`](../.claude/commands/securite.md) and
 [the checklist](../.claude/checklists/revue-securite.md).
+
+## Native transfer confinement
+
+Native transfers are human-only commands, not a generic process API. Host file
+pickers issue opaque window-bound grants; the webview sends neither paths nor
+argv. Trusted installed executables are privately snapshotted, size/type/role/
+version checked and retained through cleanup. This is not an executable sandbox
+or proof that a human-selected program is trustworthy.
+
+The initial PostgreSQL mode accepts only a directly configured literal loopback
+IP, explicit TLS disable and no SSH/extra connection settings. Environment is
+cleared, HOME/cwd isolated, password/service files private and empty, GSS encryption
+disabled and `require_auth=none` fixed. No saved password is resolved. Remote,
+TLS, SSH and password modes are unavailable. SQL-script restore is unavailable.
+Compatibility is not inferred from a PostgreSQL wire-compatible product.
+
+Every archive restore requires backend-composed host confirmation, including
+Local targets. Generic webview approval cannot approve it. Ownership, original
+session/destination and effective read-only protection are checked again before
+execution. Options cannot request another database, creation, cleaning or an
+arbitrary role. Archive preflight is a format check, not content certification.
+All raw stderr is drained and discarded; only bounded parsed version output and
+safe failure categories cross the boundary. No argv, credential, absolute file
+path or process log is persisted.
+
+On macOS/Linux, owned process groups reserve the leader PID until remaining group
+members have been signalled and the leader reaped; pipe draining and termination
+graces are bounded. No claim is made for arbitrary selected daemons escaping the
+trusted client's group. Unsupported platforms fail closed. A cancelled restore
+can have changed its destination; caches are invalidated and inspection is
+required, without automatic replay. Application process loss does not establish
+remote rollback or that its former process group has disappeared.
+
+Export staging is private (directory 0700, file 0600) under a held directory
+handle. File/directory identities are checked, publication uses a no-clobber
+hard link after file synchronization, and cleanup/directory synchronization must
+settle before success. Existing files/symlinks are refused; unsupported filesystems
+fail explicitly. Failed finalization after publication is unknown, not success.

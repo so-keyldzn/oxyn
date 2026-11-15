@@ -1,3 +1,4 @@
+import { consoleDestination } from "@/features/consoles/text-destination"
 import { createStore } from "@tanstack/react-store"
 
 import type { CatalogAddress } from "@/lib/ipc/types"
@@ -8,6 +9,7 @@ export interface ObjectOpenRequest {
   /** The workspace it belongs to: another connection's screen ignores it. */
   connection: string
   address: CatalogAddress
+  workspace: string | null
   session?: string
 }
 
@@ -25,12 +27,13 @@ let next = 0
 export function openObject(
   connection: string,
   address: CatalogAddress,
-  session?: string
+  session?: string,
+  workspace = consoleDestination(connection)?.workspace ?? null
 ) {
   next += 1
   objectOpenRequests.setState((requests) => [
     ...requests,
-    { id: next, connection, address, session },
+    { id: next, connection, address, session, workspace },
   ])
 }
 

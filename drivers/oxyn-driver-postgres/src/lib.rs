@@ -139,6 +139,8 @@ mod ddl_tests;
 mod definition_tests;
 /// The tests that need a server. All `#[ignore]`.
 #[cfg(test)]
+mod discovery_tests;
+#[cfg(test)]
 mod integration;
 /// Every rendered type compared with the server's own output. `#[ignore]`.
 #[cfg(test)]

@@ -281,6 +281,17 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     (source) => source.actions.closeAll,
     "Close the tabs from their own tabs"
   ),
+  "tab.browseSession": onTarget(
+    "tab",
+    (source) => source.actions.browseSession,
+    "Browse a connected console from its tab in the workspace",
+    (state) =>
+      !state.console
+        ? "absent"
+        : state.browseBlocked
+          ? { reason: state.browseBlocked }
+          : true
+  ),
   "tab.duplicate": onTarget(
     "tab",
     (source) => source.actions.duplicate,
@@ -622,6 +633,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     (source) => source.actions.viewStructure,
     "Open it from the workspace's catalog",
     (state) => (state.relation ? true : "absent")
+  ),
+  "catalog.viewSchemaMap": onTarget(
+    "catalogNode",
+    (source) => source.actions.viewSchemaMap,
+    "Open it from the workspace catalog"
   ),
   "catalog.viewDdl": onTarget(
     "catalogNode",

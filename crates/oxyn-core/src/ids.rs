@@ -146,6 +146,9 @@ define_uuid_ids! {
     /// [`ConnectionConfig::name`](crate::connection::ConnectionConfig::name).
     ConnectionId,
 
+    /// A local server profile grouping independently authorized connections.
+    ServerProfileId,
+
     /// A session open on a connection. Capabilities are evaluated at this
     /// level, not at the driver's (ADR-0003).
     SessionId,
@@ -193,6 +196,12 @@ define_uuid_ids! {
     /// launch to the next with its layout
     /// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
     WindowId,
+
+    /// An opaque native-tool/file capability issued only by the host.
+    NativeGrantId,
+
+    /// One persisted native transfer, across preparation and execution commands.
+    NativeTransferId,
 }
 
 /// Stable identifier of a driver, per **protocol** and not per product.

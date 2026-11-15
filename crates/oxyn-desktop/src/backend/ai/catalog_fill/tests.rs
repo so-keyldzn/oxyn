@@ -291,7 +291,7 @@ fn the_first_mention_lists_the_tables_and_describes_none() {
             !fetched(
                 shop.catalog()
                     .read()
-                    .freshness(&CatalogScope::Relation(path))
+                    .freshness(&CatalogScope::Description(path))
             ),
             "{table}: a name to choose from, not a structure"
         );

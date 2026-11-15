@@ -19,7 +19,7 @@ pub const MAX_TYPE_DEPTH: usize = 32;
 /// Cuts every type of `fields` nested past [`MAX_TYPE_DEPTH`], leaving
 /// [`LogicalType::Unknown`] in its place. `raw_type` still says what the
 /// server named it.
-pub(crate) fn bound(fields: &mut [Field]) {
+pub fn bound(fields: &mut [Field]) {
     let mut cut = Vec::new();
     let mut pending: Vec<(&mut LogicalType, usize)> = fields
         .iter_mut()

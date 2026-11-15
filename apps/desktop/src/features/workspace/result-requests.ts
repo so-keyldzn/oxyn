@@ -1,3 +1,4 @@
+import { consoleDestination } from "@/features/consoles/text-destination"
 import { createStore } from "@tanstack/react-store"
 
 /** A retained result to open in a workspace's tab. Nothing runs. */
@@ -6,6 +7,7 @@ export interface ResultOpenRequest {
   /** The workspace it belongs to: another connection's screen ignores it. */
   connection: string
   result: string
+  workspace: string | null
   /** The statement that produced it, for « open the statement in a console ». */
   statement: string | null
 }
@@ -23,12 +25,13 @@ let next = 0
 export function openAgentResult(
   connection: string,
   result: string,
-  statement: string | null
+  statement: string | null,
+  workspace = consoleDestination(connection)?.workspace ?? null
 ) {
   next += 1
   resultOpenRequests.setState((requests) => [
     ...requests,
-    { id: next, connection, result, statement },
+    { id: next, connection, result, statement, workspace },
   ])
 }
 

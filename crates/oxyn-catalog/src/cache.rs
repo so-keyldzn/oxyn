@@ -39,6 +39,7 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::CatalogGenerationId;
 use crate::RelationDefinition;
 use crate::model::{
     CatalogRef, Constraint, ForeignKey, IncomingForeignKey, Index, NamespaceRef, Relation,
@@ -268,6 +269,8 @@ struct NamespaceNode {
 struct RelationNode {
     summary: RelationRef,
     detail: Cached<Option<Relation>>,
+    #[serde(default)]
+    aggregate: Freshness,
     indexes: Cached<Option<Vec<Index>>>,
     foreign_keys: Cached<Option<Vec<ForeignKey>>>,
     #[serde(default)]
@@ -283,6 +286,7 @@ impl RelationNode {
         Self {
             summary,
             detail: Cached::default(),
+            aggregate: Freshness::Never,
             indexes: Cached::default(),
             foreign_keys: Cached::default(),
             constraints: Cached::default(),
@@ -292,18 +296,13 @@ impl RelationNode {
     }
 
     fn invalidate(&mut self) {
+        self.aggregate.invalidate();
         self.detail.freshness.invalidate();
         self.indexes.freshness.invalidate();
         self.foreign_keys.freshness.invalidate();
         self.constraints.freshness.invalidate();
         self.incoming_keys.freshness.invalidate();
         self.definition.freshness.invalidate();
-    }
-
-    fn is_stale_at(&self, now: DateTime<Utc>, ttl: Duration) -> bool {
-        self.detail.freshness.is_stale_at(now, ttl)
-            || self.indexes.freshness.is_stale_at(now, ttl)
-            || self.foreign_keys.freshness.is_stale_at(now, ttl)
     }
 }
 
@@ -323,6 +322,12 @@ pub enum CatalogScope {
     Namespace(CatalogPath),
     /// A relation: its description, its indexes, its foreign keys.
     Relation(CatalogPath),
+    /// Only the description and native paging evidence.
+    Description(CatalogPath),
+    /// Only the indexes of a relation.
+    Indexes(CatalogPath),
+    /// Only the outgoing keys of a relation.
+    OutgoingForeignKeys(CatalogPath),
     /// Only the constraints of a relation.
     Constraints(CatalogPath),
     /// Only the keys referencing this relation.
@@ -353,6 +358,9 @@ impl CatalogScope {
             Self::Catalog(p)
             | Self::Namespace(p)
             | Self::Relation(p)
+            | Self::Description(p)
+            | Self::Indexes(p)
+            | Self::OutgoingForeignKeys(p)
             | Self::Constraints(p)
             | Self::IncomingForeignKeys(p)
             | Self::Definition(p) => Some(p),
@@ -367,6 +375,9 @@ impl CatalogScope {
             Self::Catalog(_) => CatalogLevel::Catalog,
             Self::Namespace(_) => CatalogLevel::Namespace,
             Self::Relation(_)
+            | Self::Description(_)
+            | Self::Indexes(_)
+            | Self::OutgoingForeignKeys(_)
             | Self::Constraints(_)
             | Self::IncomingForeignKeys(_)
             | Self::Definition(_) => CatalogLevel::Relation,
@@ -381,7 +392,12 @@ impl CatalogScope {
     pub fn contains(&self, other: &Self) -> bool {
         if matches!(
             self,
-            Self::Constraints(_) | Self::IncomingForeignKeys(_) | Self::Definition(_)
+            Self::Description(_)
+                | Self::Indexes(_)
+                | Self::OutgoingForeignKeys(_)
+                | Self::Constraints(_)
+                | Self::IncomingForeignKeys(_)
+                | Self::Definition(_)
         ) {
             return self == other;
         }
@@ -417,8 +433,10 @@ impl std::fmt::Display for CatalogScope {
 /// Serializable end to end, in a format readable without Oxyn (I-11). It is
 /// not persisted: a future persistence will go through an ADR
 /// (ARCHITECTURE §6).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CatalogCache {
+    #[serde(skip)]
+    generation: CatalogGenerationId,
     server: Cached<Option<ServerInfo>>,
     catalogs: Cached<IndexMap<String, CatalogNode>>,
     /// The namespaces an unqualified name resolves in, first match first.
@@ -430,7 +448,22 @@ pub struct CatalogCache {
     resolution_path: Cached<Option<Vec<String>>>,
 }
 
+// Publication generations are coordination, not metadata content.
+impl PartialEq for CatalogCache {
+    fn eq(&self, other: &Self) -> bool {
+        self.server == other.server
+            && self.catalogs == other.catalogs
+            && self.resolution_path == other.resolution_path
+    }
+}
+
 impl CatalogCache {
+    /// Publication token; relisting, invalidation and eviction retire earlier reads.
+    #[must_use]
+    pub const fn generation(&self) -> CatalogGenerationId {
+        self.generation
+    }
+
     /// An empty cache.
     #[must_use]
     pub fn new() -> Self {
@@ -458,6 +491,7 @@ impl CatalogCache {
     /// authoritative on its level. Those that remain keep their subtree, hence
     /// their freshness.
     pub fn set_catalogs(&mut self, catalogs: Vec<CatalogRef>) {
+        self.generation = CatalogGenerationId::new();
         let mut previous = std::mem::take(&mut self.catalogs.value);
         let mut fresh = IndexMap::with_capacity(catalogs.len());
         for info in catalogs {
@@ -487,6 +521,7 @@ impl CatalogCache {
     /// given parent: the path of a [`NamespaceRef`] and its position in the
     /// tree therefore cannot diverge.
     pub fn set_namespaces(&mut self, catalog: Option<&str>, namespaces: Vec<NamespaceRef>) {
+        self.generation = CatalogGenerationId::new();
         let parent = CatalogPath::from_validated(catalog.map(str::to_owned), None, None);
         let tree_node = self.catalog_node_mut(catalog);
         let mut previous = std::mem::take(&mut tree_node.namespaces.value);
@@ -524,6 +559,7 @@ impl CatalogCache {
         if namespace.relation().is_some() {
             return Err(CacheError::NotANamespace);
         }
+        self.generation = CatalogGenerationId::new();
         let parent = namespace.clone();
         let tree_node = self.namespace_node_mut(namespace);
         let mut previous = std::mem::take(&mut tree_node.relations.value);
@@ -533,6 +569,9 @@ impl CatalogCache {
             let node_key = summary.name().to_owned();
             let child = match previous.swap_remove(&node_key) {
                 Some(mut existing) => {
+                    if existing.summary.kind != summary.kind {
+                        existing.invalidate();
+                    }
                     existing.summary = summary;
                     existing
                 }
@@ -565,7 +604,44 @@ impl CatalogCache {
         crate::nesting::bound(&mut relation.fields);
         let kind = relation.kind;
         let tree_node = self.relation_node_or_create(path, kind)?;
+        tree_node.aggregate = Freshness::Never;
         tree_node.detail.set(Some(relation));
+        Ok(())
+    }
+
+    /// Retains an observed summary without claiming its namespace was listed.
+    ///
+    /// # Errors
+    /// A path that does not identify this summary's relation.
+    pub fn set_relation_summary(
+        &mut self,
+        path: &CatalogPath,
+        mut summary: RelationRef,
+    ) -> Result<(), CacheError> {
+        if path.relation() != Some(summary.name()) {
+            return Err(CacheError::UnknownRelation);
+        }
+        let parent = CatalogPath::from_validated(
+            path.catalog().map(str::to_owned),
+            path.namespace().map(str::to_owned),
+            None,
+        );
+        summary.reparent(parent);
+        let node = self.relation_node_or_create(path, summary.kind)?;
+        node.summary = summary;
+        Ok(())
+    }
+
+    /// Marks only a completed compatibility aggregate, after every supported part.
+    ///
+    /// # Errors
+    /// A relation that was not described.
+    pub fn mark_relation_aggregate(&mut self, path: &CatalogPath) -> Result<(), CacheError> {
+        let node = self.relation_node_existing_mut(path)?;
+        if node.detail.value.is_none() {
+            return Err(CacheError::UnknownRelation);
+        }
+        node.aggregate = Freshness::now();
         Ok(())
     }
 
@@ -805,6 +881,33 @@ impl CatalogCache {
             .map(|relation| (&relation.summary, relation.detail.value.as_ref()))
     }
 
+    /// Whether a relation-list scope was observed in this live cache.
+    /// Missing native levels stay absent; this performs no discovery or I/O.
+    #[must_use]
+    pub fn observes_native_scope(
+        &self,
+        catalog: Option<&str>,
+        namespace: Option<&str>,
+        capabilities: oxyn_core::Capabilities,
+    ) -> bool {
+        if self.server_info().is_none() {
+            return false;
+        }
+        let catalog_known = catalog.map_or_else(
+            || self.catalogs().next().is_none(),
+            |name| self.catalogs().any(|catalog| catalog.name() == name),
+        );
+        let namespace_known = if capabilities.contains(oxyn_core::Capabilities::SCHEMAS) {
+            namespace.is_some_and(|name| {
+                self.namespaces(catalog)
+                    .any(|namespace| namespace.name() == name)
+            })
+        } else {
+            namespace.is_none()
+        };
+        catalog_known && namespace_known
+    }
+
     /// Number of known relations, all levels together.
     #[must_use]
     pub fn relation_count(&self) -> usize {
@@ -835,7 +938,16 @@ impl CatalogCache {
                 .map_or(Freshness::Never, |tree_node| tree_node.relations.freshness),
             CatalogScope::Relation(item_path) => self
                 .relation_node(item_path)
-                .map_or(Freshness::Never, |tree_node| tree_node.detail.freshness),
+                .map_or(Freshness::Never, |node| node.aggregate),
+            CatalogScope::Description(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.detail.freshness),
+            CatalogScope::Indexes(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.indexes.freshness),
+            CatalogScope::OutgoingForeignKeys(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.foreign_keys.freshness),
             CatalogScope::Constraints(path) => self
                 .relation_node(path)
                 .map_or(Freshness::Never, |node| node.constraints.freshness),
@@ -890,18 +1002,24 @@ impl CatalogCache {
                     continue;
                 }
                 for relation in space.relations.value.values() {
-                    if relation.is_stale_at(now, ttl) {
-                        stale_ones.push(CatalogScope::Relation(relation.summary.path()));
-                    } else {
-                        if relation.constraints.freshness.is_stale_at(now, ttl) {
-                            stale_ones.push(CatalogScope::Constraints(relation.summary.path()));
-                        }
-                        if relation.incoming_keys.freshness.is_stale_at(now, ttl) {
-                            stale_ones
-                                .push(CatalogScope::IncomingForeignKeys(relation.summary.path()));
-                        }
-                        if relation.definition.freshness.is_stale_at(now, ttl) {
-                            stale_ones.push(CatalogScope::Definition(relation.summary.path()));
+                    type ScopeConstructor = fn(CatalogPath) -> CatalogScope;
+                    let facets: [(Freshness, ScopeConstructor); 6] = [
+                        (relation.detail.freshness, CatalogScope::Description),
+                        (relation.indexes.freshness, CatalogScope::Indexes),
+                        (
+                            relation.foreign_keys.freshness,
+                            CatalogScope::OutgoingForeignKeys,
+                        ),
+                        (relation.constraints.freshness, CatalogScope::Constraints),
+                        (
+                            relation.incoming_keys.freshness,
+                            CatalogScope::IncomingForeignKeys,
+                        ),
+                        (relation.definition.freshness, CatalogScope::Definition),
+                    ];
+                    for (freshness, scope) in facets {
+                        if freshness.is_stale_at(now, ttl) {
+                            stale_ones.push(scope(relation.summary.path()));
                         }
                     }
                 }
@@ -919,6 +1037,7 @@ impl CatalogCache {
     /// invalidates the relation; a `CREATE TABLE` or a `DROP TABLE` invalidates
     /// the **namespace**, because it is its listing that just became wrong.
     pub fn invalidate(&mut self, scope: &CatalogScope) {
+        self.generation = CatalogGenerationId::new();
         tracing::debug!(scope = %scope, "catalog cache invalidated");
         match scope {
             CatalogScope::Server => {
@@ -939,6 +1058,24 @@ impl CatalogCache {
             CatalogScope::Namespace(item_path) => {
                 if let Some(space) = self.namespace_node_mut_opt(item_path) {
                     Self::invalidate_namespace(space);
+                }
+            }
+            CatalogScope::Description(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.detail.freshness.invalidate();
+                    node.aggregate.invalidate();
+                }
+            }
+            CatalogScope::Indexes(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.indexes.freshness.invalidate();
+                    node.aggregate.invalidate();
+                }
+            }
+            CatalogScope::OutgoingForeignKeys(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.foreign_keys.freshness.invalidate();
+                    node.aggregate.invalidate();
                 }
             }
             CatalogScope::Constraints(path) => {
@@ -975,6 +1112,7 @@ impl CatalogCache {
     /// listing is invalidated on the way: it just became wrong, and leaving it
     /// fresh would make the object reappear at the next refresh.
     pub fn forget(&mut self, scope: &CatalogScope) {
+        self.generation = CatalogGenerationId::new();
         tracing::debug!(scope = %scope, "catalog cache entry removed");
         match scope {
             CatalogScope::Server => *self = Self::new(),
@@ -991,6 +1129,24 @@ impl CatalogCache {
                         .value
                         .shift_remove(map_key(item_path.namespace()));
                     catalogue.namespaces.freshness.invalidate();
+                }
+            }
+            CatalogScope::Description(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.detail = Cached::default();
+                    node.aggregate = Freshness::Never;
+                }
+            }
+            CatalogScope::Indexes(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.indexes = Cached::default();
+                    node.aggregate = Freshness::Never;
+                }
+            }
+            CatalogScope::OutgoingForeignKeys(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.foreign_keys = Cached::default();
+                    node.aggregate = Freshness::Never;
                 }
             }
             CatalogScope::Constraints(path) => {
@@ -1018,6 +1174,32 @@ impl CatalogCache {
                 }
             }
         }
+        if let Some(path) = scope.path() {
+            self.prune_unlisted_empty(path);
+        }
+    }
+
+    fn prune_unlisted_empty(&mut self, path: &CatalogPath) {
+        let Some(name) = path.relation() else {
+            return;
+        };
+        let Some(namespace) = self.namespace_node_mut_opt(path) else {
+            return;
+        };
+        if namespace.relations.freshness != Freshness::Never {
+            return;
+        }
+        let empty = namespace.relations.value.get(name).is_some_and(|node| {
+            node.detail.value.is_none()
+                && node.indexes.value.is_none()
+                && node.foreign_keys.value.is_none()
+                && node.constraints.value.is_none()
+                && node.incoming_keys.value.is_none()
+                && node.definition.value.is_none()
+        });
+        if empty {
+            namespace.relations.value.shift_remove(name);
+        }
     }
 
     /// Drops what was read *under* a node, to bound memory.
@@ -1030,6 +1212,7 @@ impl CatalogCache {
     /// [`CatalogScope::Server`] empties the whole cache. An unknown node is a
     /// no-op.
     pub fn evict(&mut self, scope: &CatalogScope) {
+        self.generation = CatalogGenerationId::new();
         tracing::debug!(scope = %scope, "catalog cache entry evicted");
         match scope {
             CatalogScope::Server => *self = Self::new(),
@@ -1063,6 +1246,7 @@ impl CatalogCache {
                 let Some(node) = namespace.relations.value.get_mut(name) else {
                     return;
                 };
+                node.aggregate = Freshness::Never;
                 node.detail = Cached::default();
                 node.indexes = Cached::default();
                 node.foreign_keys = Cached::default();
@@ -1073,7 +1257,10 @@ impl CatalogCache {
                     namespace.relations.value.shift_remove(name);
                 }
             }
-            CatalogScope::Constraints(_)
+            CatalogScope::Description(_)
+            | CatalogScope::Indexes(_)
+            | CatalogScope::OutgoingForeignKeys(_)
+            | CatalogScope::Constraints(_)
             | CatalogScope::IncomingForeignKeys(_)
             | CatalogScope::Definition(_) => self.forget(scope),
         }

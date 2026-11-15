@@ -131,7 +131,15 @@ export function ConsoleView({
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel defaultSize="60" minSize={floors.results}>
-          {results}
+          <div
+            data-focus-region="results"
+            tabIndex={-1}
+            role="region"
+            aria-label="Results"
+            className="h-full min-h-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          >
+            {results}
+          </div>
         </ResizablePanel>
       </ResizablePanelGroup>
     </div>

@@ -7934,6 +7934,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -8005,6 +8006,7 @@ dependencies = [
  "oxyn-query",
  "oxyn-secrets",
  "oxyn-store",
+ "oxyn-transfer",
  "parking_lot",
  "reqwest",
  "rfd",
@@ -8283,9 +8285,12 @@ dependencies = [
  "oxyn-driver-sqlite",
  "oxyn-query",
  "oxyn-store",
+ "oxyn-transfer",
  "parking_lot",
  "rstest",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -8365,6 +8370,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
+]
+
+[[package]]
+name = "oxyn-transfer"
+version = "0.0.20"
+dependencies = [
+ "oxyn-core",
+ "parking_lot",
+ "rustix 0.38.44",
+ "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

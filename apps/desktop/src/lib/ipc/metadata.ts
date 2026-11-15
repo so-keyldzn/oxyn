@@ -156,6 +156,13 @@ export const DefinitionView = z.object({
 })
 export type DefinitionView = z.infer<typeof DefinitionView>
 
+export const SchemaSampleLimits = z.object({
+  maxDocuments: z.number().int().positive(),
+  maxRetainedBytes: z.number().int().positive(),
+  maxDurationMs: z.number().int().positive(),
+})
+export type SchemaSampleLimits = z.infer<typeof SchemaSampleLimits>
+
 export const RelationFacets = z.object({
   address: CatalogAddress,
   kind: z.string().nullable(),
@@ -163,6 +170,11 @@ export const RelationFacets = z.object({
   /** Quoted by the session's dialect in Rust; copied as is, never rebuilt. */
   qualifiedName: z.string(),
   detail: Facet(RelationDetail),
+  generation: z.string().uuid(),
+  sampleLimits: SchemaSampleLimits.nullable(),
+  aggregateFreshness: FacetFreshness,
+  indexesFreshness: FacetFreshness,
+  foreignKeysFreshness: FacetFreshness,
   indexes: z.array(IndexRow).nullable(),
   foreignKeys: z.array(ForeignKeyRow).nullable(),
   constraints: Facet(z.array(ConstraintRow)),
@@ -174,6 +186,10 @@ export type RelationFacets = z.infer<typeof RelationFacets>
 
 export const RelationFacet = z.enum([
   "detail",
+  "description",
+  "indexes",
+  "outgoingKeys",
+  "sampledDescription",
   "constraints",
   "incomingKeys",
   "definition",
@@ -311,6 +327,9 @@ export const metadata = {
       address,
       facet,
     }),
+
+  catalogGeneration: (connection: string, session: string | null = null) =>
+    call("catalog_generation", z.string().uuid(), { connection, session }),
 
   catalogTree: (connection: string, session: string | null = null) =>
     call("catalog_tree", z.array(CatalogNode), { connection, session }),

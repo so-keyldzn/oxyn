@@ -15,6 +15,7 @@ import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { ConnectionChangeReview } from "@/components/oxyn/connection-change-review"
 import type { PendingConnectionChange } from "@/components/oxyn/connection-change-review"
 import { ConnectionForm } from "@/components/oxyn/connection-form"
+import { DriverLogo } from "@/components/oxyn/driver-logo"
 import type {
   ConnectionPrefill,
   FormValues,
@@ -374,8 +375,15 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                   role="region"
                 >
                   <CardHeader className="shrink-0">
-                    <CardTitle id="new-connection-title">
-                      New {driver.displayName} connection
+                    <CardTitle
+                      id="new-connection-title"
+                      className="flex items-center gap-2"
+                    >
+                      <DriverLogo
+                        driver={driver.id}
+                        className="size-5 shrink-0"
+                      />
+                      <span>New {driver.displayName} connection</span>
                     </CardTitle>
                     <CardDescription>
                       {duplicate ? (

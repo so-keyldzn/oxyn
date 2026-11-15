@@ -309,3 +309,31 @@ describe("the new entries of the bar", () => {
     })
   })
 })
+
+describe.each<Platform>(["mac", "other"])(
+  "focus navigation listings on %s",
+  (on) => {
+    it("shows the dispatcher's bindings in View, the palette and the shortcut sheet", () => {
+      const ids = ["view.focusNext", "view.focusPrevious"]
+      const palette = entries(on, context(on)).filter((entry) =>
+        ids.includes(entry.id)
+      )
+      expect(
+        palette.map((entry) => [entry.id, entry.section, entry.availability])
+      ).toEqual([
+        ["view.focusNext", "View", true],
+        ["view.focusPrevious", "View", true],
+      ])
+      const sheet = shortcutSheet(manifest, on)
+        .flatMap((section) => section.rows)
+        .filter((row) => ids.includes(row.id))
+      expect(sheet.map((row) => row.keys)).toEqual(
+        palette.map((entry) => [entry.keys])
+      )
+      expect(sheet).toHaveLength(2)
+      expect(
+        availability("view.focusNext", { ...context(on), modal: true })
+      ).toEqual({ reason: "A dialog is open" })
+    })
+  }
+)

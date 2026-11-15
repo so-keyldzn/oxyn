@@ -658,7 +658,8 @@ export function ConsolePanel({
       const address =
         parts && tree ? loadedObject(tree, parts, session !== null) : null
       return address
-        ? () => openObject(open.connection, address, session?.session)
+        ? () =>
+            openObject(open.connection, address, session?.session, open.session)
         : null
     },
   }
@@ -772,6 +773,11 @@ export function ConsolePanel({
         }
         editor={
           <SqlEditor
+            owner={
+              session
+                ? { connection: open.connection, session: session.session }
+                : undefined
+            }
             value={doc.text}
             onChange={(text) => doc.change({ text })}
             driver={open.driver}

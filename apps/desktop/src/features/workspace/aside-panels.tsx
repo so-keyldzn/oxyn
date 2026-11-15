@@ -58,7 +58,8 @@ export function useAsidePanels(open: OpenConnection | null): Array<AsideItem> {
           <AssistantPanel
             open={open}
             onOpenInConsole={(sql, provenance) =>
-              openInConsole(sql, {
+              openInConsole(open.connection, sql, {
+                workspace: open.session,
                 newConsole: true,
                 notice: noticeOf(provenance),
               })

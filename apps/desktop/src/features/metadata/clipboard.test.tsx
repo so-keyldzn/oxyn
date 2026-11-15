@@ -61,6 +61,12 @@ vi.mock("@/components/ui/toast", () => ({
 }))
 
 const facets: RelationFacets = {
+  generation: "00000000-0000-4000-8000-00000000000c",
+  sampleLimits: null,
+  aggregateFreshness: { state: "never" as const },
+  indexesFreshness: { state: "never" as const },
+  foreignKeysFreshness: { state: "never" as const },
+
   address: { catalog: SENTINEL, namespace: SENTINEL, relation: SENTINEL },
   kind: SENTINEL,
   holdsRecords: true,

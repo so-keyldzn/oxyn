@@ -189,6 +189,26 @@ fn anchor(scope: &CatalogRefreshScope) -> Option<Anchor<'_>> {
             namespace,
             relation,
         }
+        | CatalogRefreshScope::Description {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::SampledDescription {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::Indexes {
+            catalog,
+            namespace,
+            relation,
+        }
+        | CatalogRefreshScope::OutgoingForeignKeys {
+            catalog,
+            namespace,
+            relation,
+        }
         | CatalogRefreshScope::Constraints {
             catalog,
             namespace,
@@ -239,6 +259,31 @@ fn eviction(
                 evictions.push(CatalogScope::Relation(target));
                 return Ok(());
             }
+            CatalogRefreshScope::Description {
+                catalog,
+                namespace,
+                relation,
+            }
+            | CatalogRefreshScope::SampledDescription {
+                catalog,
+                namespace,
+                relation,
+            } => (catalog, namespace, relation, CatalogScope::Description),
+            CatalogRefreshScope::Indexes {
+                catalog,
+                namespace,
+                relation,
+            } => (catalog, namespace, relation, CatalogScope::Indexes),
+            CatalogRefreshScope::OutgoingForeignKeys {
+                catalog,
+                namespace,
+                relation,
+            } => (
+                catalog,
+                namespace,
+                relation,
+                CatalogScope::OutgoingForeignKeys,
+            ),
             CatalogRefreshScope::Constraints {
                 catalog,
                 namespace,

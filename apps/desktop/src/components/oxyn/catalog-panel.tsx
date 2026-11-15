@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ContentHint } from "@/components/oxyn/content-hint"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -85,8 +86,10 @@ export function CatalogPanel({
   operations,
   copyAs,
   onNewConsole,
+  onSchemaMap,
   nameTransfer,
   onLeave,
+  embeddedNavigation = false,
 }: {
   connectionName: string
   driver: string
@@ -126,16 +129,22 @@ export function CatalogPanel({
   /** `Copy as ▸`, composed by the backend (I-10). */
   copyAs?: CopyAs
   /** `New console on this schema`, where a console's context can be one. */
+  onSchemaMap?: (node: CatalogNode) => void
   onNewConsole?: (node: CatalogNode) => void
   /** A relation's quoted name, dragged to the editor or sent by ⌥↵. */
   nameTransfer?: NameTransfer
   onLeave: () => void
+  /** Connection navigation already provides switching and native titlebar spacing. */
+  embeddedNavigation?: boolean
 }) {
   const { setOpen } = useSidebar()
 
   return (
     <>
-      <SidebarHeader data-tauri-drag-region className="pt-8">
+      <SidebarHeader
+        data-tauri-drag-region
+        className={cn(embeddedNavigation ? "py-1" : "pt-8")}
+      >
         <div
           data-slot="catalog-connection"
           className="flex min-w-0 items-center gap-2 rounded-md p-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
@@ -276,6 +285,7 @@ export function CatalogPanel({
                     pin={pin}
                     operations={operations}
                     copyAs={copyAs}
+                    onSchemaMap={onSchemaMap}
                     onNewConsole={onNewConsole}
                     nameTransfer={nameTransfer}
                   />
@@ -286,16 +296,18 @@ export function CatalogPanel({
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
-        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Switch connection" onClick={onLeave}>
-              <HugeiconsIcon icon={Logout03Icon} strokeWidth={2} />
-              <span>Switch connection</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+      {!embeddedNavigation && (
+        <SidebarFooter>
+          <SidebarMenu className="group-data-[collapsible=icon]:items-center">
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Switch connection" onClick={onLeave}>
+                <HugeiconsIcon icon={Logout03Icon} strokeWidth={2} />
+                <span>Switch connection</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      )}
     </>
   )
 }

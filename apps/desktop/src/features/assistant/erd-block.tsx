@@ -12,60 +12,10 @@ import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { metadata } from "@/lib/ipc/metadata"
-import type { RelationFacet, RelationFacets } from "@/lib/ipc/metadata"
+import { schemaMaps } from "@/lib/ipc/schema-map"
+import { mapReference } from "@/features/schema-map/scopes"
+import type { MapObjectRef } from "@/lib/ipc/schema-map"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
-
-function freshness(facets: RelationFacets, facet: RelationFacet) {
-  switch (facet) {
-    case "detail":
-      return facets.detail.freshness.state
-    case "constraints":
-      return facets.constraints.freshness.state
-    case "incomingKeys":
-      return facets.incomingKeys.freshness.state
-    case "definition":
-      return facets.definition.freshness.state
-  }
-}
-
-/**
- * Reads a facet never read, through the same command as the object view.
- * A metadata read waits for nobody: one that needs an approval is refused
- * and said, as `useRelationFacets` does.
- */
-async function readFacet(
-  open: OpenConnection,
-  address: CatalogAddress,
-  facet: RelationFacet,
-  signal: AbortSignal
-) {
-  const id = newCommandId()
-  const cancel = () => void backend.cancel(id)
-  signal.addEventListener("abort", cancel)
-  try {
-    const outcome = await metadata.refreshRelationFacet(
-      id,
-      open.connection,
-      open.session,
-      address,
-      facet
-    )
-    switch (outcome.type) {
-      case "cancelled":
-        throw new Error("The metadata read was cancelled.")
-      case "denied":
-        throw new Error(outcome.reason)
-      case "needsApproval":
-        void backend.decide(outcome.command, false)
-        throw new Error(
-          "The connection policy requires an approval for this metadata read."
-        )
-      default:
-    }
-  } finally {
-    signal.removeEventListener("abort", cancel)
-  }
-}
 
 function sourcesFor(
   queryClient: QueryClient,
@@ -76,24 +26,29 @@ function sourcesFor(
     // The sidebar's own key: a search it already ran is not run again.
     search: (relation) =>
       queryClient.fetchQuery({
-        queryKey: ["catalog-search", open.connection, relation],
-        queryFn: () => metadata.searchCatalog(open.connection, relation),
+        queryKey: ["catalog-search", open.connection, open.session, relation],
+        queryFn: () =>
+          metadata.searchCatalog(open.connection, relation, open.session),
       }),
-    facets: async (address, wanted) => {
-      const key = facetsKey(open.connection, address)
-      const cached = await queryClient.fetchQuery({
-        queryKey: key,
-        queryFn: () => metadata.relationFacets(open.connection, address),
-      })
-      const missing = wanted.filter(
-        (facet) => freshness(cached, facet) !== "fetched"
-      )
-      if (missing.length === 0) return cached
-      for (const facet of missing) await readFacet(open, address, facet, signal)
-      // Written back under the object view's key: it now reads fresh too.
-      const read = await metadata.relationFacets(open.connection, address)
-      queryClient.setQueryData(key, read)
-      return read
+    project: async (addresses) => {
+      if (signal.aborted) throw new Error("The diagram read was cancelled.")
+      const id = newCommandId()
+      const cancel = () => void backend.cancel(id).catch(() => undefined)
+      signal.addEventListener("abort", cancel)
+      try {
+        return await schemaMaps.load(id, {
+          connection: open.connection,
+          session: open.session,
+          scope: { catalog: null, namespace: null },
+          objects: addresses
+            .map(mapReference)
+            .filter((object): object is MapObjectRef => object !== null),
+          expand: null,
+          refresh: false,
+        })
+      } finally {
+        signal.removeEventListener("abort", cancel)
+      }
     },
   }
 }
@@ -117,6 +72,7 @@ export function ErdBlock({
   const erdKey = [
     "assistant-erd",
     open.connection,
+    open.session,
     JSON.stringify(
       request.names.map((name) => [name.namespace, name.relation])
     ),
@@ -161,9 +117,13 @@ export function ErdBlock({
     void copyToClipboard(
       queryClient
         .fetchQuery({
-          queryKey: facetsKey(open.connection, table.address),
+          queryKey: facetsKey(open.connection, table.address, open.session),
           queryFn: () =>
-            metadata.relationFacets(open.connection, table.address),
+            metadata.relationFacets(
+              open.connection,
+              table.address,
+              open.session
+            ),
         })
         .then(
           (facets) => facets.qualifiedName,

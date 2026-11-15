@@ -92,6 +92,8 @@ pub enum Event {
 
     /// The catalog changed: the tree must be read again.
     CatalogUpdated,
+    /// An owned external operation may have modified this connection's database.
+    DatabaseMayHaveChanged,
 
     /// The session's transaction state, observed at the end of an execution
     /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).

@@ -21,7 +21,17 @@ pub(crate) struct Probe {
     catalogs: bool,
     /// Whether the session declares INDEXES and FOREIGN_KEYS.
     details: bool,
+    inferred: bool,
+    definitions: bool,
+    context: bool,
+    capabilities: Option<Capabilities>,
+    relation_count: Option<usize>,
+    field_count: usize,
+    describe_wait: AtomicBool,
+    describe_started: tokio::sync::Notify,
+    describe_release: tokio::sync::Notify,
     wait: AtomicBool,
+    relations_waiting: tokio::sync::Notify,
     observed_cancel: AtomicBool,
     failure: Mutex<Option<ErrorClass>>,
     /// What the source answers to `resolution_path`; `None` is a source that
@@ -59,6 +69,7 @@ impl CatalogProvider for Probe {
     ) -> Result<Vec<RelationRef>> {
         self.calls.lock().push(format!("relations:{parent}"));
         if self.wait.load(Ordering::SeqCst) {
+            self.relations_waiting.notify_one();
             cancel.cancelled().await;
             self.observed_cancel.store(true, Ordering::SeqCst);
             return Err(OxynError::Cancelled);
@@ -69,6 +80,18 @@ impl CatalogProvider for Probe {
                 class,
                 source: Box::new(std::io::Error::other("fixture failure")),
             });
+        }
+        if let Some(count) = self.relation_count {
+            return (0..count)
+                .map(|index| {
+                    RelationRef::new(
+                        parent.clone(),
+                        format!("table_{index:04}"),
+                        RelationKind::Table,
+                    )
+                    .map_err(Into::into)
+                })
+                .collect();
         }
         Ok(vec![RelationRef::new(
             parent.clone(),
@@ -84,11 +107,46 @@ impl CatalogProvider for Probe {
                 capability: "RESOLUTION_PATH".to_owned(),
             })
     }
+    fn schema_sample_limits(&self) -> Option<oxyn_catalog::SchemaSampleLimits> {
+        self.inferred.then_some(oxyn_catalog::SchemaSampleLimits {
+            max_documents: 10,
+            max_retained_bytes: 1024,
+            max_duration_ms: 1000,
+        })
+    }
+    async fn relation_definition(
+        &self,
+        _: &CatalogPath,
+        _: &CancelToken,
+    ) -> Result<oxyn_catalog::RelationDefinition> {
+        self.calls.lock().push("definition".into());
+        Ok(oxyn_catalog::RelationDefinition {
+            sql: "CREATE TABLE fixture (id INT)".into(),
+            source: oxyn_catalog::DefinitionSource::Reconstructed,
+            notes: vec![],
+        })
+    }
     async fn describe_relation(&self, path: &CatalogPath, _: &CancelToken) -> Result<Relation> {
         self.calls.lock().push("describe".into());
+        if self.describe_wait.load(Ordering::SeqCst) {
+            self.describe_started.notify_one();
+            self.describe_release.notified().await;
+        }
         Ok(Relation::new(
             path.relation().expect("validated relation"),
             RelationKind::Table,
+        )
+        .with_fields(
+            (0..self.field_count)
+                .map(|index| {
+                    oxyn_catalog::model::Field::new(
+                        format!("field_{index}"),
+                        u32::try_from(index).expect("bounded fixture field count"),
+                        oxyn_catalog::model::LogicalType::INT64,
+                        "int8",
+                    )
+                })
+                .collect(),
         ))
     }
     // Both keep the trait's default when the session lacks the capability, so a
@@ -130,7 +188,25 @@ pub(crate) struct FakeSession(pub Arc<Probe>);
 #[async_trait]
 impl Session for FakeSession {
     fn capabilities(&self) -> Capabilities {
+        if let Some(capabilities) = self.0.capabilities {
+            return capabilities;
+        }
         Capabilities::TABLES
+            | if self.0.context {
+                Capabilities::SESSION_CONTEXT
+            } else {
+                Capabilities::empty()
+            }
+            | if self.0.inferred {
+                Capabilities::INFERRED_SCHEMA
+            } else {
+                Capabilities::empty()
+            }
+            | if self.0.definitions {
+                Capabilities::OBJECT_DEFINITION
+            } else {
+                Capabilities::empty()
+            }
             | if self.0.schemas {
                 Capabilities::SCHEMAS
             } else {
@@ -141,6 +217,25 @@ impl Session for FakeSession {
             } else {
                 Capabilities::empty()
             }
+    }
+    async fn set_context(&self, _: &oxyn_driver::SessionContext, _: &CancelToken) -> Result<()> {
+        self.0.calls.lock().push("set_context".into());
+        Ok(())
+    }
+    async fn preview_request(
+        &self,
+        _: &CatalogPath,
+        _: u32,
+        _: &oxyn_core::PreviewShape,
+        _: &CancelToken,
+    ) -> Result<ExecRequest> {
+        assert!(
+            !self.0.inferred,
+            "the default planner must not call an inference-prone legacy adapter"
+        );
+        Err(OxynError::NotSupported {
+            capability: "relation preview".into(),
+        })
     }
     async fn execute(&self, _: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
         panic!("catalog commands must never execute SQL")
@@ -630,3 +725,9 @@ fn merge_at_scope_limit_evicts_the_oldest_scope_and_publishes() {
     assert!(cache.relation(&newest).is_some(), "the newest is served");
     assert!(cache.server_info().is_some(), "the root is never evicted");
 }
+
+#[path = "catalog_tests/metadata_loading.rs"]
+mod metadata_loading;
+
+#[path = "catalog_tests/schema_map.rs"]
+mod schema_map;

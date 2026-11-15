@@ -1,6 +1,8 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
+import { facetUnavailable } from "./capabilities"
+import { facetFreshness } from "./facet-state"
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import { IDLE } from "@/components/oxyn/facet-frame"
 import type { FacetLoad } from "@/components/oxyn/facet-frame"
@@ -8,7 +10,7 @@ import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { metadataReads } from "@/features/metadata/read-requests"
 import { BackendError, backend } from "@/lib/ipc/client"
 import { metadata } from "@/lib/ipc/metadata"
-import type { RelationFacet, RelationFacets } from "@/lib/ipc/metadata"
+import type { RelationFacet } from "@/lib/ipc/metadata"
 import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
 
 export function facetsKey(
@@ -21,6 +23,10 @@ export function facetsKey(
 
 const FACETS: Array<RelationFacet> = [
   "detail",
+  "description",
+  "indexes",
+  "outgoingKeys",
+  "sampledDescription",
   "constraints",
   "incomingKeys",
   "definition",
@@ -28,23 +34,14 @@ const FACETS: Array<RelationFacet> = [
 
 const idleLoads = (): Record<RelationFacet, FacetLoad> => ({
   detail: IDLE,
+  description: IDLE,
+  indexes: IDLE,
+  outgoingKeys: IDLE,
+  sampledDescription: IDLE,
   constraints: IDLE,
   incomingKeys: IDLE,
   definition: IDLE,
 })
-
-function freshnessOf(facets: RelationFacets, facet: RelationFacet) {
-  switch (facet) {
-    case "detail":
-      return facets.detail.freshness
-    case "constraints":
-      return facets.constraints.freshness
-    case "incomingKeys":
-      return facets.incomingKeys.freshness
-    case "definition":
-      return facets.definition.freshness
-  }
-}
 
 /**
  * A relation's facets, each loaded when its tab asks and never before.
@@ -143,11 +140,14 @@ export function useRelationFacets(
   /** Loads a facet the first time a tab shows it, or after an invalidation. */
   const ensure = React.useCallback(
     (facet: RelationFacet) => {
+      // Sampling starts only in the explicit disclosure, never on invalidation.
+      if (facet === "sampledDescription" || facetUnavailable(open, facet))
+        return
       const data = facets.data
       if (!data || attempted.current.has(facet)) return
       if (
         !invalidated.current.has(facet) &&
-        freshnessOf(data, facet).state === "fetched" &&
+        facetFreshness(data, facet).state === "fetched" &&
         !metadataReads.pendingFacet(
           open.connection,
           open.session,
@@ -158,7 +158,7 @@ export function useRelationFacets(
         return
       void refresh(facet, invalidated.current.has(facet))
     },
-    [facets.data, refresh]
+    [facets.data, refresh, open.capabilities]
   )
 
   useRefreshSignal(open.connection, (signal) => {
@@ -176,7 +176,16 @@ export function useRelationFacets(
 
   return {
     facets: facets.data ?? null,
+    reading: facets.isPending,
+    reload: () => void facets.refetch(),
     error: facets.error?.message ?? null,
+    failure: facets.error
+      ? {
+          message: facets.error.message,
+          retryable:
+            facets.error instanceof BackendError && facets.error.retryable,
+        }
+      : null,
     loads,
     refresh,
     cancel,

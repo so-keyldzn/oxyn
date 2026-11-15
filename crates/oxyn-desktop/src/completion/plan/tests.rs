@@ -67,7 +67,7 @@ fn namespace(name: &str) -> Read {
 }
 
 fn relation(namespace: &str, name: &str) -> Read {
-    Read::Scope(CatalogScope::Relation(
+    Read::Scope(CatalogScope::Description(
         app(namespace).with_relation(name).expect("legal name"),
     ))
 }
@@ -302,7 +302,7 @@ fn a_source_without_namespaces_describes_its_relations_by_name() {
 
     assert_eq!(
         next(&cache, &[vec![bare("logs")]]),
-        Some(Read::Scope(CatalogScope::Relation(
+        Some(Read::Scope(CatalogScope::Description(
             CatalogPath::empty()
                 .with_relation("logs")
                 .expect("legal name")
@@ -404,7 +404,7 @@ fn a_namespace_path_is_built_from_the_cache_not_from_the_name() {
     let read = next(&cache, &[vec![bare("public"), bare("users")]]);
     assert_eq!(
         read,
-        Some(Read::Scope(CatalogScope::Relation(
+        Some(Read::Scope(CatalogScope::Description(
             namespace_path(Some("app"), "public")
                 .with_relation("users")
                 .expect("legal name")
@@ -480,5 +480,27 @@ fn the_system_namespace_the_server_searches_first_is_listed_before_a_name_is_res
         next_in_postgres(&cache, &[vec![bare("users")]]),
         Some(relation("public", "users")),
         "a name `pg_catalog` does not hold resolves in the next"
+    );
+}
+
+#[test]
+fn document_fields_need_explicit_sampling_instead_of_a_completion_pass() {
+    let mut cache = read_server(&["public"]);
+    list(&mut cache, &app("public"), &["documents"]);
+    cache.set_server_info(ServerInfo::new(
+        "fixture",
+        "",
+        Capabilities::SCHEMAS | Capabilities::INFERRED_SCHEMA,
+    ));
+    let scopes = spaces(&cache);
+    assert!(
+        super::next_description(
+            &cache,
+            &scopes,
+            CompletionFolding::Insensitive,
+            &[vec![bare("documents")]],
+            &HashSet::new()
+        )
+        .is_none()
     );
 }

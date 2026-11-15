@@ -1,3 +1,4 @@
+import { setFocusEntry } from "@/lib/actions/focus-regions"
 import * as React from "react"
 import CodeMirror from "@uiw/react-codemirror"
 import {
@@ -210,6 +211,7 @@ async function copySelection(text: string) {
  * as written — it is the user's SQL, not a statement Oxyn composes (I-10).
  */
 export function SqlEditor({
+  owner,
   value,
   onChange,
   driver,
@@ -225,6 +227,7 @@ export function SqlEditor({
   autoFocus = false,
   language = "sql",
 }: {
+  owner?: { connection: string; session: string }
   value: string
   onChange: (value: string) => void
   driver: string
@@ -288,7 +291,12 @@ export function SqlEditor({
   React.useEffect(() => {
     const element = zone.current
     if (!element || !view) return
+    let alive = true
+    setFocusEntry(view.contentDOM, () => {
+      if (alive) view.focus()
+    })
     setZoneHandle(element, {
+      owner,
       find: () => runModBinding(view, "f", "KeyF"),
       // A read-only text is not commented: the entry is not offered there.
       toggleComment: readOnly
@@ -300,6 +308,7 @@ export function SqlEditor({
       insertAt: readOnly
         ? undefined
         : (text, point) => {
+            if (!alive) return
             const at = view.posAtCoords(point) ?? view.state.selection.main.head
             view.dispatch({
               changes: { from: at, insert: text },
@@ -309,8 +318,12 @@ export function SqlEditor({
             view.focus()
           },
     })
-    return () => setZoneHandle(element, null)
-  }, [view, readOnly])
+    return () => {
+      alive = false
+      setFocusEntry(view.contentDOM, null)
+      setZoneHandle(element, null)
+    }
+  }, [view, readOnly, owner?.connection, owner?.session])
 
   // The selection when the right button went down: the platform may move
   // it on the way to the menu (WebKit selects the word under the pointer).
@@ -425,6 +438,7 @@ export function SqlEditor({
           <div
             ref={zone}
             data-action-zone="editor"
+            data-focus-region="editor"
             // A read-only view runs nothing: the registry's Run reads this.
             data-read-only={readOnly || undefined}
             onContextMenu={onContextMenu}

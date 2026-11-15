@@ -144,6 +144,11 @@ CREATE INDEX invoices_unpaid_idx ON public.invoices (customer_id, issued_at)
 }
 
 export const invoicesFacets: RelationFacets = {
+  generation: "00000000-0000-4000-8000-00000000000c",
+  sampleLimits: null,
+  aggregateFreshness: fetched,
+  indexesFreshness: fetched,
+  foreignKeysFreshness: fetched,
   address: invoicesAddress,
   kind: "table",
   holdsRecords: true,

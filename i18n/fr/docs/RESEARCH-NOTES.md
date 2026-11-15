@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="11389137e40f" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0ae1fafba8ba" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3549,3 +3549,94 @@ Aucune dépendance ne change.
 
 - SHOW CREATE VIEW demande SHOW VIEW en plus de SELECT ; l’erreur 1142 est ER_TABLEACCESS_DENIED_ERROR. SHOW CREATE reste la référence pour une table temporaire ; seule cette erreur de permission sur une vue persistante confirmée permet le repli sur information_schema. Sources : [SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.0/en/show-create-view.html), [erreurs serveur](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html).
 - DuckDB expose les variables SQL par `duckdb_variables()`. Leur présence rend un aperçu sur une autre session non reproductible, même sans relation temporaire. Sources : [SET VARIABLE](https://www.duckdb.org/docs/current/sql/statements/set_variable), [fonctions de métadonnées](https://www.duckdb.org/docs/preview/sql/meta/duckdb_table_functions).
+
+### Découverte des bases serveur — vérifiée le 2026-11-13
+
+La découverte PostgreSQL utilise `pg_catalog.pg_database`, en excluant les modèles
+et bases interdisant les connexions. `has_database_privilege(oid, 'CONNECT')`
+indique un privilège du rôle courant, sans garantir la réussite de l'authentification.
+Sources : [pg_database](https://www.postgresql.org/docs/current/catalog-pg-database.html),
+[fonctions de privilèges](https://www.postgresql.org/docs/current/functions-info.html).
+Les limites de 1024 entrées/octets par nom sont des bornes Oxyn, pas PostgreSQL.
+
+### Comptage de publication des métadonnées — vérifié le 2026-11-14
+
+L’exécuteur réutilise `serde` 1.0.229 et `serde_json` 1.0.151 du workspace pour
+compter les octets JSON via un writer borné, sans seconde copie encodée. L’API
+crates.io confirme ces versions non retirées et sous `MIT OR Apache-2.0` à cette
+date. Le lecteur web ne pouvait ouvrir l’API ; une requête HTTPS JSON directe au
+registre primaire a réussi. Sources : [Serde](https://crates.io/api/v1/crates/serde/1.0.229),
+[Serde JSON](https://crates.io/api/v1/crates/serde_json/1.0.151).
+Les 16 Mio par patch, 128 relations préchargées, 32 dérogations et 128 Kio par
+politique sont des gardes Oxyn, pas des seuils automatiques ni limites des
+moteurs. Buffers protocolaires et plans serveur restent des sujets distincts.
+
+### Limite de traitement de l’inférence — vérifiée le 2026-11-14
+
+`find.maxTimeMS` de MongoDB borne cumulativement le traitement serveur du
+curseur et de ses `getMore`. La latence client/serveur et l’inactivité sont
+exclues ; l’arrêt intervient aux points d’interruption du serveur. Les
+10 000 ms du lecteur de schéma désignent donc le traitement, pas la latence
+bout en bout. Les bornes de 1000 documents retournés et 8 Mio retenus ne bornent
+ni le parcours serveur ni les lots du protocole.
+
+Sources : [cursor.maxTimeMS](https://www.mongodb.com/docs/manual/reference/method/cursor.maxtimems/),
+[getMore](https://www.mongodb.com/docs/manual/reference/command/getmore/).
+
+### Jetons de publication du catalogue — vérifiés le 2026-11-14
+
+`oxyn-catalog` réutilise directement UUID du workspace pour ses jetons transitoires.
+L’exigence reste 1.26.0 ; `Cargo.lock` résout 1.27.0, non retirée, sous
+Apache-2.0 OR MIT, avec `v7` et `serde` vérifiés dans le registre. Aucun nouveau
+paquet ou version externe n’entre dans le graphe. Les types du contrat restent
+au catalogue ; les DTO du cœur transportent le UUID opaque sans dépendance inverse.
+
+Sources : [UUID 1.27.0](https://crates.io/api/v1/crates/uuid/1.27.0),
+[empaquetage Cargo](https://doc.rust-lang.org/cargo/commands/cargo-package.html) :
+les manifestes normalisés retirent les chemins locaux et la vérification compile
+l’archive avec les dépendances versionnées. Ce contrôle est conservé sans publication.
+
+## Outils PostgreSQL natifs — vérification du 2026-11-15
+
+Les outils locaux par défaut sont en 14.18 ; ceux de
+`/opt/homebrew/opt/libpq/bin` indiquent 17.4. Ces versions précèdent les correctifs
+[CVE-2025-8714](https://www.postgresql.org/support/security/CVE-2025-8714/) et
+[CVE-2025-8715](https://www.postgresql.org/support/security/CVE-2025-8715/).
+Seul `--version` a été exécuté, sans source ni archive réelle. Leurs copies
+privées démarrent aussi sur ce macOS avec les bibliothèques installées ; cela
+ne prouve pas la sécurité d'une opération.
+
+[PostgreSQL 17.12](https://www.postgresql.org/docs/release/17.12/), publié le
+2026-11-12, durcit encore la lecture d'archives. La [source officielle](https://ftp.postgresql.org/pub/source/v17.12/)
+a été téléchargée dans un espace de construction isolé et son SHA256 vérifié :
+`b46f61048797e9cf1728dd4ac459831f5126c4745581f729500541c86e59a8ac`.
+Aucun paquet Homebrew global n'est mis à jour. L'état de compilation/preuve est
+consigné dans le bilan d'implémentation, séparément de ces faits de version.
+
+Le [contrat libpq 17](https://www.postgresql.org/docs/17/libpq-connect.html)
+définit `require_auth=none`, qui refuse un défi d'authentification mais n'exclut
+pas seul certificats TLS ou GSS chiffré. Le premier mode désactive donc les deux
+transports. Fichiers ambiants de mots de passe/services/certificats ne constituent
+pas une authentification confinée. [pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)
+refuse les serveurs de version majeure plus récente. Lire le format d'une
+archive ne prouve ni sa sécurité ni sa compatibilité sémantique avec la cible.
+
+Les [gestionnaires de signaux 17.4](https://github.com/postgres/postgres/blob/REL_17_4/src/bin/pg_dump/parallel.c)
+tentent `PQcancel` sur SIGINT/SIGTERM/SIGQUIT, sans preuve autoritative d'arrêt
+serveur ; les tests jetables doivent l'observer. Le rustix 0.38.44 existant
+expose `waitid(EXITED|NOWAIT|NOHANG)` sous macOS/Linux ; son renommage NOREPLACE
+est réservé à Linux. Aucun nouveau paquet de gestion des processus n'est choisi.
+
+
+Les clients acceptés sont 17.12 ou ultérieur de la branche 17, et 18.7 ou ultérieur
+de la branche 18, selon les notes [17.12](https://www.postgresql.org/docs/release/17.12/)
+et [18.7](https://www.postgresql.org/docs/release/18.7/) vérifiées le 2026-11-15.
+Ce périmètre volontairement restreint ne signifie pas que toutes les branches plus
+anciennes sont non corrigées. Seul 17.12 a été compilé et exécuté ici ; aucune
+preuve locale d’exécution pour 18.7.
+
+L’[implémentation XNU des signaux aux groupes](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c),
+vérifiée le 2026-11-15, exclut les zombies et peut retourner EPERM sans cible
+vivante autorisée. Le nettoyage macOS accepte uniquement ce cas après avoir
+observé la sortie du chef non récolté et EOF sur les pipes hérités ; jamais EPERM
+pour un chef ou un producteur encore vivant.

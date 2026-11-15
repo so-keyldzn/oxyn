@@ -5,7 +5,8 @@ import { receiveDrop } from "./use-file-drops"
 
 function effects(connected: boolean) {
   return {
-    connected: () => connected,
+    destination: () =>
+      connected ? { connection: "source", workspace: "generation" } : null,
     openInConsole: vi.fn(),
     offerConnection: vi.fn(),
     showConnectionScreen: vi.fn(),
@@ -20,10 +21,15 @@ describe("a dropped file", () => {
       { type: "sql", name: "purge.sql", text: "DELETE FROM audit;" },
       done
     )
-    expect(done.openInConsole).toHaveBeenCalledWith("DELETE FROM audit;", {
-      newConsole: true,
-      notice: "Opened from purge.sql. Nothing was executed.",
-    })
+    expect(done.openInConsole).toHaveBeenCalledWith(
+      "source",
+      "DELETE FROM audit;",
+      {
+        workspace: "generation",
+        newConsole: true,
+        notice: "Opened from purge.sql. Nothing was executed.",
+      }
+    )
   })
 
   it("keeps a .sql file out of a queue while no connection is open", () => {

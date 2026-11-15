@@ -17,7 +17,9 @@ use oxyn_core::{Command, ConnectionConfig, Environment, ExternalAgentConfig};
 use oxyn_driver::DriverMetadata;
 use oxyn_exec::PendingCommand;
 
+mod native_transfer;
 mod sample;
+pub(crate) use native_transfer::restore_database;
 pub(crate) use sample::{SampleDescription, SampleDestination, sample};
 
 /// The label of the button that refuses. The confirming label must differ:
@@ -143,7 +145,10 @@ pub(crate) fn held_command(
 ) -> Confirmation {
     let mut body = String::new();
     let title = match (&held.command, saved) {
-        (Command::CreateConnection { config }, _) => {
+        (
+            Command::CreateConnection { config } | Command::CreateDatabaseConnection { config, .. },
+            _,
+        ) => {
             push_connection(&mut body, config, environment);
             body.push_str("\nA new connection is saved with this marking.");
             "Save a production connection?"

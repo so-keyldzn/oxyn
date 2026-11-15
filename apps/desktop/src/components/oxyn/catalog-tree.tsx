@@ -391,6 +391,7 @@ export function CatalogTree({
   operations,
   copyAs,
   onNewConsole,
+  onSchemaMap,
   nameTransfer,
 }: {
   nodes: Array<CatalogNode>
@@ -421,6 +422,7 @@ export function CatalogTree({
    * console's context can be a schema (UX-SPEC, « Session context of a console
    * »); offered on schema nodes.
    */
+  onSchemaMap?: (node: CatalogNode) => void
   onNewConsole?: (node: CatalogNode) => void
   /** A relation dragged to the editor, or ⌥↵: its quoted name goes there. */
   nameTransfer?: NameTransfer
@@ -632,6 +634,7 @@ export function CatalogTree({
           openData: openAt ? () => openAt(node, "data") : undefined,
           viewStructure: openAt ? () => openAt(node, "structure") : undefined,
           viewDdl: openAt ? () => openAt(node, "definition") : undefined,
+          viewSchemaMap: onSchemaMap ? () => onSchemaMap(node) : undefined,
           newConsoleOnSchema: onNewConsole
             ? () => onNewConsole(node)
             : undefined,

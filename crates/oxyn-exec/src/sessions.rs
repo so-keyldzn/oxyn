@@ -119,9 +119,11 @@ pub struct SessionSlot {
     id: SessionId,
     connection: ConnectionId,
     capabilities: Capabilities,
+    schema_sample_limits: Option<oxyn_catalog::SchemaSampleLimits>,
     opened_at: Instant,
     session: AsyncRwLock<Option<Box<dyn Session>>>,
     closing: CancelToken,
+    opening: Option<ConnectionConfig>,
     purpose: Purpose,
     user_activity: AtomicBool,
     access: access::Access,
@@ -143,10 +145,19 @@ impl SessionSlot {
     #[must_use]
     pub fn new(connection: ConnectionId, session: Box<dyn Session>) -> Self {
         let capabilities = session.capabilities();
+        let schema_sample_limits = if capabilities.contains(Capabilities::INFERRED_SCHEMA) {
+            session
+                .catalog()
+                .schema_sample_limits()
+                .filter(|limits| limits.validate().is_ok())
+        } else {
+            None
+        };
         Self {
             id: SessionId::new(),
             connection,
             capabilities,
+            schema_sample_limits,
             opened_at: Instant::now(),
             session: AsyncRwLock::new(Some(session)),
             closing: CancelToken::new(),
@@ -154,7 +165,35 @@ impl SessionSlot {
             user_activity: AtomicBool::new(false),
             access: access::Access::default(),
             catalog: crate::catalog::SessionCatalog::default(),
+            opening: None,
         }
+    }
+
+    /// Capture the immutable destination used at opening, never credentials.
+    pub(crate) fn opened(
+        config: ConnectionConfig,
+        session: Box<dyn Session>,
+        console: bool,
+    ) -> Self {
+        let mut slot = if console {
+            Self::console(config.id, session)
+        } else {
+            Self::new(config.id, session)
+        };
+        slot.opening = Some(config);
+        slot
+    }
+
+    pub(crate) fn opening_matches(&self, config: &ConnectionConfig) -> bool {
+        self.opening
+            .as_ref()
+            .is_some_and(|opened| opened.driver == config.driver && opened.params == config.params)
+    }
+
+    /// Immutable inference limits, captured at opening without metadata I/O.
+    #[must_use]
+    pub const fn schema_sample_limits(&self) -> Option<oxyn_catalog::SchemaSampleLimits> {
+        self.schema_sample_limits
     }
 
     /// A private execution slot, never eligible to become the catalog session.
@@ -170,7 +209,8 @@ impl SessionSlot {
         slot
     }
 
-    pub(crate) const fn is_catalog(&self) -> bool {
+    /// Whether this slot is dedicated to catalog reads, with no console-local context.
+    pub const fn is_catalog(&self) -> bool {
         matches!(self.purpose, Purpose::Catalog)
     }
     pub(crate) const fn is_console(&self) -> bool {
@@ -313,16 +353,18 @@ impl SessionSlot {
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        let operation = async {
-            if shape.continuable {
-                session.prepare_preview(path, limit, shape, &token).await
-            } else {
-                Ok(oxyn_driver::PreparedPreview {
-                    request: session.preview_request(path, limit, shape, &token).await?,
-                    mode: oxyn_driver::PreviewMode::Bounded,
-                })
-            }
+        let known = if self.capabilities.contains(Capabilities::INFERRED_SCHEMA) {
+            let cache = self.catalog.cache.read();
+            matches!(
+                cache.freshness(&oxyn_catalog::CatalogScope::Description(path.clone())),
+                oxyn_catalog::Freshness::Fetched(_)
+            )
+            .then(|| cache.relation(path).cloned())
+            .flatten()
+        } else {
+            None
         };
+        let operation = session.plan_preview(path, limit, shape, known.as_ref(), &token);
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,
@@ -488,7 +530,31 @@ impl SessionSlot {
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        let operation = crate::catalog::read(session.catalog(), self.capabilities, scope, &token);
+        let summary = crate::catalog::relation_target(scope)?
+            .and_then(|target| self.catalog.cache.read().relation_summary(&target).cloned());
+        let operation =
+            crate::catalog::read(session.catalog(), self.capabilities, scope, &token, summary);
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
+    }
+
+    pub(crate) async fn discover_databases(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_core::DiscoveredDatabase>> {
+        let _reservation = self.access.shared()?;
+        let token = cancel.child();
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        let operation = session.catalog().discover_databases(&token);
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,
@@ -745,3 +811,7 @@ mod tests {
         assert!(error.is_retryable(), "{error:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "sessions/preview_metadata_tests.rs"]
+mod preview_metadata_tests;

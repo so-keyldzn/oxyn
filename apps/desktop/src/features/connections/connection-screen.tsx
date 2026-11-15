@@ -1,4 +1,5 @@
 import * as React from "react"
+import { requestWorkspaceDisconnect } from "@/features/workspace/disconnect-requests"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useSelector } from "@tanstack/react-store"
@@ -22,7 +23,6 @@ import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import {
   MAX_RETAINED_WORKSPACES,
   canOpenWorkspace,
-  closeConnection,
   openConnection,
   session,
   showConnection,
@@ -419,7 +419,9 @@ export function ConnectionScreen() {
     return {
       // The workspace's own `Disconnect`: its drafts are written, then its
       // sessions close (`WorkspaceHost`).
-      disconnect: open ? () => closeConnection(connection.id) : undefined,
+      disconnect: open
+        ? () => requestWorkspaceDisconnect(connection.id)
+        : undefined,
       // Closed, opening is the new console: a workspace starts on one.
       newConsole: open
         ? () => {

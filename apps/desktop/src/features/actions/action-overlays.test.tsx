@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { ActionOverlays } from "./action-overlays"
@@ -53,6 +60,7 @@ function renderOverlays() {
 }
 
 afterEach(() => {
+  cleanup()
   vi.clearAllMocks()
   actionSources.setState(() => ({ sources: {}, owners: {} }))
 })
@@ -104,4 +112,68 @@ describe("the quick open", () => {
     expect(ipc.refreshCatalog).not.toHaveBeenCalled()
     expect(ipc.previewRelation).not.toHaveBeenCalled()
   })
+})
+
+it("keeps same-connection searches separate by explorer session and ignores late old hits", async () => {
+  let oldReply!: (hits: Array<typeof HIT>) => void
+  ipc.searchCatalog.mockImplementation((_connection, _query, session) =>
+    session === "session-a"
+      ? new Promise((resolve) => {
+          oldReply = resolve
+        })
+      : Promise.resolve([{ ...HIT, name: "new-owner-object" }])
+  )
+  const oldOpen = vi.fn()
+  const newOpen = vi.fn()
+  renderOverlays()
+  const publish = (session: string, openObject: typeof oldOpen) =>
+    act(() =>
+      actionSources.setState((current) => ({
+        ...current,
+        sources: {
+          ...current.sources,
+          workspace: {
+            state: {
+              activeTab: null,
+              tabCount: 0,
+              consoleCount: 0,
+              objectActive: false,
+              hasAside: false,
+              hasAssistant: false,
+            },
+            actions: {} as never,
+          },
+          catalog: {
+            state: { connection: "c1", session },
+            actions: { openObject },
+          },
+        },
+      }))
+    )
+  publish("session-a", oldOpen)
+  act(() => {
+    invoke("object.quickOpen", "keyboard")
+  })
+  fireEvent.change(
+    await screen.findByPlaceholderText("Open a table, a view…"),
+    { target: { value: "ord" } }
+  )
+  await waitFor(() =>
+    expect(ipc.searchCatalog).toHaveBeenCalledWith("c1", "ord", "session-a")
+  )
+  publish("session-b", newOpen)
+  await waitFor(() =>
+    expect(ipc.searchCatalog).toHaveBeenCalledWith("c1", "ord", "session-b")
+  )
+  await act(async () => {
+    oldReply([{ ...HIT, name: "old-owner-object" }])
+  })
+  expect(screen.queryByText("old-owner-object")).toBeNull()
+  fireEvent.click(await screen.findByText("new-owner-object"))
+  expect(oldOpen).not.toHaveBeenCalled()
+  expect(newOpen).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "new-owner-object" })
+  )
+  expect(ipc.refreshCatalog).not.toHaveBeenCalled()
+  expect(ipc.previewRelation).not.toHaveBeenCalled()
 })

@@ -664,7 +664,7 @@ impl ExecutionEventKind {
                 reason: reason.clone(),
             },
             Event::Cancelled => Self::Cancelled,
-            Event::CatalogUpdated => Self::CatalogUpdated,
+            Event::CatalogUpdated | Event::DatabaseMayHaveChanged => Self::CatalogUpdated,
             Event::TransactionState { session, state } => Self::TransactionState {
                 session: session.to_string(),
                 state: (*state).into(),
@@ -807,6 +807,7 @@ pub mod library;
 pub mod location;
 pub mod menu;
 pub mod metadata;
+pub mod native_transfers;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;

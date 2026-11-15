@@ -28,6 +28,13 @@ const opened = (connection: string, session: string) =>
 afterEach(() => vi.clearAllMocks())
 
 describe("releasing a workspace", () => {
+  it("reports incomplete backend cleanup instead of claiming disconnection", async () => {
+    calls.disconnect.mockRejectedValueOnce(new Error("disconnect refused"))
+    await expect(
+      release(opened("c1", "s1"), () => false, null)
+    ).rejects.toThrow("disconnect refused")
+    expect(calls.closeConversation).not.toHaveBeenCalled()
+  })
   it("closes the conversations of a connection it disconnects", async () => {
     // Without it, the external agent kept for the connection outlives it,
     // with the tools and the tier it was launched under (I-04).

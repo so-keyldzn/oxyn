@@ -79,6 +79,10 @@ vi.mock("@/features/metadata/use-relation-facets", () => ({
     error: null,
     loads: {
       detail: detailLoad.current,
+      description: detailLoad.current,
+      sampledDescription: detailLoad.current,
+      indexes: { status: "idle" },
+      outgoingKeys: { status: "idle" },
       constraints: { status: "idle" },
       incomingKeys: { status: "idle" },
       definition: { status: "idle" },
@@ -164,7 +168,7 @@ it("defers metadata reads while hidden and loads them when shown", () => {
   const { rerender } = render(view(false))
   expect(ensure).not.toHaveBeenCalled()
   rerender(view(true))
-  expect(ensure).toHaveBeenCalledWith("detail")
+  expect(ensure).toHaveBeenCalledWith("description")
   ensure.mockClear()
   rerender(view(false))
   expect(ensure).not.toHaveBeenCalled()
@@ -342,7 +346,7 @@ describe("a restored object tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Read it now" }))
     expect(previewVisible).toHaveBeenLastCalledWith(true)
     // The description the pages depend on is read with the rows (ADR-0068).
-    expect(ensure).toHaveBeenCalledWith("detail")
+    expect(ensure).toHaveBeenCalledWith("description")
     expect(onPlaceChange).toHaveBeenLastCalledWith("data")
     expect(screen.queryByText("Restored from your last session")).toBeNull()
   })
@@ -368,8 +372,10 @@ describe("a restored object tab", () => {
     expect(previewVisible).toHaveBeenCalledWith(true)
     // Its key decides whether the rows have pages: described once, not per
     // render.
-    expect(ensure).toHaveBeenCalledWith("detail")
-    expect(ensure.mock.calls.every(([facet]) => facet === "detail")).toBe(true)
+    expect(ensure).toHaveBeenCalledWith("description")
+    expect(ensure.mock.calls.every(([facet]) => facet === "description")).toBe(
+      true
+    )
     expect(screen.queryByText("Restored from your last session")).toBeNull()
   })
 })
@@ -406,4 +412,28 @@ it("explains a missing module discovered before the first data read", () => {
   renderView({ node: { ...node, kind: "view" } })
   expect(screen.getByText(/enable sqlite-vec/)).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+})
+
+it("opening Structure does not implicitly read an adjacent definition", () => {
+  renderView({
+    initialTab: "structure",
+    open: {
+      ...open,
+      capabilities: [...open.capabilities, "OBJECT_DEFINITION"],
+    },
+  })
+  expect(ensure).toHaveBeenCalledWith("description")
+  expect(ensure).not.toHaveBeenCalledWith("definition")
+})
+
+it("an explicit DDL target reads the definition even beside Structure in the wide layout", () => {
+  renderView({
+    initialTab: "definition",
+    open: {
+      ...open,
+      capabilities: [...open.capabilities, "OBJECT_DEFINITION"],
+    },
+  })
+  expect(ensure).toHaveBeenCalledWith("definition")
+  expect(ensure).not.toHaveBeenCalledWith("description")
 })

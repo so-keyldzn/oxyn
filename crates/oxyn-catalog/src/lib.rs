@@ -62,12 +62,13 @@
 //! // After a DDL, the subtree is marked for rereading — without losing what it knows.
 //! cache.invalidate(&CatalogScope::Relation(table.clone()));
 //! assert!(cache.relation(&table).is_some());
-//! assert_eq!(cache.stale(Duration::from_secs(3600)), vec![CatalogScope::Relation(table)]);
+//! assert_eq!(cache.stale(Duration::from_secs(3600)), vec![CatalogScope::Description(table)]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 pub mod cache;
 pub mod definition;
+mod generation;
 pub mod insertion;
 pub mod literal;
 pub mod model;
@@ -75,10 +76,13 @@ pub mod nesting;
 pub mod path;
 pub mod provider;
 mod reserved;
+mod sampling;
+pub mod schema_map;
 pub mod search;
 
 pub use cache::{CacheError, CatalogCache, CatalogHandle, CatalogScope, Freshness, SharedCatalog};
 pub use definition::{DefinitionSource, RelationDefinition};
+pub use generation::CatalogGenerationId;
 pub use insertion::{hides_text, insertion_form};
 pub use literal::{LiteralError, check_identifier, push_string_literal};
 pub use model::{
@@ -88,6 +92,7 @@ pub use model::{
 };
 pub use path::{CatalogLevel, CatalogPath, CatalogPathError, QuoteStyle, quote_identifier};
 pub use provider::CatalogProvider;
+pub use sampling::SchemaSampleLimits;
 pub use search::{MatchKind, SearchHit, SearchOptions, search};
 
 #[cfg(test)]
@@ -145,7 +150,7 @@ mod tests {
         assert!(cache.relation(&orders).is_some());
         assert_eq!(
             cache.stale(Duration::from_secs(3600)),
-            vec![CatalogScope::Relation(orders)]
+            vec![CatalogScope::Description(orders)]
         );
     }
 }

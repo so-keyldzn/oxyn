@@ -87,6 +87,27 @@ Two consequences drivers miss most often:
   from the sample but present further on must produce an explicit error or
   a schema widening — never a silently lost value.
 
+A provider whose description performs inference declares `INFERRED_SCHEMA`
+and exposes pure `CatalogProvider::schema_sample_limits`, captured from the
+live session. Absent or invalid bounds make host sampling unavailable. The
+ordinary description/aggregate catalog scopes refuse implicit inference;
+`SampledDescription` requires a separate human gesture. Returned metadata
+contains inferred field structure and provenance, never sampled document values.
+The limits distinguish returned documents and retained inference bytes from
+wire batching, server query-plan work and cancellation cleanup. MongoDB applies
+its cumulative server processing limit to the schema `find` cursor; this is
+not a wall-clock/network deadline. Independent index/key/definition reads do
+not request a description as an unrelated dependency.
+
+`Session::plan_preview` is the host’s preparation entry point. Its optional
+`Relation` hint comes only from fresh metadata on the original owning session,
+not from a client-supplied schema or another connection’s cache. An adapter
+declaring `INFERRED_SCHEMA` must implement inference-free preview planning; the
+default fails closed. Schema-dependent sorts/projections may require a prior
+explicit structure read. Planning cannot issue a hidden document sample,
+including before an approved projected row sample. Processing requested result
+rows into Arrow remains a separate, bounded streaming operation.
+
 **A preview comes in key order only where that order is a bounded read**
 ([ADR-0068](adr/0068-a-preview-comes-in-key-order.md), which lists who vouches
 and why). A driver sets `Relation::key_order_preview` in `describe_relation`
