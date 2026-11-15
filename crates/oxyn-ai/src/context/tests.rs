@@ -143,8 +143,11 @@ fn no_row_value_leaves_under_metadata() {
     );
 
     for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+        // A random fence can contain the sample's digits by coincidence.
+        // Fix only this fixture's nonce so the whole-block privacy checks are deterministic.
         let context = ContextBuilder::new(&cache, tier)
             .with_samples(vec![sample.clone()])
+            .with_fence_nonce("privacy-tier-test-nonce")
             .build();
         let block = context.prompt_block();
         assert!(!block.contains("dupont@example.com"), "{tier}: {block}");
