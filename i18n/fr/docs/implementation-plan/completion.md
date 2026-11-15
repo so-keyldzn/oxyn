@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="de9ca44a551d" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="c8f1e1ef60f1" -->
 
 # Suivi d'achèvement des outils de bases de données
 
@@ -525,3 +525,25 @@ ResizeObserver/React act existants toujours visibles, sans suppression, tests ve
 Gros volumes, application Windows complète, exécution Linux, transports distant/
 TLS/SSH/mot de passe, restauration SQL et autres adaptateurs natifs ne sont pas
 validés ni implicites. Aucune acceptation utilisateur enregistrée.
+
+
+## Point d’intégration dev — 2026-11-15
+
+L’inventaire frais des refs/worktrees trouve dev à `ce58839`, sans commit dev
+indépendant à préserver. Chaque sommet de fonctionnalité descend du précédent.
+Intégration par fusions fast-forward ordinaires dans l’ordre :
+`a75a5f2` (multi-base, incluant `a3f5961` et la recherche commune), `4c80bfa` (F6),
+`40329e4` (métadonnées), `2f24e30` (carte), puis `ce1294b` (natif). Aucun conflit,
+doublon, transport de stash, réécriture ou push. Main reste à
+`ce58839c1d5a86dcad8995b206f2898b0565a689`.
+
+Le worktree de recherche désigné est maintenant le checkout dev propre de
+validation finale et d’acceptation. La remise exige un `make qualite` complet
+sur cet arbre assemblé, puis une nouvelle instance `make desktop-dev` temporaire
+dont l’identité de build correspond à dev. L’ancienne instance Storybook propre
+à cette tâche est arrêtée avant bascule. Fixtures SQLite A/B et PostgreSQL
+source/restauration préparées séparément, sans données réelles ni workspace enregistré.
+
+Résultat de revalidation, identité exacte processus/build et chemins des fixtures
+jetables sont fournis à la remise pour essais. Ce point consigne l’ascendance
+assemblée et le contrat d’acceptation ; celle-ci attend toujours le retour utilisateur.

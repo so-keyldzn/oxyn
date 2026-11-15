@@ -522,3 +522,26 @@ Existing ResizeObserver/React act browser diagnostics remain visible, unsuppress
 with all tests passing. Large-database throughput, complete Windows desktop,
 Linux execution, remote/TLS/SSH/password modes, SQL restoration and other native
 engine adapters are not validated or implied. No user acceptance is recorded.
+
+
+## Dev integration checkpoint — 2026-11-15
+
+A fresh ref/worktree inventory found dev at `ce58839` and no independent dev
+commits to preserve. Each feature tip was a descendant of the previous one.
+Integration used ordinary fast-forward merges in this order:
+`a75a5f2` (multi-base, including `a3f5961` and the shared research commit),
+`4c80bfa` (F6), `40329e4` (metadata), `2f24e30` (map), then `ce1294b` (native).
+No conflict, duplicated feature commit, stash transport, history rewrite or push
+was needed. Main remains `ce58839c1d5a86dcad8995b206f2898b0565a689`.
+
+The designated research worktree is now the clean dev checkout for final
+validation and personal acceptance. The handoff requires a complete `make qualite`
+on this assembled tree, followed by a newly launched `make desktop-dev` temporary
+workspace whose build identity matches dev. The old task-owned Storybook instance
+was stopped before switching. Disposable SQLite A/B and PostgreSQL source/restore
+fixtures have been prepared separately; no real data or saved workspace is used.
+
+Revalidation results, exact running process/build identity and the disposable
+fixture locations are delivered in the manual handoff. This checkpoint records
+the assembled commit ancestry and acceptance contract; personal acceptance still
+requires the user's report.
