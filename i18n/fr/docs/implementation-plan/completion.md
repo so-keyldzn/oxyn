@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="c8f1e1ef60f1" -->
+<!-- oxyn-translation source="docs/implementation-plan/completion.md" sha256="b28325100b98" -->
 
 # Suivi d'achèvement des outils de bases de données
 
@@ -547,3 +547,23 @@ source/restauration préparées séparément, sans données réelles ni workspac
 Résultat de revalidation, identité exacte processus/build et chemins des fixtures
 jetables sont fournis à la remise pour essais. Ce point consigne l’ascendance
 assemblée et le contrat d’acceptation ; celle-ci attend toujours le retour utilisateur.
+
+
+## Validation utilisateur et préparation de la PR main — 2026-11-15
+
+L’utilisateur rapporte avoir testé l’interface intégrée et que tout est OK, puis
+demande explicitement une pull request vers main. Ce constat remplace l’attente
+de validation personnelle des étapes précédentes. Il consigne son retour sans
+présumer que toute la matrice de moteurs et de systèmes a été exercée.
+
+Le polish UI est committé en `f8e59d1` sur dev, après la pile backend intégrée.
+Le contrôle complet séquentiel `make qualite` passe avec 2 470 tests frontend et
+4 779 tests Rust (213 ignorés), ainsi que doctests, Clippy/rustdoc stricts, builds
+de production et contrats de packaging. Le `make socle` final de documentation
+passe. Voir [l’audit d’interface](ui-polish-audit.md) pour les mesures et limites.
+Aucun code applicatif ne change après ces contrôles.
+
+La publication de dev et une PR dev vers main sont désormais autorisées. Main
+n’est ni modifiée ni fusionnée ; la fusion de la PR reste une action distincte.
+Les exclusions historiques serveur/embedding/outillage et les limites propres
+aux moteurs restent celles consignées.

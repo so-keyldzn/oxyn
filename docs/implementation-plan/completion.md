@@ -545,3 +545,22 @@ Revalidation results, exact running process/build identity and the disposable
 fixture locations are delivered in the manual handoff. This checkpoint records
 the assembled commit ancestry and acceptance contract; personal acceptance still
 requires the user's report.
+
+
+## User acceptance and main PR handoff — 2026-11-15
+
+The user reports that they tested the integrated interface and that it is OK,
+then explicitly requests a pull request to main. This supersedes the pending
+personal-acceptance status of earlier checkpoints. It records the user's report,
+not an inferred claim that every engine or operating-system matrix was exercised.
+
+The UI polish is committed as `f8e59d1` on dev, after the assembled backend stack.
+The complete sequential `make qualite` run passed with 2,470 frontend tests and
+4,779 Rust tests (213 skipped), plus doctests, strict Clippy/rustdoc, production
+builds and package contracts. The final documentation `make socle` passed.
+See [the interface audit](ui-polish-audit.md) for measurements and validation limits.
+No application code changed after those checks.
+
+Publication of dev and a dev-to-main pull request is now authorized. Main has not
+been modified or merged into; merging the PR remains a separate action. Historical
+server/embedding/tooling skips and engine-specific limits remain as recorded.
