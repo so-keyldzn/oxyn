@@ -64,6 +64,15 @@ vi.mock("@/components/oxyn/schema-map-view", () => ({
         Refresh map
       </button>
       <button onClick={props.onCancel}>Cancel map</button>
+      <button onClick={props.onLoadScope}>Whole scope</button>
+      <button
+        onClick={() => {
+          const object = props.state.data?.projection.objects[0]
+          if (object) props.onInfer?.(object)
+        }}
+      >
+        Request sample
+      </button>
       <button
         onClick={() =>
           props.onScope(
@@ -76,8 +85,23 @@ vi.mock("@/components/oxyn/schema-map-view", () => ({
       </button>
       <p>{props.state.error?.message}</p>
       <p>{props.state.data?.projection.source.session}</p>
+      <p>
+        {props.state.data?.projection.objects
+          .map((object) => object.address.relation)
+          .join(", ")}
+      </p>
+      <p>
+        {props.state.data
+          ? `${props.state.data.projection.coverage.knownObjects} known / ${props.state.data.projection.coverage.omittedObjects} omitted`
+          : ""}
+      </p>
       <p>{props.state.loading ? "Reading" : "Idle"}</p>
     </>
+  ),
+}))
+vi.mock("@/components/oxyn/schema-sampling-dialog", () => ({
+  SchemaSamplingDialog: ({ onSample }: { onSample: () => void }) => (
+    <button onClick={onSample}>Confirm sample</button>
   ),
 }))
 const owner = (session: string) =>
@@ -93,7 +117,11 @@ function fixture(session = "fixture-owner") {
   map.projection.source.session = session
   return map
 }
-function show(session = "fixture-owner", active = true) {
+function show(
+  session = "fixture-owner",
+  active = true,
+  initialObject?: CatalogNode
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -103,7 +131,15 @@ function show(session = "fixture-owner", active = true) {
         <SchemaMapTab
           open={owner(session)}
           active={visible}
-          initialScope={null}
+          initialScope={
+            initialObject
+              ? {
+                  catalog: initialObject.address.catalog,
+                  namespace: initialObject.address.namespace,
+                }
+              : null
+          }
+          initialObject={initialObject}
           onOpenObject={vi.fn()}
         />
       </QueryClientProvider>
@@ -240,4 +276,114 @@ it("a hidden retained map does not demand metadata and cancels only its own visi
   view.setActive(true)
   await waitFor(() => expect(ipc.reads).toHaveLength(2))
   expect(ipc.sample).not.toHaveBeenCalled()
+})
+
+it("refreshes a whole scope's listing, surfacing new tables and retaining omission coverage", async () => {
+  show()
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  const first = fixture()
+  first.projection.coverage.knownObjects = 42
+  first.projection.coverage.omittedObjects = 40
+  await act(async () => {
+    ipc.reads[0]?.resolve(first)
+  })
+  fireEvent.click(screen.getByText("Refresh map"))
+  expect(ipc.reads[1]?.request).toMatchObject({
+    refresh: true,
+    objects: [],
+    expand: null,
+  })
+  const refreshed = fixture()
+  const added = structuredClone(refreshed.projection.objects[0]!)
+  added.key = "new-table"
+  added.address.relation = "new_table"
+  refreshed.projection.objects.push(added)
+  refreshed.projection.coverage.knownObjects = 43
+  refreshed.projection.coverage.omittedObjects = 40
+  refreshed.projection.coverage.drawnObjects = 3
+  await act(async () => {
+    ipc.reads[1]?.resolve(refreshed)
+  })
+  expect(screen.getByText(/new_table/)).toBeTruthy()
+  expect(screen.getByText("43 known / 40 omitted")).toBeTruthy()
+})
+it("keeps an explicit object selection scoped, even after an empty reply, until whole scope is requested", async () => {
+  const initial = {
+    address: { catalog: null, namespace: "sales", relation: "orders" },
+    name: "orders",
+    kind: "table",
+    holdsRecords: true,
+    system: false,
+    comment: null,
+    loaded: true,
+    stale: false,
+    children: [],
+    virtualTable: null,
+    shadowOf: null,
+  } satisfies CatalogNode
+  show("fixture-owner", true, initial)
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  const empty = fixture()
+  empty.projection.objects = []
+  await act(async () => {
+    ipc.reads[0]?.resolve(empty)
+  })
+  fireEvent.click(screen.getByText("Refresh map"))
+  expect(ipc.reads[1]?.request.objects).toEqual([
+    { scope: { catalog: null, namespace: "sales" }, relation: "orders" },
+  ])
+  await act(async () => {
+    ipc.reads[1]?.resolve(fixture())
+  })
+  fireEvent.click(screen.getByText("Whole scope"))
+  expect(ipc.reads[2]?.request.objects).toEqual([])
+  await act(async () => {
+    ipc.reads[2]?.resolve(fixture())
+  })
+  fireEvent.click(screen.getByText("Refresh map"))
+  expect(ipc.reads[3]?.request).toMatchObject({ refresh: true, objects: [] })
+})
+
+it("a late inference completion cannot redraw an old scope after its replacement finished", async () => {
+  ipc.nodes = ["first", "other"].map((name) => ({
+    kind: "catalog",
+    name,
+    address: { catalog: name, namespace: null, relation: null },
+    children: [],
+    holdsRecords: false,
+    system: false,
+    comment: null,
+    loaded: false,
+    stale: false,
+    virtualTable: null,
+    shadowOf: null,
+  }))
+  let completeSample!: (answer: { type: "catalogRefreshed" }) => void
+  ipc.sample.mockReturnValue(
+    new Promise((resolve) => {
+      completeSample = resolve
+    })
+  )
+  show()
+  await waitFor(() => expect(ipc.reads).toHaveLength(1))
+  await act(async () => {
+    ipc.reads[0]?.resolve(fixture())
+  })
+  fireEvent.click(screen.getByText("Request sample"))
+  fireEvent.click(screen.getByText("Confirm sample"))
+  expect(ipc.sample).toHaveBeenCalledOnce()
+  const sampleId = ipc.sample.mock.calls[0]?.[0]
+  fireEvent.click(screen.getByText("Other scope"))
+  await waitFor(() => expect(ipc.reads).toHaveLength(2))
+  expect(ipc.reads[1]?.request.scope.catalog).toBe("other")
+  await act(async () => {
+    ipc.reads[1]?.resolve(fixture())
+  })
+  expect(screen.getByText("Idle")).toBeTruthy()
+  await act(async () => {
+    completeSample({ type: "catalogRefreshed" })
+  })
+  expect(ipc.cancel).toHaveBeenCalledWith(sampleId)
+  expect(ipc.reads).toHaveLength(2)
+  expect(screen.getByText("Idle")).toBeTruthy()
 })

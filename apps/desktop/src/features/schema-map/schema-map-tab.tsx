@@ -262,10 +262,15 @@ export function SchemaMapTab({
         }))
     }
   }
-  const retained = () =>
-    state.data?.projection.objects
+  const retained = () => {
+    const objects = state.data?.projection.objects
       .map((object) => mapReference(object.address))
-      .filter((value): value is MapObjectRef => value !== null) ?? seeds.current
+      .filter((value): value is MapObjectRef => value !== null)
+    return objects?.length ? objects : seeds.current
+  }
+  // An empty object list means enumerate the scope, not "reuse these drawn
+  // objects". Keep that intent after bounded/truncated reads and expansion.
+  const requested = () => (seeds.current.length ? retained() : [])
   const infer = async (object: MapObject) => {
     if (operation.current) return
     setReview(null)
@@ -281,7 +286,9 @@ export function SchemaMapTab({
         object.address,
         "sampledDescription"
       )
-      loaded = answer.type === "catalogRefreshed"
+      // Preserve ownership before finally releases the operation. A late
+      // sample response must not redraw an obsolete scope through this closure.
+      loaded = current(id) && answer.type === "catalogRefreshed"
       if (answer.type === "needsApproval") {
         await backend.decide(answer.command, false)
         throw new Error(
@@ -298,7 +305,7 @@ export function SchemaMapTab({
         setState((previous) => ({ ...previous, loading: false }))
       }
     }
-    if (loaded && live.current && shown.current) await load(false, retained())
+    if (loaded && live.current && shown.current) await load(false, requested())
   }
   const openObject = (object: MapObject, target: OpenTarget) =>
     onOpenObject(
@@ -352,9 +359,7 @@ export function SchemaMapTab({
           seeds.current = []
           void load(false, [])
         }}
-        onLoad={(refresh) =>
-          void load(refresh, refresh ? retained() : seeds.current)
-        }
+        onLoad={(refresh) => void load(refresh, requested())}
         onCancel={() => void cancel()}
         onSelect={setSelected}
         onOpen={openObject}
